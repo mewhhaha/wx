@@ -20,6 +20,7 @@ import {
   moveLeft,
   moveRight,
   moveUp,
+  pasteAfter,
   gotoFileStart,
   gotoFirstNonWhitespace,
   gotoLastLine,
@@ -27,6 +28,7 @@ import {
   gotoLineStart,
   selectAll,
   toggleVisualMode,
+  yankSelection,
   type Transaction
 } from "./index";
 
@@ -53,6 +55,8 @@ function run(
     | (typeof gotoLineEnd)
     | (typeof gotoFirstNonWhitespace)
     | (typeof selectAll)
+    | (typeof yankSelection)
+    | (typeof pasteAfter)
 ): void {
   command(state.current, (transaction) => dispatchTransaction(state, transaction), {});
 }
@@ -269,6 +273,40 @@ describe("editor core", () => {
     run(state, gotoFirstNonWhitespace);
 
     expect(getSelectionOffsets(state.current)).toEqual({ from: 7, to: 8 });
+  });
+
+  it("yanks the current selection and pastes it after the selection", () => {
+    const state = { current: createEditorState({ value: "abc", selection: createSelection(1, 1) }) };
+
+    run(state, yankSelection);
+    expect(state.current.yankBuffer).toBe("b");
+
+    run(state, pasteAfter);
+    expect(state.current.doc.text).toBe("abbc");
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 2, to: 3 });
+  });
+
+  it("yanks a linewise selection and pastes it after the current line", () => {
+    const state = { current: createEditorState({ value: "one\ntwo\n", selection: createSelection(0, 3) }) };
+
+    run(state, yankSelection);
+    expect(state.current.yankBuffer).toBe("one\n");
+
+    run(state, pasteAfter);
+    expect(state.current.doc.text).toBe("one\none\ntwo\n");
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 4, to: 8 });
+  });
+
+  it("returns to normal mode after yanking from visual mode", () => {
+    const state = { current: createEditorState({ value: "abcd" }) };
+
+    run(state, toggleVisualMode);
+    run(state, moveRight);
+    run(state, yankSelection);
+
+    expect(state.current.mode).toBe("normal");
+    expect(state.current.yankBuffer).toBe("ab");
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 1, to: 2 });
   });
 
   it("extends in visual mode for goto motions", () => {

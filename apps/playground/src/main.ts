@@ -1,8 +1,8 @@
 import treeSitterWasmUrl from "./assets/web-tree-sitter.wasm?url";
-import typescriptHighlightQuery from "./assets/tree-sitter-typescript-highlights.scm?raw";
 import typescriptWasmUrl from "./assets/tree-sitter-typescript.wasm?url";
+import { phTheme } from "./phTheme";
 
-import { createTreeSitterLanguageProvider } from "@whx/editor-tree-sitter";
+import { createTreeSitterLanguageProvider, typescriptHighlightQuery } from "@whx/editor-tree-sitter";
 import { createEditor } from "@whx/editor-view-dom";
 
 import "./style.css";
@@ -46,7 +46,8 @@ async function main(): Promise<void> {
     createEditor(mount, {
       filePath: "examples/chat-worker/src/worker.ts",
       value: sample,
-      language
+      language,
+      theme: phTheme
     }).focus();
   }
 }

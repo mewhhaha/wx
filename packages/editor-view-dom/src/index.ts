@@ -23,8 +23,10 @@ import {
   moveLeft,
   moveRight,
   moveUp,
+  pasteAfter,
   selectAll,
   toggleVisualMode,
+  yankSelection,
   type Command,
   type EditorState,
   type TextChange,
@@ -64,6 +66,25 @@ interface CommandLineState {
 }
 
 type PendingChord = "g" | null;
+
+const SURFACE_VERTICAL_PADDING = 16;
+
+interface RowView {
+  lineIndex: number;
+  row: HTMLDivElement;
+  gutter: HTMLDivElement;
+  content: HTMLDivElement;
+}
+
+function addClassName(element: Element, className: string, when: boolean): void {
+  if (when) {
+    element.classList.add(className);
+  }
+}
+
+function roleClassName(role: HighlightRole): string {
+  return `whx-role-${role}`;
+}
 
 function mountStyles(styleHost: HTMLElement): void {
   if (styleHost.querySelector("style[data-whx-style='true']")) {
@@ -118,7 +139,7 @@ function mountStyles(styleHost: HTMLElement): void {
       white-space: pre;
     }
 
-    .whx-editor__row--active {
+    .whx-row-active {
       background: color-mix(in srgb, var(--whx-color-current-line) 88%, transparent);
     }
 
@@ -135,21 +156,21 @@ function mountStyles(styleHost: HTMLElement): void {
       color: var(--whx-color-text);
     }
 
-    .whx-token[data-role="comment"] { color: var(--whx-color-comment); }
-    .whx-token[data-role="function"] { color: var(--whx-color-function); }
-    .whx-token[data-role="keyword"] { color: var(--whx-color-keyword); }
-    .whx-token[data-role="number"] { color: var(--whx-color-number); }
-    .whx-token[data-role="operator"] { color: var(--whx-color-operator); }
-    .whx-token[data-role="punctuation"] { color: var(--whx-color-punctuation); }
-    .whx-token[data-role="string"] { color: var(--whx-color-string); }
-    .whx-token[data-role="type"] { color: var(--whx-color-type); }
+    .whx-role-comment { color: var(--whx-color-comment); }
+    .whx-role-function { color: var(--whx-color-function); }
+    .whx-role-keyword { color: var(--whx-color-keyword); }
+    .whx-role-number { color: var(--whx-color-number); }
+    .whx-role-operator { color: var(--whx-color-operator); }
+    .whx-role-punctuation { color: var(--whx-color-punctuation); }
+    .whx-role-string { color: var(--whx-color-string); }
+    .whx-role-type { color: var(--whx-color-type); }
 
-    .whx-token--selected {
+    .whx-is-selected {
       background: var(--whx-color-selection);
       border-radius: 4px;
     }
 
-    .whx-token--cursor-block {
+    .whx-cursor-block {
       display: inline-block;
       min-width: 1ch;
       color: var(--whx-color-cursor-text);
@@ -157,7 +178,7 @@ function mountStyles(styleHost: HTMLElement): void {
       border-radius: 4px;
     }
 
-    .whx-editor__caret {
+    .whx-cursor-line {
       position: absolute;
       top: 0;
       width: 2px;
@@ -288,8 +309,12 @@ function commandForNormalMode(key: string): Command | null {
       return moveWordForward;
     case "i":
       return enterInsertMode;
+    case "p":
+      return pasteAfter;
     case "v":
       return toggleVisualMode;
+    case "y":
+      return yankSelection;
     default:
       return null;
   }
@@ -317,8 +342,12 @@ function commandForVisualMode(key: string): Command | null {
       return moveWordBackward;
     case "e":
       return moveWordForward;
+    case "p":
+      return pasteAfter;
     case "v":
       return toggleVisualMode;
+    case "y":
+      return yankSelection;
     default:
       return null;
   }
@@ -351,9 +380,25 @@ function commandForInsertMode(key: string): Command | null {
   }
 }
 
+function movementCommandForDelta(deltaY: number): Command | null {
+  if (deltaY > 0) {
+    return moveDown;
+  }
+
+  if (deltaY < 0) {
+    return moveUp;
+  }
+
+  return null;
+}
+
 function roleAtOffset(spans: HighlightSpan[], offset: number): HighlightRole {
   const span = spans.find((entry) => offset >= entry.from && offset < entry.to);
   return span?.role ?? "text";
+}
+
+function selectionFromSyntaxRange(from: number, to: number) {
+  return createSelection(from, Math.max(from, to - 1));
 }
 
 function commandForGotoPrefix(key: string): Command | null {
@@ -445,9 +490,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let filePath = options.filePath ?? "untitled.ts";
   let language = options.language ?? null;
   let theme = options.theme ?? defaultTheme;
-  let highlights: HighlightSpan[] = [];
+  let highlightCache = new Map<number, HighlightSpan[]>();
+  let rowViews: RowView[] = [];
   let commandLine: CommandLineState = { active: false, value: "" };
   let pendingChord: PendingChord = null;
+  let languageRevision = 0;
+  let lastHighlightedRevision = -1;
+  let highlightRequestId = 0;
+  let gutterWidth = 0;
   let destroyed = false;
 
   const root = document.createElement("div");
@@ -509,135 +559,205 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     };
   }
 
-  async function refreshHighlights(): Promise<void> {
-    if (!language) {
-      highlights = [];
-      render();
-      return;
+  function getSelectionLines(targetState: EditorState): Set<number> {
+    const lines = new Set<number>();
+
+    if (targetState.mode === "insert") {
+      lines.add(targetState.doc.positionAt(getCursorOffset(targetState.selection)).line);
+      return lines;
     }
 
-    const revision = state.revision;
-    const next = await language.getHighlightRanges(
-      {
-        fromLine: 0,
-        toLine: Math.max(0, state.doc.lineCount - 1)
-      },
-      revision
-    );
+    const selection = getSelectionOffsets(targetState);
+    const fromLine = targetState.doc.positionAt(selection.from).line;
+    const endOffset = Math.max(selection.from, selection.to - 1);
+    const toLine = targetState.doc.positionAt(endOffset).line;
 
-    if (!destroyed && revision === state.revision) {
-      highlights = next;
-      render();
-    }
-  }
-
-  async function syncLanguage(changes: readonly TextChange[] = []): Promise<void> {
-    if (!language) {
-      return;
+    for (let line = fromLine; line <= toLine; line += 1) {
+      lines.add(line);
     }
 
-    if (state.revision === 0) {
-      await language.open(getSnapshot());
-    } else {
-      await language.update(getSnapshot(), changes);
+    return lines;
+  }
+
+  function getActiveLine(targetState: EditorState): number {
+    const activeOffset =
+      targetState.mode === "insert" ? getCursorOffset(targetState.selection) : getActiveCharacterOffset(targetState);
+    return targetState.doc.positionAt(activeOffset).line;
+  }
+
+  function getVisualDirtyLines(previousState: EditorState, nextState: EditorState): Set<number> {
+    const lines = new Set<number>();
+
+    lines.add(getActiveLine(previousState));
+    lines.add(getActiveLine(nextState));
+
+    for (const line of getSelectionLines(previousState)) {
+      lines.add(line);
     }
 
-    await refreshHighlights();
+    for (const line of getSelectionLines(nextState)) {
+      lines.add(line);
+    }
+
+    return lines;
   }
 
-  function dispatch(transaction: Transaction): void {
-    state = applyTransaction(state, transaction);
-    void syncLanguage(transaction.changes ?? []);
-    render();
-  }
+  function getChangedLines(previousState: EditorState, nextState: EditorState, changes: readonly TextChange[]): Set<number> {
+    const lines = getVisualDirtyLines(previousState, nextState);
 
-  function openCommandLine(): void {
-    pendingChord = null;
-    commandLine = { active: true, value: "" };
-    render();
-  }
+    for (const change of changes) {
+      const previousStartLine = previousState.doc.positionAt(change.from).line;
+      const previousEndLine = previousState.doc.positionAt(change.to > change.from ? change.to - 1 : change.from).line;
+      const nextStartLine = nextState.doc.positionAt(change.from).line;
+      const nextEndOffset = change.insert.length > 0 ? change.from + change.insert.length - 1 : change.from;
+      const nextEndLine = nextState.doc.positionAt(Math.min(nextEndOffset, nextState.doc.length)).line;
+      const fromLine = Math.min(previousStartLine, nextStartLine);
+      const toLine = Math.max(previousEndLine, nextEndLine);
 
-  function closeCommandLine(): void {
-    commandLine = { active: false, value: "" };
-    render();
-  }
-
-  function runCommand(command: Command): boolean {
-    return command(state, dispatch, {
-      requestFocus() {
-        textarea.focus();
+      for (let line = fromLine; line <= toLine; line += 1) {
+        lines.add(line);
       }
-    });
+    }
+
+    return lines;
   }
 
-  function render(): void {
-    rows.replaceChildren();
+  function createRowView(lineIndex: number): RowView {
+    const row = document.createElement("div");
+    const gutter = document.createElement("div");
+    const content = document.createElement("div");
 
-    const lineCount = Math.max(1, state.doc.lineCount);
+    row.className = "whx-editor__row";
+    row.dataset.whxEditorRow = String(lineIndex + 1);
+
+    gutter.className = "whx-editor__gutter";
+    gutter.dataset.whxEditorGutter = String(lineIndex + 1);
+
+    content.className = "whx-editor__content";
+    content.dataset.whxEditorContent = String(lineIndex + 1);
+
+    row.append(gutter, content);
+
+    return {
+      lineIndex,
+      row,
+      gutter,
+      content
+    };
+  }
+
+  function refreshGutterWidth(force = false): void {
+    const nextWidth = Math.max(2, String(Math.max(1, state.doc.lineCount)).length) * metrics.charWidth + 24;
+
+    if (!force && nextWidth === gutterWidth) {
+      return;
+    }
+
+    gutterWidth = nextWidth;
+
+    for (const view of rowViews) {
+      view.row.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
+    }
+  }
+
+  function getLineHighlights(lineIndex: number): HighlightSpan[] {
+    return highlightCache.get(lineIndex) ?? [];
+  }
+
+  function patchRow(lineIndex: number): void {
+    const view = rowViews[lineIndex];
+
+    if (!view) {
+      return;
+    }
+
+    const line = state.doc.lineAt(lineIndex);
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
     const cursorPosition = state.doc.positionAt(activeOffset);
-    const gutterDigits = Math.max(2, String(lineCount).length);
-    const gutterWidth = gutterDigits * metrics.charWidth + 24;
+
+    view.lineIndex = lineIndex;
+    view.row.dataset.whxEditorRow = String(lineIndex + 1);
+    view.gutter.dataset.whxEditorGutter = String(lineIndex + 1);
+    view.content.dataset.whxEditorContent = String(lineIndex + 1);
+    view.gutter.textContent = String(lineIndex + 1);
+    view.row.classList.toggle("whx-row-active", lineIndex === cursorPosition.line);
+    view.content.replaceChildren();
+
+    for (const segment of renderLineFragments(line, state, getLineHighlights(lineIndex))) {
+      const token = document.createElement("span");
+      token.className = "whx-token";
+      token.classList.add(roleClassName(segment.role));
+      addClassName(token, "whx-is-selected", segment.isSelected);
+
+      if (segment.isCursor) {
+        token.classList.add("whx-cursor-block");
+        token.dataset.whxEditorCursor = "true";
+        token.dataset.whxEditorCursorKind = segment.cursorKind ?? "";
+      }
+
+      token.textContent = segment.text;
+      view.content.append(token);
+    }
+
+    if (state.mode === "insert" && lineIndex === cursorPosition.line) {
+      const caret = document.createElement("span");
+      const caretHeight = Math.max(14, Math.round(metrics.lineHeight * 0.84));
+      const caretTop = Math.max(0, Math.round((metrics.lineHeight - caretHeight) / 2));
+
+      caret.className = "whx-cursor-line";
+      caret.dataset.whxEditorCursor = "true";
+      caret.dataset.whxEditorCursorKind = "line";
+      caret.style.left = `${cursorPosition.column * metrics.charWidth}px`;
+      caret.style.top = `${caretTop}px`;
+      caret.style.height = `${caretHeight}px`;
+      view.content.append(caret);
+    }
+  }
+
+  function patchRows(lines: Iterable<number>): void {
+    const seen = new Set<number>();
+
+    for (const line of lines) {
+      if (line < 0 || line >= rowViews.length || seen.has(line)) {
+        continue;
+      }
+
+      seen.add(line);
+      patchRow(line);
+    }
+  }
+
+  function patchAllRows(): void {
+    patchRows(rowViews.map((_, index) => index));
+  }
+
+  function buildAllRows(): void {
+    rows.replaceChildren();
+    rowViews = [];
+    const fragment = document.createDocumentFragment();
+    const lineCount = Math.max(1, state.doc.lineCount);
 
     for (let index = 0; index < lineCount; index += 1) {
-      const line = state.doc.lineAt(index);
-      const row = document.createElement("div");
-      const gutter = document.createElement("div");
-      const content = document.createElement("div");
-
-      row.className = "whx-editor__row";
-      if (index === cursorPosition.line) {
-        row.classList.add("whx-editor__row--active");
-      }
-      row.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
-      row.dataset.whxEditorRow = String(index + 1);
-
-      gutter.className = "whx-editor__gutter";
-      gutter.dataset.whxEditorGutter = String(index + 1);
-      gutter.textContent = String(index + 1);
-
-      content.className = "whx-editor__content";
-      content.dataset.whxEditorContent = String(index + 1);
-
-      const segments = renderLineFragments(line, state, highlights);
-
-      for (const segment of segments) {
-        const token = document.createElement("span");
-        token.className = "whx-token";
-        if (segment.isSelected) {
-          token.classList.add("whx-token--selected");
-        }
-      if (segment.isCursor) {
-          token.classList.add("whx-token--cursor-block");
-          token.dataset.whxEditorCursor = "true";
-          token.dataset.whxEditorCursorKind = segment.cursorKind ?? "";
-        }
-        token.dataset.role = segment.role;
-        token.textContent = segment.text;
-        content.append(token);
-      }
-
-      if (state.mode === "insert" && index === cursorPosition.line) {
-        const caret = document.createElement("span");
-        const caretHeight = Math.max(14, Math.round(metrics.lineHeight * 0.84));
-        const caretTop = Math.max(0, Math.round((metrics.lineHeight - caretHeight) / 2));
-
-        caret.className = "whx-editor__caret";
-        caret.dataset.whxEditorCursor = "true";
-        caret.dataset.whxEditorCursorKind = "line";
-        caret.style.left = `${cursorPosition.column * metrics.charWidth}px`;
-        caret.style.top = `${caretTop}px`;
-        caret.style.height = `${caretHeight}px`;
-        content.append(caret);
-      }
-
-      row.append(gutter, content);
-      rows.append(row);
+      const view = createRowView(index);
+      rowViews.push(view);
+      fragment.append(view.row);
     }
+
+    rows.append(fragment);
+    refreshGutterWidth(true);
+    patchAllRows();
+  }
+
+  function patchStatus(): void {
+    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+    const cursorPosition = state.doc.positionAt(activeOffset);
 
     statusMode.textContent = state.mode === "insert" ? "INS" : state.mode === "visual" ? "VIS" : "NOR";
     statusFile.textContent = filePath;
     statusMeta.textContent = `1 sel   ${cursorPosition.line + 1}:${cursorPosition.column + 1}`;
+  }
+
+  function patchBottomRow(): void {
     bottomRow.dataset.active = String(commandLine.active);
     bottomRow.replaceChildren();
 
@@ -654,12 +774,242 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       value.textContent = commandLine.value;
 
       bottomRow.append(prompt, value);
-    } else {
-      bottomRow.textContent = " ";
+      return;
+    }
+
+    bottomRow.textContent = " ";
+  }
+
+  function buildHighlightCache(spans: HighlightSpan[]): Map<number, HighlightSpan[]> {
+    const cache = new Map<number, HighlightSpan[]>();
+
+    for (const span of spans) {
+      if (span.to <= span.from) {
+        continue;
+      }
+
+      const startLine = state.doc.positionAt(span.from).line;
+      const endLine = state.doc.positionAt(span.to - 1).line;
+
+      for (let line = startLine; line <= endLine; line += 1) {
+        const lineInfo = state.doc.lineAt(line);
+        const from = Math.max(span.from, lineInfo.start);
+        const to = Math.min(span.to, lineInfo.end);
+
+        if (to <= from) {
+          continue;
+        }
+
+        const entry = cache.get(line);
+        const clipped = { from, to, role: span.role };
+
+        if (entry) {
+          entry.push(clipped);
+        } else {
+          cache.set(line, [clipped]);
+        }
+      }
+    }
+
+    return cache;
+  }
+
+  function spansEqual(left: readonly HighlightSpan[], right: readonly HighlightSpan[]): boolean {
+    if (left.length !== right.length) {
+      return false;
+    }
+
+    return left.every((span, index) => {
+      const other = right[index];
+      return !!other && span.from === other.from && span.to === other.to && span.role === other.role;
+    });
+  }
+
+  function replaceHighlightCache(spans: HighlightSpan[]): Set<number> {
+    const nextCache = buildHighlightCache(spans);
+    const dirty = new Set<number>();
+
+    for (let index = 0; index < Math.max(rowViews.length, state.doc.lineCount); index += 1) {
+      const previous = highlightCache.get(index) ?? [];
+      const next = nextCache.get(index) ?? [];
+
+      if (!spansEqual(previous, next)) {
+        dirty.add(index);
+      }
+    }
+
+    highlightCache = nextCache;
+    return dirty;
+  }
+
+  async function refreshHighlights(force = false): Promise<void> {
+    if (!language || languageRevision === 0) {
+      if (highlightCache.size > 0) {
+        highlightCache.clear();
+        patchAllRows();
+      }
+      return;
+    }
+
+    if (!force && lastHighlightedRevision === languageRevision) {
+      return;
+    }
+
+    const requestId = ++highlightRequestId;
+    const next = await language.getHighlightRanges(
+      {
+        fromLine: 0,
+        toLine: Math.max(0, state.doc.lineCount - 1)
+      },
+      languageRevision
+    );
+
+    if (destroyed || requestId !== highlightRequestId) {
+      return;
+    }
+
+    const dirty = replaceHighlightCache(next);
+    lastHighlightedRevision = languageRevision;
+    patchRows(dirty);
+  }
+
+  async function syncLanguage(changes: readonly TextChange[] = [], forceDocumentSync = false): Promise<void> {
+    if (!language) {
+      return;
+    }
+
+    if (forceDocumentSync || languageRevision === 0) {
+      await language.open(getSnapshot());
+      languageRevision = state.revision;
+      lastHighlightedRevision = -1;
+      await refreshHighlights(true);
+      return;
+    }
+
+    if (changes.length === 0) {
+      return;
+    }
+
+    await language.update(getSnapshot(), changes);
+    languageRevision = state.revision;
+    lastHighlightedRevision = -1;
+    await refreshHighlights(true);
+  }
+
+  function dispatch(transaction: Transaction): void {
+    const previousState = state;
+    const nextState = applyTransaction(state, transaction);
+    const changes = transaction.changes ?? [];
+    const hasDocumentChanges = changes.length > 0;
+    const previousDigits = String(Math.max(1, previousState.doc.lineCount)).length;
+    const nextDigits = String(Math.max(1, nextState.doc.lineCount)).length;
+    const lineStructureChanged = previousState.doc.lineCount !== nextState.doc.lineCount;
+
+    state = nextState;
+
+    if (hasDocumentChanges) {
+      highlightCache.clear();
+      lastHighlightedRevision = -1;
+
+      if (lineStructureChanged) {
+        buildAllRows();
+      } else {
+        if (previousDigits !== nextDigits) {
+          refreshGutterWidth(true);
+        }
+
+        patchRows(getChangedLines(previousState, nextState, changes));
+      }
+
+      patchStatus();
+      patchBottomRow();
+      void syncLanguage(changes);
+      return;
+    }
+
+    if (previousDigits !== nextDigits) {
+      refreshGutterWidth(true);
+    }
+
+    patchRows(getVisualDirtyLines(previousState, nextState));
+    patchStatus();
+    patchBottomRow();
+  }
+
+  function openCommandLine(): void {
+    pendingChord = null;
+    commandLine = { active: true, value: "" };
+    patchBottomRow();
+  }
+
+  function closeCommandLine(): void {
+    commandLine = { active: false, value: "" };
+    patchBottomRow();
+  }
+
+  function runCommand(command: Command): boolean {
+    return command(state, dispatch, {
+      requestFocus() {
+        textarea.focus();
+      }
+    });
+  }
+
+  function revealCursor(): void {
+    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+    const cursorPosition = state.doc.positionAt(activeOffset);
+    const activeRow = rowViews[cursorPosition.line]?.row;
+
+    if (!activeRow) {
+      return;
+    }
+
+    const rowTop = activeRow.offsetTop + SURFACE_VERTICAL_PADDING;
+    const rowBottom = rowTop + activeRow.offsetHeight;
+    const viewportTop = surface.scrollTop;
+    const viewportBottom = viewportTop + surface.clientHeight;
+
+    if (rowTop < viewportTop) {
+      surface.scrollTop = rowTop;
+      return;
+    }
+
+    if (rowBottom > viewportBottom) {
+      surface.scrollTop = rowBottom - surface.clientHeight;
     }
   }
 
   function handleKeydown(event: KeyboardEvent): void {
+    if (
+      event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      state.mode !== "insert" &&
+      (event.key === "ArrowUp" || event.key === "ArrowDown")
+    ) {
+      const syntaxSelection =
+        event.key === "ArrowUp" ? language?.expandSelection?.bind(language) : language?.shrinkSelection?.bind(language);
+
+      if (syntaxSelection) {
+        const revision = state.revision;
+        const syntaxRevision = languageRevision;
+        const selection = getSelectionOffsets(state);
+        const activeOffset = getActiveCharacterOffset(state);
+
+        event.preventDefault();
+        void syntaxSelection(selection, activeOffset, syntaxRevision).then((nextSelection) => {
+          if (!nextSelection || destroyed || state.revision !== revision || nextSelection.to <= nextSelection.from) {
+            return;
+          }
+
+          dispatch({
+            selection: selectionFromSyntaxRange(nextSelection.from, nextSelection.to)
+          });
+        });
+      }
+      return;
+    }
+
     if (event.metaKey || event.ctrlKey || event.altKey) {
       return;
     }
@@ -678,7 +1028,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
           ...commandLine,
           value: commandLine.value.slice(0, -1)
         };
-        render();
+        patchBottomRow();
         return;
       }
 
@@ -688,7 +1038,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
           ...commandLine,
           value: `${commandLine.value}${event.key}`
         };
-        render();
+        patchBottomRow();
       }
       return;
     }
@@ -699,7 +1049,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
       if (event.key === "Escape") {
         event.preventDefault();
-        render();
         return;
       }
 
@@ -740,6 +1089,24 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     runCommand(command);
   }
 
+  function handleWheel(event: WheelEvent): void {
+    if (event.metaKey || event.ctrlKey || commandLine.active) {
+      return;
+    }
+
+    const command = movementCommandForDelta(event.deltaY);
+
+    if (!command) {
+      return;
+    }
+
+    event.preventDefault();
+    textarea.focus();
+    textarea.value = "";
+    runCommand(command);
+    revealCursor();
+  }
+
   root.addEventListener("focus", () => {
     if (document.activeElement !== textarea) {
       textarea.focus();
@@ -749,9 +1116,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     textarea.focus();
   });
   textarea.addEventListener("keydown", handleKeydown);
+  surface.addEventListener("wheel", handleWheel, { passive: false });
 
-  render();
-  void syncLanguage([]);
+  buildAllRows();
+  patchStatus();
+  patchBottomRow();
+  void syncLanguage([], true);
 
   return {
     destroy() {
@@ -767,22 +1137,35 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     },
     setFilePath(nextFilePath: string) {
       filePath = nextFilePath;
-      render();
+      patchStatus();
     },
     async setLanguage(nextLanguage: LanguageProvider | null) {
       language?.destroy?.();
       language = nextLanguage;
-      await syncLanguage([]);
+      languageRevision = 0;
+      lastHighlightedRevision = -1;
+      highlightCache.clear();
+      buildAllRows();
+      patchStatus();
+      patchBottomRow();
+      await syncLanguage([], true);
     },
     setTheme(nextTheme: ThemeSpec) {
       theme = nextTheme;
       applyThemeVariables(root, theme);
-      render();
+      buildAllRows();
+      patchStatus();
+      patchBottomRow();
     },
     async setValue(value: string) {
       state = createEditorState({ value, selection: createSelection(0, 0) });
-      render();
-      await syncLanguage([]);
+      languageRevision = 0;
+      lastHighlightedRevision = -1;
+      highlightCache.clear();
+      buildAllRows();
+      patchStatus();
+      patchBottomRow();
+      await syncLanguage([], true);
     }
   };
 }

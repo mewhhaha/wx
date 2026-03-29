@@ -1,4 +1,4 @@
-import type { HighlightSpan } from "@whx/editor-language";
+import type { HighlightSpan, SyntaxSelectionRange } from "@whx/editor-language";
 
 export interface WorkerInitMessage {
   type: "init";
@@ -22,10 +22,27 @@ export interface WorkerUpdateMessage {
 export interface WorkerHighlightMessage {
   type: "highlight";
   revision: number;
+  requestId: number;
   viewport: {
     fromLine: number;
     toLine: number;
   };
+}
+
+export interface WorkerExpandSelectionMessage {
+  type: "expand-selection";
+  revision: number;
+  requestId: number;
+  selection: SyntaxSelectionRange;
+  activeOffset: number;
+}
+
+export interface WorkerShrinkSelectionMessage {
+  type: "shrink-selection";
+  revision: number;
+  requestId: number;
+  selection: SyntaxSelectionRange;
+  activeOffset: number;
 }
 
 export interface WorkerReadyMessage {
@@ -35,7 +52,15 @@ export interface WorkerReadyMessage {
 export interface WorkerHighlightsMessage {
   type: "highlights";
   revision: number;
+  requestId: number;
   spans: HighlightSpan[];
+}
+
+export interface WorkerSelectionMessage {
+  type: "selection";
+  revision: number;
+  requestId: number;
+  selection: SyntaxSelectionRange | null;
 }
 
 export interface WorkerErrorMessage {
@@ -47,7 +72,12 @@ export type TreeSitterWorkerMessage =
   | WorkerInitMessage
   | WorkerOpenMessage
   | WorkerUpdateMessage
-  | WorkerHighlightMessage;
+  | WorkerHighlightMessage
+  | WorkerExpandSelectionMessage
+  | WorkerShrinkSelectionMessage;
 
-export type TreeSitterWorkerResponse = WorkerReadyMessage | WorkerHighlightsMessage | WorkerErrorMessage;
-
+export type TreeSitterWorkerResponse =
+  | WorkerReadyMessage
+  | WorkerHighlightsMessage
+  | WorkerSelectionMessage
+  | WorkerErrorMessage;

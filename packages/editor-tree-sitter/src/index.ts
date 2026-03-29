@@ -1,5 +1,5 @@
 import type { TextChange, TextDocument } from "@whx/editor-core";
-import type { EditorViewport, HighlightSpan, LanguageProvider } from "@whx/editor-language";
+import type { EditorViewport, HighlightSpan, LanguageProvider, SyntaxSelectionRange } from "@whx/editor-language";
 
 import type { TreeSitterWorkerResponse } from "./messages";
 export { typescriptHighlightQuery } from "./highlightQuery";
@@ -12,8 +12,11 @@ export interface TreeSitterProviderOptions {
 }
 
 interface DeferredHighlights {
-  revision: number;
   resolve: (spans: HighlightSpan[]) => void;
+}
+
+interface DeferredSelection {
+  resolve: (selection: SyntaxSelectionRange | null) => void;
 }
 
 function defaultWorkerFactory(): Worker {
@@ -22,9 +25,11 @@ function defaultWorkerFactory(): Worker {
 
 export class TreeSitterLanguageProvider implements LanguageProvider {
   private readonly worker: Worker;
-  private readonly pending = new Map<number, DeferredHighlights>();
+  private readonly pendingHighlights = new Map<number, DeferredHighlights>();
+  private readonly pendingSelections = new Map<number, DeferredSelection>();
   private readonly ready: Promise<void>;
   private resolveReady!: () => void;
+  private nextRequestId = 1;
 
   constructor(options: TreeSitterProviderOptions) {
     this.ready = new Promise<void>((resolve) => {
@@ -40,11 +45,21 @@ export class TreeSitterLanguageProvider implements LanguageProvider {
       }
 
       if (payload.type === "highlights") {
-        const pending = this.pending.get(payload.revision);
+        const pending = this.pendingHighlights.get(payload.requestId);
 
         if (pending) {
           pending.resolve(payload.spans);
-          this.pending.delete(payload.revision);
+          this.pendingHighlights.delete(payload.requestId);
+        }
+        return;
+      }
+
+      if (payload.type === "selection") {
+        const pending = this.pendingSelections.get(payload.requestId);
+
+        if (pending) {
+          pending.resolve(payload.selection);
+          this.pendingSelections.delete(payload.requestId);
         }
       }
     });
@@ -77,18 +92,58 @@ export class TreeSitterLanguageProvider implements LanguageProvider {
 
   async getHighlightRanges(viewport: EditorViewport, revision: number): Promise<HighlightSpan[]> {
     await this.ready;
+    const requestId = this.nextRequestId++;
     return await new Promise<HighlightSpan[]>((resolve) => {
-      this.pending.set(revision, { revision, resolve });
+      this.pendingHighlights.set(requestId, { resolve });
       this.worker.postMessage({
         type: "highlight",
         revision,
+        requestId,
         viewport
       });
     });
   }
 
+  async expandSelection(
+    selection: SyntaxSelectionRange,
+    activeOffset: number,
+    revision: number
+  ): Promise<SyntaxSelectionRange | null> {
+    return await this.requestSelection("expand-selection", selection, activeOffset, revision);
+  }
+
+  async shrinkSelection(
+    selection: SyntaxSelectionRange,
+    activeOffset: number,
+    revision: number
+  ): Promise<SyntaxSelectionRange | null> {
+    return await this.requestSelection("shrink-selection", selection, activeOffset, revision);
+  }
+
+  private async requestSelection(
+    type: "expand-selection" | "shrink-selection",
+    selection: SyntaxSelectionRange,
+    activeOffset: number,
+    revision: number
+  ): Promise<SyntaxSelectionRange | null> {
+    await this.ready;
+    const requestId = this.nextRequestId++;
+
+    return await new Promise<SyntaxSelectionRange | null>((resolve) => {
+      this.pendingSelections.set(requestId, { resolve });
+      this.worker.postMessage({
+        type,
+        revision,
+        requestId,
+        selection,
+        activeOffset
+      });
+    });
+  }
+
   destroy(): void {
-    this.pending.clear();
+    this.pendingHighlights.clear();
+    this.pendingSelections.clear();
     this.worker.terminate();
   }
 }

@@ -35,6 +35,7 @@ export interface Transaction {
   selection?: SelectionSet;
   mode?: EditorMode;
   insertSession?: InsertSession | null;
+  yankBuffer?: string | null;
   effects?: readonly EditorEffect[];
 }
 
@@ -43,6 +44,7 @@ export interface EditorState {
   selection: SelectionSet;
   mode: EditorMode;
   revision: number;
+  yankBuffer: string | null;
   language?: string;
   theme?: string;
   insertSession: InsertSession | null;
@@ -135,6 +137,7 @@ export function createEditorState(options: {
     selection: defaultSelection,
     mode: options.mode ?? "normal",
     revision: 0,
+    yankBuffer: null,
     language: options.language,
     theme: options.theme,
     insertSession: null,
@@ -162,6 +165,7 @@ export function applyTransaction(state: EditorState, transaction: Transaction): 
     doc: nextDoc,
     selection: normalizeSelection(nextDoc, nextSelection, nextMode),
     mode: nextMode,
+    yankBuffer: transaction.yankBuffer ?? state.yankBuffer,
     insertSession: nextInsertSession,
     revision: state.revision + 1
   };

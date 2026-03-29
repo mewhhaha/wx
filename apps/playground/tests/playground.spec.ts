@@ -19,8 +19,12 @@ test("renders, moves, types, and highlights", async ({ page }) => {
   await page.keyboard.type("x");
   await page.keyboard.press("Escape");
   await page.keyboard.press("j");
+  await page.keyboard.press("Alt+ArrowUp");
+  await expect.poll(async () => await page.locator(".whx-is-selected").count()).toBeGreaterThan(1);
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect.poll(async () => await page.locator(".whx-is-selected").count()).toBeGreaterThan(0);
 
-  await expect(page.locator(".whx-token[data-role='keyword']").first()).toBeVisible();
+  await expect(page.locator(".whx-role-keyword").first()).toBeVisible();
   await expect(page.locator("[data-whx-editor-content='1']").first()).toContainText("ixmport");
 
   await page.keyboard.press(":");

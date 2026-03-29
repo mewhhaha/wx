@@ -433,6 +433,27 @@ function selectionAfterChange(state: EditorState, change: TextChange): Selection
   return createSelection(change.from + change.insert.length, change.from + change.insert.length, null);
 }
 
+function selectionForInsertedText(doc: EditorState["doc"], from: number, insert: string): SelectionSet {
+  if (insert.length === 0) {
+    return createCharacterSelection(doc, from);
+  }
+
+  return createSelection(from, from + insert.length - 1);
+}
+
+function linewisePasteOffset(state: EditorState): number {
+  if (state.doc.length === 0) {
+    return 0;
+  }
+
+  const selection = getSelectionOffsets(state);
+  const activeOffset = Math.max(0, Math.min(state.doc.length - 1, selection.to - 1));
+  const line = state.doc.lineAt(state.doc.positionAt(activeOffset).line);
+  const newlineOffset = line.end;
+
+  return newlineOffset < state.doc.length && state.doc.text[newlineOffset] === "\n" ? newlineOffset + 1 : state.doc.length;
+}
+
 function applySingleChange(state: EditorState, dispatch: EditorDispatch, change: TextChange): boolean {
   dispatch({
     changes: [change],
@@ -463,6 +484,41 @@ export const deleteForward: Command = (state, dispatch) => {
   }
 
   return applySingleChange(state, dispatch, changeAtCursor(state, "", 0, 1));
+};
+
+export const yankSelection: Command = (state, dispatch) => {
+  const selection = getSelectionOffsets(state);
+  const yanked = state.doc.slice(selection.from, selection.to);
+
+  dispatch({
+    yankBuffer: yanked,
+    mode: state.mode === "visual" ? "normal" : state.mode,
+    selection:
+      state.mode === "visual" ? createCharacterSelection(state.doc, getActiveCharacterOffset(state)) : state.selection
+  });
+  return true;
+};
+
+export const pasteAfter: Command = (state, dispatch) => {
+  const yanked = state.yankBuffer;
+
+  if (!yanked) {
+    return true;
+  }
+
+  const insertAt = yanked.endsWith("\n") ? linewisePasteOffset(state) : getSelectionOffsets(state).to;
+  const change: TextChange = {
+    from: insertAt,
+    to: insertAt,
+    insert: yanked
+  };
+
+  dispatch({
+    changes: [change],
+    selection: selectionForInsertedText(state.doc.applyChanges([change]), insertAt, yanked),
+    mode: "normal"
+  });
+  return true;
 };
 
 export function reduceTransaction(state: EditorState, transaction: Transaction): EditorState {

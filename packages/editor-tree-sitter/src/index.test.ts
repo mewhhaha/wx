@@ -7,5 +7,8 @@ describe("tree-sitter query", () => {
     expect(typescriptHighlightQuery).toContain("@keyword");
     expect(typescriptHighlightQuery).toContain("@string");
     expect(typescriptHighlightQuery).toContain("@comment");
+    expect(typescriptHighlightQuery).toContain("@function.method");
+    expect(typescriptHighlightQuery).toContain("@punctuation.bracket");
+    expect(typescriptHighlightQuery).toContain("@type.builtin");
   });
 });

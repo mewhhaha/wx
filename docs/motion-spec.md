@@ -86,3 +86,11 @@ Example `e` progression from `m` in `import { greet } from "./hello";`:
 - Printable characters insert at the insertion point in `insert` mode.
 - `Backspace`, `Delete`, and `Enter` operate on the insertion point in `insert` mode.
 - `normal` and `visual` mode do not type directly.
+- `y`
+  - Yanks the current selection into the default internal register.
+  - In `visual` mode, exits back to `normal` mode after yanking.
+- `p`
+  - Pastes the yanked contents after the current selection.
+  - Characterwise yanks paste at `selection.to`.
+  - If the yanked contents end with a newline, paste is treated as linewise and inserts after the current line.
+  - The newly pasted text becomes the active selection in `normal` mode.

@@ -30,10 +30,25 @@ export interface LanguageDocumentSnapshot {
   doc: TextDocument;
 }
 
+export interface SyntaxSelectionRange {
+  from: number;
+  to: number;
+}
+
 export interface LanguageProvider {
   open(document: LanguageDocumentSnapshot): Promise<void>;
   update(document: LanguageDocumentSnapshot, changes: readonly TextChange[]): Promise<void>;
   getHighlightRanges(viewport: EditorViewport, revision: number): Promise<HighlightSpan[]>;
+  expandSelection?(
+    selection: SyntaxSelectionRange,
+    activeOffset: number,
+    revision: number
+  ): Promise<SyntaxSelectionRange | null>;
+  shrinkSelection?(
+    selection: SyntaxSelectionRange,
+    activeOffset: number,
+    revision: number
+  ): Promise<SyntaxSelectionRange | null>;
   destroy?(): Promise<void> | void;
 }
 
@@ -80,4 +95,3 @@ export function createLanguageRegistry() {
     }
   };
 }
-

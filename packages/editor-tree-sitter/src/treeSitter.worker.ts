@@ -1,8 +1,10 @@
 import { Language, Parser, Query } from "web-tree-sitter";
 
-import type { HighlightRole, HighlightSpan } from "@whx/editor-language";
+import type { HighlightRole, HighlightSpan, SyntaxSelectionRange } from "@whx/editor-language";
 
+import { mapCaptureNameToRole } from "./highlightMapping";
 import type { TreeSitterWorkerMessage, TreeSitterWorkerResponse } from "./messages";
+import { expandSyntaxSelection, shrinkSyntaxSelection } from "./syntaxSelection";
 
 const globalScope = self as DedicatedWorkerGlobalScope;
 
@@ -36,23 +38,6 @@ function viewportBounds(text: string, viewport: { fromLine: number; toLine: numb
   const from = offsets[fromLine];
   const to = toLine + 1 < offsets.length ? offsets[toLine + 1] - 1 : text.length;
   return { from, to };
-}
-
-function captureRole(name: string): HighlightRole {
-  if (
-    name === "comment" ||
-    name === "function" ||
-    name === "keyword" ||
-    name === "number" ||
-    name === "operator" ||
-    name === "punctuation" ||
-    name === "string" ||
-    name === "type"
-  ) {
-    return name;
-  }
-
-  return "text";
 }
 
 function sortAndCompact(spans: HighlightSpan[]): HighlightSpan[] {
@@ -125,7 +110,7 @@ function buildHighlights(viewport: { fromLine: number; toLine: number }, revisio
       .map((capture) => ({
         from: capture.node.startIndex,
         to: capture.node.endIndex,
-        role: captureRole(capture.name)
+        role: mapCaptureNameToRole(capture.name)
       }))
       .filter((span) => span.from < bounds.to && span.to > bounds.from)
       .map((span) => ({
@@ -135,6 +120,21 @@ function buildHighlights(viewport: { fromLine: number; toLine: number }, revisio
       }))
       .filter((span) => span.to > span.from)
   );
+}
+
+function buildSyntaxSelection(
+  mode: "expand" | "shrink",
+  selection: SyntaxSelectionRange,
+  activeOffset: number,
+  revision: number
+): SyntaxSelectionRange | null {
+  if (!currentTree || revision !== currentRevision) {
+    return null;
+  }
+
+  return mode === "expand"
+    ? expandSyntaxSelection(currentTree.rootNode, selection)
+    : shrinkSyntaxSelection(currentTree.rootNode, selection, activeOffset);
 }
 
 globalScope.addEventListener("message", async (event: MessageEvent<TreeSitterWorkerMessage>) => {
@@ -156,7 +156,24 @@ globalScope.addEventListener("message", async (event: MessageEvent<TreeSitterWor
         post({
           type: "highlights",
           revision: payload.revision,
+          requestId: payload.requestId,
           spans: buildHighlights(payload.viewport, payload.revision)
+        });
+        return;
+      case "expand-selection":
+        post({
+          type: "selection",
+          revision: payload.revision,
+          requestId: payload.requestId,
+          selection: buildSyntaxSelection("expand", payload.selection, payload.activeOffset, payload.revision)
+        });
+        return;
+      case "shrink-selection":
+        post({
+          type: "selection",
+          revision: payload.revision,
+          requestId: payload.requestId,
+          selection: buildSyntaxSelection("shrink", payload.selection, payload.activeOffset, payload.revision)
         });
         return;
     }
