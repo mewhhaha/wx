@@ -113,4 +113,28 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     expect(container.querySelector("[data-whx-editor-status-mode='true']")?.textContent).toBe("INS");
   });
+
+  it("opens the bottom-row command runner with : and dismisses it with Escape or Enter", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, { value: "abc" });
+    const textarea = container.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
+    expect(container.querySelector("[data-whx-editor-command-prompt='true']")?.textContent).toBe(":");
+    expect(container.querySelector("[data-whx-editor-command-text='true']")?.textContent).toBe("");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "w", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "q", bubbles: true }));
+    expect(container.querySelector("[data-whx-editor-command-text='true']")?.textContent).toBe("wq");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(container.querySelector("[data-whx-editor-command-prompt='true']")).toBeNull();
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "q", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(container.querySelector("[data-whx-editor-command-prompt='true']")).toBeNull();
+  });
 });

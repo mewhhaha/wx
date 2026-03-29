@@ -22,4 +22,11 @@ test("renders, moves, types, and highlights", async ({ page }) => {
 
   await expect(page.locator(".whx-token[data-role='keyword']").first()).toBeVisible();
   await expect(page.locator("[data-whx-editor-content='1']").first()).toContainText("ixmport");
+
+  await page.keyboard.press(":");
+  await expect(page.locator("[data-whx-editor-command-prompt='true']").first()).toContainText(":");
+  await page.keyboard.type("wq");
+  await expect(page.locator("[data-whx-editor-command-text='true']").first()).toContainText("wq");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-whx-editor-command-prompt='true']")).toHaveCount(0);
 });

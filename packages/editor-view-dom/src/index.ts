@@ -52,6 +52,11 @@ interface LineFragment {
   cursorKind: "block" | null;
 }
 
+interface CommandLineState {
+  active: boolean;
+  value: string;
+}
+
 function mountStyles(styleHost: HTMLElement): void {
   if (styleHost.querySelector("style[data-whx-style='true']")) {
     return;
@@ -195,17 +200,32 @@ function mountStyles(styleHost: HTMLElement): void {
       white-space: nowrap;
     }
 
-    .whx-editor__status-spacer {
+    .whx-editor__bottom-row {
       height: var(--whx-line-height, 24px);
       background: #0a0b0f;
       border-top: 1px solid rgba(148, 163, 184, 0.08);
+      color: #dbe2f0;
+      display: flex;
+      align-items: center;
+      padding: 0 1ch;
+      white-space: pre;
+    }
+
+    .whx-editor__bottom-row[data-active="false"] {
+      color: transparent;
+    }
+
+    .whx-editor__command-prompt {
+      color: #eef2ff;
+    }
+
+    .whx-editor__command-text {
+      color: #dbe2f0;
     }
   `;
 
   styleHost.append(styleElement);
 }
-
-import { greet } from "./hello";
 
 function applyThemeVariables(root: HTMLElement, theme: ThemeSpec): void {
   const variables = createThemeVariables(theme);
@@ -379,6 +399,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let language = options.language ?? null;
   let theme = options.theme ?? defaultTheme;
   let highlights: HighlightSpan[] = [];
+  let commandLine: CommandLineState = { active: false, value: "" };
   let destroyed = false;
 
   const root = document.createElement("div");
@@ -388,7 +409,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   const statusMode = document.createElement("div");
   const statusFile = document.createElement("div");
   const statusMeta = document.createElement("div");
-  const statusSpacer = document.createElement("div");
+  const bottomRow = document.createElement("div");
   const textarea = document.createElement("textarea");
   const metrics = measureMetrics(container);
 
@@ -418,8 +439,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   statusMeta.className = "whx-editor__status-meta";
   statusMeta.dataset.whxEditorStatusMeta = "true";
 
-  statusSpacer.className = "whx-editor__status-spacer";
-  statusSpacer.dataset.whxEditorStatusSpacer = "true";
+  bottomRow.className = "whx-editor__bottom-row";
+  bottomRow.dataset.whxEditorBottomRow = "true";
 
   textarea.className = "whx-editor__input";
   textarea.dataset.whxEditor = "input";
@@ -430,7 +451,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   status.append(statusMode, statusFile, statusMeta);
   surface.append(rows, textarea);
-  root.append(surface, status, statusSpacer);
+  root.append(surface, status, bottomRow);
   container.replaceChildren(root);
 
   function getSnapshot() {
@@ -479,6 +500,16 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function dispatch(transaction: Transaction): void {
     state = applyTransaction(state, transaction);
     void syncLanguage(transaction.changes ?? []);
+    render();
+  }
+
+  function openCommandLine(): void {
+    commandLine = { active: true, value: "" };
+    render();
+  }
+
+  function closeCommandLine(): void {
+    commandLine = { active: false, value: "" };
     render();
   }
 
@@ -558,10 +589,65 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     statusMode.textContent = state.mode === "insert" ? "INS" : state.mode === "visual" ? "VIS" : "NOR";
     statusFile.textContent = filePath;
     statusMeta.textContent = `1 sel   ${cursorPosition.line + 1}:${cursorPosition.column + 1}`;
+    bottomRow.dataset.active = String(commandLine.active);
+    bottomRow.replaceChildren();
+
+    if (commandLine.active) {
+      const prompt = document.createElement("span");
+      const value = document.createElement("span");
+
+      prompt.className = "whx-editor__command-prompt";
+      prompt.dataset.whxEditorCommandPrompt = "true";
+      prompt.textContent = ":";
+
+      value.className = "whx-editor__command-text";
+      value.dataset.whxEditorCommandText = "true";
+      value.textContent = commandLine.value;
+
+      bottomRow.append(prompt, value);
+    } else {
+      bottomRow.textContent = " ";
+    }
   }
 
   function handleKeydown(event: KeyboardEvent): void {
     if (event.metaKey || event.ctrlKey || event.altKey) {
+      return;
+    }
+
+    if (commandLine.active) {
+      if (event.key === "Escape" || event.key === "Enter") {
+        event.preventDefault();
+        closeCommandLine();
+        textarea.focus();
+        return;
+      }
+
+      if (event.key === "Backspace") {
+        event.preventDefault();
+        commandLine = {
+          ...commandLine,
+          value: commandLine.value.slice(0, -1)
+        };
+        render();
+        return;
+      }
+
+      if (event.key.length === 1) {
+        event.preventDefault();
+        commandLine = {
+          ...commandLine,
+          value: `${commandLine.value}${event.key}`
+        };
+        render();
+      }
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === ":") {
+      event.preventDefault();
+      textarea.value = "";
+      openCommandLine();
       return;
     }
 
