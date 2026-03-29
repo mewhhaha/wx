@@ -1,0 +1,167 @@
+import { Language, Parser, Query } from "web-tree-sitter";
+
+import type { HighlightRole, HighlightSpan } from "@whx/editor-language";
+
+import type { TreeSitterWorkerMessage, TreeSitterWorkerResponse } from "./messages";
+
+const globalScope = self as DedicatedWorkerGlobalScope;
+
+let parser: Parser | null = null;
+let language: Language | null = null;
+let query: Query | null = null;
+let currentTree: Parser.Tree | null = null;
+let currentText = "";
+let currentRevision = 0;
+
+function post(message: TreeSitterWorkerResponse): void {
+  globalScope.postMessage(message);
+}
+
+function lineOffsets(text: string): number[] {
+  const offsets = [0];
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "\n") {
+      offsets.push(index + 1);
+    }
+  }
+
+  return offsets;
+}
+
+function viewportBounds(text: string, viewport: { fromLine: number; toLine: number }): { from: number; to: number } {
+  const offsets = lineOffsets(text);
+  const fromLine = Math.max(0, Math.min(offsets.length - 1, viewport.fromLine));
+  const toLine = Math.max(fromLine, Math.min(offsets.length - 1, viewport.toLine));
+  const from = offsets[fromLine];
+  const to = toLine + 1 < offsets.length ? offsets[toLine + 1] - 1 : text.length;
+  return { from, to };
+}
+
+function captureRole(name: string): HighlightRole {
+  if (
+    name === "comment" ||
+    name === "function" ||
+    name === "keyword" ||
+    name === "number" ||
+    name === "operator" ||
+    name === "punctuation" ||
+    name === "string" ||
+    name === "type"
+  ) {
+    return name;
+  }
+
+  return "text";
+}
+
+function sortAndCompact(spans: HighlightSpan[]): HighlightSpan[] {
+  const sorted = [...spans].sort((left, right) => left.from - right.from || left.to - right.to);
+  const compacted: HighlightSpan[] = [];
+
+  for (const span of sorted) {
+    const previous = compacted.at(-1);
+
+    if (!previous) {
+      compacted.push(span);
+      continue;
+    }
+
+    if (span.from < previous.to) {
+      if (span.to > previous.to) {
+        compacted.push({ ...span, from: previous.to });
+      }
+      continue;
+    }
+
+    if (previous.role === span.role && previous.to === span.from) {
+      previous.to = span.to;
+      continue;
+    }
+
+    compacted.push(span);
+  }
+
+  return compacted;
+}
+
+async function initialize(parserWasmUrl: string, languageWasmUrl: string, source: string): Promise<void> {
+  await Parser.init({
+    locateFile() {
+      return parserWasmUrl;
+    }
+  });
+
+  language = await Language.load(languageWasmUrl);
+  parser = new Parser();
+  parser.setLanguage(language);
+  query = new Query(language, source);
+}
+
+function parseText(text: string, revision: number): void {
+  if (!parser) {
+    throw new Error("tree-sitter parser not ready");
+  }
+
+  currentText = text;
+  currentRevision = revision;
+  currentTree?.delete();
+  currentTree = parser.parse(text);
+}
+
+function buildHighlights(viewport: { fromLine: number; toLine: number }, revision: number): HighlightSpan[] {
+  if (!query || !currentTree || revision !== currentRevision) {
+    return [];
+  }
+
+  const bounds = viewportBounds(currentText, viewport);
+  const captures = query.captures(currentTree.rootNode, {
+    startPosition: { row: viewport.fromLine, column: 0 },
+    endPosition: { row: viewport.toLine + 1, column: 0 }
+  });
+
+  return sortAndCompact(
+    captures
+      .map((capture) => ({
+        from: capture.node.startIndex,
+        to: capture.node.endIndex,
+        role: captureRole(capture.name)
+      }))
+      .filter((span) => span.from < bounds.to && span.to > bounds.from)
+      .map((span) => ({
+        ...span,
+        from: Math.max(span.from, bounds.from),
+        to: Math.min(span.to, bounds.to)
+      }))
+      .filter((span) => span.to > span.from)
+  );
+}
+
+globalScope.addEventListener("message", async (event: MessageEvent<TreeSitterWorkerMessage>) => {
+  try {
+    const payload = event.data;
+
+    switch (payload.type) {
+      case "init":
+        await initialize(payload.parserWasmUrl, payload.languageWasmUrl, payload.query);
+        post({ type: "ready" });
+        return;
+      case "open":
+        parseText(payload.text, payload.revision);
+        return;
+      case "update":
+        parseText(payload.text, payload.revision);
+        return;
+      case "highlight":
+        post({
+          type: "highlights",
+          revision: payload.revision,
+          spans: buildHighlights(payload.viewport, payload.revision)
+        });
+        return;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    post({ type: "error", message });
+  }
+});

@@ -1,0 +1,54 @@
+import treeSitterWasmUrl from "./assets/web-tree-sitter.wasm?url";
+import typescriptHighlightQuery from "./assets/tree-sitter-typescript-highlights.scm?raw";
+import typescriptWasmUrl from "./assets/tree-sitter-typescript.wasm?url";
+
+import { createTreeSitterLanguageProvider } from "@whx/editor-tree-sitter";
+import { createEditor } from "@whx/editor-view-dom";
+
+import "./style.css";
+
+const sample = `import { greet } from "./hello";
+
+type User = {
+  id: number;
+  name: string;
+};
+
+export function boot(user: User) {
+  const message = greet(user.name);
+  console.log(message);
+  return message;
+}
+`;
+
+async function main(): Promise<void> {
+  const app = document.querySelector<HTMLDivElement>("#app");
+
+  if (!app) {
+    return;
+  }
+
+  const language = createTreeSitterLanguageProvider({
+    parserWasmUrl: treeSitterWasmUrl,
+    languageWasmUrl: typescriptWasmUrl,
+    query: typescriptHighlightQuery
+  });
+
+  app.innerHTML = `
+    <main class="workspace">
+      <div id="mount-editor" class="workspace__editor"></div>
+    </main>
+  `;
+
+  const mount = app.querySelector<HTMLDivElement>("#mount-editor");
+
+  if (mount) {
+    createEditor(mount, {
+      filePath: "examples/chat-worker/src/worker.ts",
+      value: sample,
+      language
+    }).focus();
+  }
+}
+
+void main();

@@ -1,0 +1,19 @@
+{
+  "name": "@whx/playground",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@whx/editor-element": "workspace:*",
+    "@whx/editor-theme": "workspace:*",
+    "@whx/editor-tree-sitter": "workspace:*",
+    "@whx/editor-view-dom": "workspace:*",
+    "tree-sitter-typescript": "^0.23.2",
+    "web-tree-sitter": "^0.26.7"
+  }
+}

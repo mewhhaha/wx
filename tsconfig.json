@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/editor-core" },
+    { "path": "./packages/editor-language" },
+    { "path": "./packages/editor-theme" },
+    { "path": "./packages/editor-tree-sitter" },
+    { "path": "./packages/editor-view-dom" },
+    { "path": "./packages/editor-element" },
+    { "path": "./apps/playground" }
+  ]
+}
+
