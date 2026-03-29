@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { getSelectionOffsets } from "@whx/editor-core";
 import type { HighlightSpan, LanguageProvider } from "@whx/editor-language";
 
 import { createEditor } from "./index";
@@ -112,6 +113,69 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     expect(container.querySelector("[data-whx-editor-status-mode='true']")?.textContent).toBe("INS");
+  });
+
+  it("routes %, gg, ge, gh, gl, and gs through the DOM key handler", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "abc\ndef" });
+    const textarea = container.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
+
+    editor.focus();
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "%", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 7 });
+
+    editor.setValue("abc\ndef");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 1 });
+
+    editor.setValue("abc\ndef");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 1 });
+
+    editor.setValue("abc\ndef");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 4, to: 5 });
+
+    editor.setValue("abc\ndef");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "h", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 4, to: 5 });
+
+    editor.setValue("abc\ndef");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 1 });
+
+    editor.setValue("abc\ndef");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 2, to: 3 });
+  });
+
+  it("renders a visible selected cell when the newline is selected", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, { value: "abc\ndef" });
+    const textarea = container.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
+
+    const firstRowSelectedTokens = [
+      ...(container.querySelector('[data-whx-editor-content="1"]')?.querySelectorAll(".whx-token--selected") ?? [])
+    ] as HTMLElement[];
+    expect(firstRowSelectedTokens.some((token) => token.textContent === " ")).toBe(true);
   });
 
   it("opens the bottom-row command runner with : and dismisses it with Escape or Enter", () => {

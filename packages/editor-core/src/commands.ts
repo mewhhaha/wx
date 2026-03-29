@@ -333,6 +333,75 @@ function selectToTarget(state: EditorState, dispatch: EditorDispatch, target: nu
   return true;
 }
 
+function gotoTarget(state: EditorState, dispatch: EditorDispatch, target: number): boolean {
+  return moveToOffset(state, dispatch, target, null);
+}
+
+export const selectAll: Command = (state, dispatch) => {
+  if (state.doc.length === 0) {
+    return true;
+  }
+
+  dispatch({
+    selection: createSelection(0, state.doc.length - 1)
+  });
+  return true;
+};
+
+export const gotoFileStart: Command = (state, dispatch) => {
+  if (state.doc.length === 0) {
+    return true;
+  }
+
+  return gotoTarget(state, dispatch, 0);
+};
+
+export const gotoLastLine: Command = (state, dispatch) => {
+  if (state.doc.length === 0) {
+    return true;
+  }
+
+  const lastLineIndex =
+    state.doc.lineCount > 1 && state.doc.lineAt(state.doc.lineCount - 1).text.length === 0
+      ? state.doc.lineCount - 2
+      : state.doc.lineCount - 1;
+
+  return gotoTarget(state, dispatch, state.doc.lineAt(Math.max(0, lastLineIndex)).start);
+};
+
+export const gotoLineStart: Command = (state, dispatch) => {
+  if (state.doc.length === 0) {
+    return true;
+  }
+
+  const line = state.doc.lineAt(state.doc.positionAt(getActiveCharacterOffset(state)).line);
+  return gotoTarget(state, dispatch, line.start);
+};
+
+export const gotoLineEnd: Command = (state, dispatch) => {
+  if (state.doc.length === 0) {
+    return true;
+  }
+
+  const line = state.doc.lineAt(state.doc.positionAt(getActiveCharacterOffset(state)).line);
+  const target = Math.max(line.start, line.end - 1);
+  return gotoTarget(state, dispatch, target);
+};
+
+export const gotoFirstNonWhitespace: Command = (state, dispatch) => {
+  if (state.doc.length === 0) {
+    return true;
+  }
+
+  const line = state.doc.lineAt(state.doc.positionAt(getActiveCharacterOffset(state)).line);
+  const column = line.text.search(/\S/);
+  if (column < 0) {
+    return true;
+  }
+
+  return gotoTarget(state, dispatch, line.start + column);
+};
+
 export const moveWordForward: Command = (state, dispatch) => {
   if (state.mode === "normal") {
     return selectNormalWordForward(state, dispatch);

@@ -20,6 +20,12 @@ import {
   moveLeft,
   moveRight,
   moveUp,
+  gotoFileStart,
+  gotoFirstNonWhitespace,
+  gotoLastLine,
+  gotoLineEnd,
+  gotoLineStart,
+  selectAll,
   toggleVisualMode,
   type Transaction
 } from "./index";
@@ -30,7 +36,23 @@ function dispatchTransaction(state: { current: ReturnType<typeof createEditorSta
 
 function run(
   state: { current: ReturnType<typeof createEditorState> },
-  command: (typeof moveLeft) | (typeof moveRight) | (typeof moveUp) | (typeof moveDown) | (typeof moveWordForward) | (typeof moveWordBackward) | (typeof enterInsertMode) | (typeof appendInsertMode) | (typeof enterNormalMode) | (typeof toggleVisualMode)
+  command:
+    | (typeof moveLeft)
+    | (typeof moveRight)
+    | (typeof moveUp)
+    | (typeof moveDown)
+    | (typeof moveWordForward)
+    | (typeof moveWordBackward)
+    | (typeof enterInsertMode)
+    | (typeof appendInsertMode)
+    | (typeof enterNormalMode)
+    | (typeof toggleVisualMode)
+    | (typeof gotoFileStart)
+    | (typeof gotoLastLine)
+    | (typeof gotoLineStart)
+    | (typeof gotoLineEnd)
+    | (typeof gotoFirstNonWhitespace)
+    | (typeof selectAll)
 ): void {
   command(state.current, (transaction) => dispatchTransaction(state, transaction), {});
 }
@@ -199,6 +221,65 @@ describe("editor core", () => {
     expect(state.current.doc.positionAt(getCursorOffset(state.current.selection))).toEqual({ line: 2, column: 2 });
     run(state, moveUp);
     expect(state.current.doc.positionAt(getCursorOffset(state.current.selection))).toEqual({ line: 1, column: 1 });
+  });
+
+  it("selects the whole document with %", () => {
+    const state = { current: createEditorState({ value: "abc\ndef", selection: createSelection(2, 2) }) };
+
+    run(state, selectAll);
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 0, to: 7 });
+  });
+
+  it("goes to file start with gg", () => {
+    const state = { current: createEditorState({ value: "abc\ndef", selection: createSelection(5, 5) }) };
+
+    run(state, gotoFileStart);
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 0, to: 1 });
+  });
+
+  it("goes to the last non-empty line with ge", () => {
+    const state = { current: createEditorState({ value: "abc\ndef\n", selection: createSelection(1, 1) }) };
+
+    run(state, gotoLastLine);
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 4, to: 5 });
+  });
+
+  it("goes to line start with gh", () => {
+    const state = { current: createEditorState({ value: "abc\ndef", selection: createSelection(5, 5) }) };
+
+    run(state, gotoLineStart);
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 4, to: 5 });
+  });
+
+  it("goes to line end with gl", () => {
+    const state = { current: createEditorState({ value: "abc\ndef", selection: createSelection(1, 1) }) };
+
+    run(state, gotoLineEnd);
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 2, to: 3 });
+  });
+
+  it("goes to first non-whitespace with gs", () => {
+    const state = { current: createEditorState({ value: "abc\n   def", selection: createSelection(4, 4) }) };
+
+    run(state, gotoFirstNonWhitespace);
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 7, to: 8 });
+  });
+
+  it("extends in visual mode for goto motions", () => {
+    const state = { current: createEditorState({ value: "abc\ndef", selection: createSelection(5, 5) }) };
+
+    run(state, toggleVisualMode);
+    run(state, gotoLineStart);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 4, to: 6 });
+
+    run(state, gotoLineEnd);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 5, to: 7 });
   });
 
   it("moves e to the end of the current word from its start", () => {

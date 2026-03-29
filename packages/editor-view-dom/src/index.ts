@@ -15,9 +15,15 @@ import {
   moveDown,
   moveWordBackward,
   moveWordForward,
+  gotoFileStart,
+  gotoFirstNonWhitespace,
+  gotoLastLine,
+  gotoLineEnd,
+  gotoLineStart,
   moveLeft,
   moveRight,
   moveUp,
+  selectAll,
   toggleVisualMode,
   type Command,
   type EditorState,
@@ -56,6 +62,8 @@ interface CommandLineState {
   active: boolean;
   value: string;
 }
+
+type PendingChord = "g" | null;
 
 function mountStyles(styleHost: HTMLElement): void {
   if (styleHost.querySelector("style[data-whx-style='true']")) {
@@ -258,6 +266,8 @@ function measureMetrics(styleHost: HTMLElement): { charWidth: number; lineHeight
 
 function commandForNormalMode(key: string): Command | null {
   switch (key) {
+    case "%":
+      return selectAll;
     case "a":
       return appendInsertMode;
     case "ArrowLeft":
@@ -287,6 +297,8 @@ function commandForNormalMode(key: string): Command | null {
 
 function commandForVisualMode(key: string): Command | null {
   switch (key) {
+    case "%":
+      return selectAll;
     case "Escape":
       return enterNormalMode;
     case "ArrowLeft":
@@ -344,6 +356,27 @@ function roleAtOffset(spans: HighlightSpan[], offset: number): HighlightRole {
   return span?.role ?? "text";
 }
 
+function commandForGotoPrefix(key: string): Command | null {
+  switch (key) {
+    case "g":
+      return gotoFileStart;
+    case "e":
+      return gotoLastLine;
+    case "h":
+      return gotoLineStart;
+    case "j":
+      return moveDown;
+    case "k":
+      return moveUp;
+    case "l":
+      return gotoLineEnd;
+    case "s":
+      return gotoFirstNonWhitespace;
+    default:
+      return null;
+  }
+}
+
 function renderLineFragments(line: { start: number; text: string }, state: EditorState, spans: HighlightSpan[]): LineFragment[] {
   const fragments: LineFragment[] = [];
   const activeOffset = getActiveCharacterOffset(state);
@@ -390,6 +423,20 @@ function renderLineFragments(line: { start: number; text: string }, state: Edito
     });
   }
 
+  const hasLineEnding = lineEnd < state.doc.length && state.doc.text[lineEnd] === "\n";
+  const lineEndingSelected = hasLineEnding && lineEnd >= selection.from && lineEnd < selection.to;
+  const lineEndingCursor = hasLineEnding && activeOffset === lineEnd;
+
+  if (lineEndingSelected || lineEndingCursor) {
+    fragments.push({
+      text: " ",
+      role: "text",
+      isSelected: lineEndingSelected,
+      isCursor: lineEndingCursor,
+      cursorKind: lineEndingCursor ? "block" : null
+    });
+  }
+
   return fragments;
 }
 
@@ -400,6 +447,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let theme = options.theme ?? defaultTheme;
   let highlights: HighlightSpan[] = [];
   let commandLine: CommandLineState = { active: false, value: "" };
+  let pendingChord: PendingChord = null;
   let destroyed = false;
 
   const root = document.createElement("div");
@@ -504,6 +552,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function openCommandLine(): void {
+    pendingChord = null;
     commandLine = { active: true, value: "" };
     render();
   }
@@ -644,10 +693,34 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
+    if (pendingChord) {
+      const chordCommand = pendingChord === "g" ? commandForGotoPrefix(event.key) : null;
+      pendingChord = null;
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        render();
+        return;
+      }
+
+      if (chordCommand) {
+        event.preventDefault();
+        textarea.value = "";
+        runCommand(chordCommand);
+        return;
+      }
+    }
+
     if ((state.mode === "normal" || state.mode === "visual") && event.key === ":") {
       event.preventDefault();
       textarea.value = "";
       openCommandLine();
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === "g") {
+      event.preventDefault();
+      pendingChord = "g";
       return;
     }
 

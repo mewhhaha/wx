@@ -37,6 +37,18 @@ This document defines the current editor motion semantics for `normal`, `insert`
 - `k` / `ArrowUp`
   - Same rules as `j`, but toward the previous line.
 
+## Goto Motions
+
+- `g` enters a goto prefix in normal or visual mode.
+- In normal mode, goto motions move the cursor and collapse back to a one-character selection.
+- In visual mode, goto motions move the active edge and keep the existing anchor.
+- Implemented goto bindings:
+  - `gg`: go to the start of the file
+  - `ge`: go to the start of the last non-empty line
+  - `gh`: go to the start of the current line
+  - `gl`: go to the end of the current line, excluding the newline
+  - `gs`: go to the first non-whitespace character of the current line
+
 ## Word Motions
 
 - Character classes are:
