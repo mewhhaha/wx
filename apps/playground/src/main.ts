@@ -1,5 +1,6 @@
 import treeSitterWasmUrl from "./assets/web-tree-sitter.wasm?url";
 import typescriptWasmUrl from "./assets/tree-sitter-typescript.wasm?url";
+import { installBenchmarkHarness } from "./benchmarkHarness";
 import { phTheme } from "./phTheme";
 
 import { createTreeSitterLanguageProvider, typescriptHighlightQuery } from "@whx/editor-tree-sitter";
@@ -25,6 +26,11 @@ async function main(): Promise<void> {
   const app = document.querySelector<HTMLDivElement>("#app");
 
   if (!app) {
+    return;
+  }
+
+  if (new URL(window.location.href).searchParams.has("bench")) {
+    installBenchmarkHarness(app);
     return;
   }
 

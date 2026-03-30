@@ -86,7 +86,8 @@ export class TreeSitterLanguageProvider implements LanguageProvider {
     this.worker.postMessage({
       type: "update",
       revision: document.revision,
-      text: document.doc.text
+      text: document.doc.text,
+      changes: _changes
     });
   }
 

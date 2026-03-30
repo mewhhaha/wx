@@ -1,3 +1,4 @@
+import type { TextChange } from "@whx/editor-core";
 import type { HighlightSpan, SyntaxSelectionRange } from "@whx/editor-language";
 
 export interface WorkerInitMessage {
@@ -17,6 +18,7 @@ export interface WorkerUpdateMessage {
   type: "update";
   revision: number;
   text: string;
+  changes: readonly TextChange[];
 }
 
 export interface WorkerHighlightMessage {

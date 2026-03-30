@@ -50,20 +50,14 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-whx-editor-status-meta='true']")?.textContent).toContain("2:2");
   });
 
-  it("preserves unaffected row DOM identity during movement", () => {
+  it("renders only a viewport slice for large files", () => {
     const container = document.createElement("div");
     document.body.append(container);
 
-    createEditor(container, { value: Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n") });
-    const rowsRoot = container.querySelector("[data-whx-editor='rows']");
-    const farRowBefore = container.querySelector('[data-whx-editor-row="15"]');
+    createEditor(container, { value: Array.from({ length: 200 }, (_, index) => `line ${index}`).join("\n") });
 
-    const textarea = container.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
-
-    expect(container.querySelector("[data-whx-editor='rows']")).toBe(rowsRoot);
-    expect(container.querySelector('[data-whx-editor-row="15"]')).toBe(farRowBefore);
+    expect(container.querySelectorAll("[data-whx-editor-row]").length).toBeLessThan(80);
+    expect(container.querySelector('[data-whx-editor-row="150"]')).toBeNull();
   });
 
   it("moves the cursor with mouse wheel scrolling", () => {
@@ -84,6 +78,29 @@ describe("createEditor", () => {
       line: 0,
       column: 0
     });
+  });
+
+  it("scrolls to keep the cursor visible during keyboard movement", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, {
+      value: Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n")
+    });
+
+    const surface = container.querySelector("[data-whx-editor='surface']") as HTMLDivElement;
+    const textarea = container.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
+    const targetRow = container.querySelector('[data-whx-editor-row="12"]') as HTMLDivElement;
+
+    Object.defineProperty(surface, "clientHeight", { value: 80, configurable: true });
+    Object.defineProperty(targetRow, "offsetTop", { value: 220, configurable: true });
+    Object.defineProperty(targetRow, "offsetHeight", { value: 24, configurable: true });
+
+    for (let index = 0; index < 11; index += 1) {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    }
+
+    expect(surface.scrollTop).toBeGreaterThan(0);
   });
 
   it("supports insert mode typing and escape", () => {
@@ -107,6 +124,42 @@ describe("createEditor", () => {
     expect(editor.getState().mode).toBe("normal");
     expect(container.querySelector("[data-whx-editor-cursor='true']")?.getAttribute("data-whx-editor-cursor-kind")).toBe("block");
     expect(container.querySelector("[data-whx-editor-status-mode='true']")?.textContent).toBe("NOR");
+  });
+
+  it("applies syntax highlighting on initial open without needing an edit", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, {
+      value: "const value = 1;",
+      language: createStubLanguage([{ from: 0, to: 5, role: "keyword" }])
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const keywordCells = [
+      ...container.querySelectorAll('[data-whx-editor-content="1"] .whx-role-keyword')
+    ].map((node) => node.textContent).join("");
+    expect(keywordCells.startsWith("const")).toBe(true);
+  });
+
+  it("keeps a stable placeholder cell on empty lines for cursor rendering", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "one\n\ntwo" });
+    const textarea = container.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    expect(container.querySelector('[data-whx-editor-content="2"]')?.textContent).toBe("\u00a0");
+    expect(container.querySelector("[data-whx-editor-cursor='true']")?.textContent).toBe("\u00a0");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    expect(container.querySelector('[data-whx-editor-content="2"]')?.textContent).toContain("\u00a0");
+    expect(container.querySelector("[data-whx-editor-cursor='true']")?.getAttribute("data-whx-editor-cursor-kind")).toBe("line");
+
+    editor.focus();
   });
 
   it("does not resync the language document for cursor-only movement", async () => {
@@ -146,6 +199,91 @@ describe("createEditor", () => {
 
     expect(openCalls + updateCalls).toBeGreaterThanOrEqual(2);
     expect(editor.getState().doc.text).toBe("abc\nxdef");
+  });
+
+  it("requests highlight ranges only for the affected edit window", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const requests: Array<{ fromLine: number; toLine: number }> = [];
+    createEditor(container, {
+      value: Array.from({ length: 200 }, (_, index) => `line ${index}`).join("\n"),
+      language: {
+        async open() {},
+        async update() {},
+        async getHighlightRanges(viewport) {
+          requests.push(viewport);
+          return [];
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(requests[0]?.fromLine).toBe(0);
+    expect(requests[0]?.toLine).toBeLessThan(50);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const latestRequest = requests.at(-1);
+    expect(latestRequest?.fromLine).toBe(0);
+    expect(latestRequest?.toLine).toBeLessThan(50);
+  });
+
+  it("does not request a full-file highlight refresh for line-structure edits", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const requests: Array<{ fromLine: number; toLine: number }> = [];
+    createEditor(container, {
+      value: Array.from({ length: 200 }, (_, index) => `line ${index}`).join("\n"),
+      language: {
+        async open() {},
+        async update() {},
+        async getHighlightRanges(viewport) {
+          requests.push(viewport);
+          return [];
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(requests[0]?.fromLine).toBe(0);
+    expect(requests[0]?.toLine).toBeLessThan(40);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const latestRequest = requests.at(-1);
+    expect(latestRequest?.fromLine).toBe(0);
+    expect(latestRequest?.toLine).toBeLessThan(50);
+  });
+
+  it("keeps using a viewport slice after a newline inserted at the top", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, {
+      value: Array.from({ length: 200 }, (_, index) => `line ${index}`).join("\n")
+    });
+
+    const textarea = container.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelectorAll("[data-whx-editor-row]").length).toBeLessThan(80);
+    expect(container.querySelector('[data-whx-editor-row="151"]')).toBeNull();
   });
 
   it("keeps the original glyph selected after a then escape", () => {
@@ -267,10 +405,10 @@ describe("createEditor", () => {
     const firstRowSelectedTokens = [
       ...(container.querySelector('[data-whx-editor-content="1"]')?.querySelectorAll(".whx-is-selected") ?? [])
     ] as HTMLElement[];
-    expect(firstRowSelectedTokens.some((token) => token.textContent === " ")).toBe(true);
+    expect(firstRowSelectedTokens.some((token) => token.textContent === "\u00a0")).toBe(true);
   });
 
-  it("keeps all rows mounted and repeated movement within a sane budget", () => {
+  it("keeps a viewport slice mounted and repeated movement within a sane budget", () => {
     const container = document.createElement("div");
     document.body.append(container);
 
@@ -279,7 +417,6 @@ describe("createEditor", () => {
     const editor = createEditor(container, { value });
     const renderElapsed = performance.now() - renderStartedAt;
     const textarea = container.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
-    const farRowBefore = container.querySelector('[data-whx-editor-row="1500"]');
 
     const movementStartedAt = performance.now();
 
@@ -290,10 +427,28 @@ describe("createEditor", () => {
     const movementElapsed = performance.now() - movementStartedAt;
 
     expect(editor.getState().doc.lineCount).toBe(2000);
-    expect(container.querySelectorAll("[data-whx-editor-row]").length).toBe(2000);
-    expect(container.querySelector('[data-whx-editor-row="1500"]')).toBe(farRowBefore);
+    expect(container.querySelectorAll("[data-whx-editor-row]").length).toBeLessThan(80);
+    expect(container.querySelector('[data-whx-editor-row="51"]')).not.toBeNull();
+    expect(container.querySelector('[data-whx-editor-row="1500"]')).toBeNull();
     expect(renderElapsed).toBeLessThan(4000);
     expect(movementElapsed).toBeLessThan(1000);
+  });
+
+  it("rerenders the viewport slice when the surface scroll position changes", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, {
+      value: Array.from({ length: 200 }, (_, index) => `line ${index}`).join("\n")
+    });
+
+    const surface = container.querySelector("[data-whx-editor='surface']") as HTMLDivElement;
+    surface.scrollTop = 24 * 100;
+    surface.dispatchEvent(new Event("scroll"));
+
+    expect(container.querySelectorAll("[data-whx-editor-row]").length).toBeLessThan(80);
+    expect(container.querySelector('[data-whx-editor-row="101"]')).not.toBeNull();
+    expect(container.querySelector('[data-whx-editor-row="1"]')).toBeNull();
   });
 
   it("opens the bottom-row command runner with : and dismisses it with Escape or Enter", () => {

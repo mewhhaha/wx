@@ -1,8 +1,10 @@
+import type { TextChange } from "@whx/editor-core";
 import { Language, Parser, Query } from "web-tree-sitter";
 
 import type { HighlightRole, HighlightSpan, SyntaxSelectionRange } from "@whx/editor-language";
 
 import { mapCaptureNameToRole } from "./highlightMapping";
+import { applyTextChange, buildTreeEdit, rebaseTextChanges } from "./incrementalEdits";
 import type { TreeSitterWorkerMessage, TreeSitterWorkerResponse } from "./messages";
 import { expandSyntaxSelection, shrinkSyntaxSelection } from "./syntaxSelection";
 
@@ -94,6 +96,32 @@ function parseText(text: string, revision: number): void {
   currentTree = parser.parse(text);
 }
 
+function parseTextIncrementally(text: string, revision: number, changes: readonly TextChange[]): void {
+  if (!parser || !currentTree || changes.length === 0) {
+    parseText(text, revision);
+    return;
+  }
+
+  const rebasedChanges = rebaseTextChanges(changes);
+  let workingText = currentText;
+
+  for (const change of rebasedChanges) {
+    currentTree.edit(buildTreeEdit(workingText, change));
+    workingText = applyTextChange(workingText, change);
+  }
+
+  if (workingText !== text) {
+    parseText(text, revision);
+    return;
+  }
+
+  const previousTree = currentTree;
+  currentText = text;
+  currentRevision = revision;
+  currentTree = parser.parse(text, previousTree);
+  previousTree.delete();
+}
+
 function buildHighlights(viewport: { fromLine: number; toLine: number }, revision: number): HighlightSpan[] {
   if (!query || !currentTree || revision !== currentRevision) {
     return [];
@@ -150,7 +178,7 @@ globalScope.addEventListener("message", async (event: MessageEvent<TreeSitterWor
         parseText(payload.text, payload.revision);
         return;
       case "update":
-        parseText(payload.text, payload.revision);
+        parseTextIncrementally(payload.text, payload.revision, payload.changes);
         return;
       case "highlight":
         post({

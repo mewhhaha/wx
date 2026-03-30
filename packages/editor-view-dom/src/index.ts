@@ -68,12 +68,20 @@ interface CommandLineState {
 type PendingChord = "g" | null;
 
 const SURFACE_VERTICAL_PADDING = 16;
+const EMPTY_CELL_TEXT = "\u00a0";
+const HIGHLIGHT_CONTEXT_LINES = 2;
+const VIEWPORT_OVERSCAN_LINES = 6;
 
 interface RowView {
   lineIndex: number;
   row: HTMLDivElement;
   gutter: HTMLDivElement;
   content: HTMLDivElement;
+}
+
+interface LineViewport {
+  fromLine: number;
+  toLine: number;
 }
 
 function addClassName(element: Element, className: string, when: boolean): void {
@@ -112,7 +120,7 @@ function mountStyles(styleHost: HTMLElement): void {
       position: relative;
       flex: 1 1 auto;
       min-height: 0;
-      overflow: auto;
+      overflow: hidden;
       padding: 16px 0;
       outline: none;
     }
@@ -130,6 +138,11 @@ function mountStyles(styleHost: HTMLElement): void {
     .whx-editor__rows {
       position: relative;
       z-index: 1;
+    }
+
+    .whx-editor__spacer {
+      height: 0;
+      pointer-events: none;
     }
 
     .whx-editor__row {
@@ -154,6 +167,7 @@ function mountStyles(styleHost: HTMLElement): void {
       position: relative;
       white-space: pre;
       color: var(--whx-color-text);
+      min-height: var(--whx-line-height, 24px);
     }
 
     .whx-role-comment { color: var(--whx-color-comment); }
@@ -429,11 +443,23 @@ function renderLineFragments(line: { start: number; text: string }, state: Edito
   const lineEnd = line.start + line.text.length;
 
   if (state.mode === "insert") {
+    if (line.text.length === 0) {
+      return [
+        {
+          text: EMPTY_CELL_TEXT,
+          role: "text",
+          isSelected: false,
+          isCursor: false,
+          cursorKind: null
+        }
+      ];
+    }
+
     for (let index = 0; index < line.text.length; index += 1) {
       const offset = line.start + index;
 
       fragments.push({
-        text: line.text[index] ?? " ",
+        text: line.text[index] ?? EMPTY_CELL_TEXT,
         role: roleAtOffset(spans, offset),
         isSelected: false,
         isCursor: false,
@@ -448,7 +474,7 @@ function renderLineFragments(line: { start: number; text: string }, state: Edito
     const selected = selection.from <= line.start && line.start < selection.to;
     return [
       {
-        text: " ",
+        text: EMPTY_CELL_TEXT,
         role: "text",
         isSelected: selected,
         isCursor: activeOffset === line.start,
@@ -474,7 +500,7 @@ function renderLineFragments(line: { start: number; text: string }, state: Edito
 
   if (lineEndingSelected || lineEndingCursor) {
     fragments.push({
-      text: " ",
+      text: EMPTY_CELL_TEXT,
       role: "text",
       isSelected: lineEndingSelected,
       isCursor: lineEndingCursor,
@@ -485,16 +511,26 @@ function renderLineFragments(line: { start: number; text: string }, state: Edito
   return fragments;
 }
 
+function normalizeViewport(viewport: { fromLine: number; toLine: number }, lineCount: number): { fromLine: number; toLine: number } {
+  const maxLine = Math.max(0, lineCount - 1);
+  const fromLine = Math.max(0, Math.min(maxLine, viewport.fromLine));
+  const toLine = Math.max(fromLine, Math.min(maxLine, viewport.toLine));
+
+  return { fromLine, toLine };
+}
+
 export function createEditor(container: HTMLElement, options: CreateEditorOptions = {}): EditorHandle {
   let state = createEditorState({ value: options.value ?? "" });
   let filePath = options.filePath ?? "untitled.ts";
   let language = options.language ?? null;
   let theme = options.theme ?? defaultTheme;
   let highlightCache = new Map<number, HighlightSpan[]>();
+  let highlightCoverage = new Set<number>();
   let rowViews: RowView[] = [];
+  let renderedViewport: LineViewport = { fromLine: 0, toLine: -1 };
   let commandLine: CommandLineState = { active: false, value: "" };
   let pendingChord: PendingChord = null;
-  let languageRevision = 0;
+  let languageRevision = -1;
   let lastHighlightedRevision = -1;
   let highlightRequestId = 0;
   let gutterWidth = 0;
@@ -503,6 +539,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   const root = document.createElement("div");
   const surface = document.createElement("div");
   const rows = document.createElement("div");
+  const topSpacer = document.createElement("div");
+  const viewportRows = document.createElement("div");
+  const bottomSpacer = document.createElement("div");
   const status = document.createElement("div");
   const statusMode = document.createElement("div");
   const statusFile = document.createElement("div");
@@ -524,6 +563,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   rows.className = "whx-editor__rows";
   rows.dataset.whxEditor = "rows";
+
+  topSpacer.className = "whx-editor__spacer";
+  topSpacer.dataset.whxEditorSpacer = "top";
+
+  viewportRows.dataset.whxEditor = "viewport";
+
+  bottomSpacer.className = "whx-editor__spacer";
+  bottomSpacer.dataset.whxEditorSpacer = "bottom";
 
   status.className = "whx-editor__status";
   status.dataset.whxEditor = "status";
@@ -548,6 +595,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   textarea.autocorrect = "off";
 
   status.append(statusMode, statusFile, statusMeta);
+  rows.append(topSpacer, viewportRows, bottomSpacer);
   surface.append(rows, textarea);
   root.append(surface, status, bottomRow);
   container.replaceChildren(root);
@@ -622,6 +670,50 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return lines;
   }
 
+  function getHighlightViewportsForChanges(
+    previousState: EditorState,
+    nextState: EditorState,
+    changes: readonly TextChange[]
+  ): {
+    previousViewport: { fromLine: number; toLine: number };
+    nextViewport: { fromLine: number; toLine: number };
+  } {
+    let previousFromLine = Number.POSITIVE_INFINITY;
+    let previousToLine = 0;
+    let nextFromLine = Number.POSITIVE_INFINITY;
+    let nextToLine = 0;
+
+    for (const change of changes) {
+      const previousStartLine = previousState.doc.positionAt(change.from).line;
+      const previousEndLine = previousState.doc.positionAt(change.to > change.from ? change.to - 1 : change.from).line;
+      const nextStartLine = nextState.doc.positionAt(change.from).line;
+      const nextEndOffset = change.insert.length > 0 ? change.from + change.insert.length - 1 : change.from;
+      const nextEndLine = nextState.doc.positionAt(Math.min(nextEndOffset, nextState.doc.length)).line;
+
+      previousFromLine = Math.min(previousFromLine, previousStartLine);
+      previousToLine = Math.max(previousToLine, previousEndLine);
+      nextFromLine = Math.min(nextFromLine, nextStartLine);
+      nextToLine = Math.max(nextToLine, nextEndLine);
+    }
+
+    return {
+      previousViewport: normalizeViewport(
+        {
+          fromLine: previousFromLine - HIGHLIGHT_CONTEXT_LINES,
+          toLine: previousToLine + HIGHLIGHT_CONTEXT_LINES
+        },
+        previousState.doc.lineCount
+      ),
+      nextViewport: normalizeViewport(
+        {
+          fromLine: nextFromLine - HIGHLIGHT_CONTEXT_LINES,
+          toLine: nextToLine + HIGHLIGHT_CONTEXT_LINES
+        },
+        nextState.doc.lineCount
+      )
+    };
+  }
+
   function createRowView(lineIndex: number): RowView {
     const row = document.createElement("div");
     const gutter = document.createElement("div");
@@ -646,6 +738,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     };
   }
 
+  function viewportEquals(left: LineViewport, right: LineViewport): boolean {
+    return left.fromLine === right.fromLine && left.toLine === right.toLine;
+  }
+
   function refreshGutterWidth(force = false): void {
     const nextWidth = Math.max(2, String(Math.max(1, state.doc.lineCount)).length) * metrics.charWidth + 24;
 
@@ -664,13 +760,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return highlightCache.get(lineIndex) ?? [];
   }
 
-  function patchRow(lineIndex: number): void {
-    const view = rowViews[lineIndex];
-
-    if (!view) {
-      return;
-    }
-
+  function patchRowView(view: RowView, lineIndex: number): void {
     const line = state.doc.lineAt(lineIndex);
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
     const cursorPosition = state.doc.positionAt(activeOffset);
@@ -714,38 +804,89 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
   }
 
-  function patchRows(lines: Iterable<number>): void {
-    const seen = new Set<number>();
-
-    for (const line of lines) {
-      if (line < 0 || line >= rowViews.length || seen.has(line)) {
-        continue;
-      }
-
-      seen.add(line);
-      patchRow(line);
-    }
-  }
-
-  function patchAllRows(): void {
-    patchRows(rowViews.map((_, index) => index));
-  }
-
-  function buildAllRows(): void {
-    rows.replaceChildren();
-    rowViews = [];
-    const fragment = document.createDocumentFragment();
+  function getVisibleViewport(): LineViewport {
     const lineCount = Math.max(1, state.doc.lineCount);
+    const startOffset = Math.max(0, surface.scrollTop - SURFACE_VERTICAL_PADDING);
+    const viewportHeight = Math.max(metrics.lineHeight, surface.clientHeight || metrics.lineHeight * 20);
+    const visibleLineCount = Math.max(1, Math.ceil(viewportHeight / metrics.lineHeight));
+    const fromLine = Math.max(0, Math.floor(startOffset / metrics.lineHeight));
+    const toLine = Math.min(lineCount - 1, fromLine + visibleLineCount - 1);
 
-    for (let index = 0; index < lineCount; index += 1) {
-      const view = createRowView(index);
+    return { fromLine, toLine };
+  }
+
+  function expandViewport(viewport: LineViewport): LineViewport {
+    return normalizeViewport(
+      {
+        fromLine: viewport.fromLine - VIEWPORT_OVERSCAN_LINES,
+        toLine: viewport.toLine + VIEWPORT_OVERSCAN_LINES
+      },
+      state.doc.lineCount
+    );
+  }
+
+  function getHighlightViewport(viewport: LineViewport): LineViewport {
+    return normalizeViewport(
+      {
+        fromLine: viewport.fromLine - HIGHLIGHT_CONTEXT_LINES,
+        toLine: viewport.toLine + HIGHLIGHT_CONTEXT_LINES
+      },
+      state.doc.lineCount
+    );
+  }
+
+  function renderVisibleRows(force = false): void {
+    const visibleViewport = getVisibleViewport();
+    const nextViewport = expandViewport(visibleViewport);
+
+    if (
+      !force &&
+      renderedViewport.toLine >= renderedViewport.fromLine &&
+      visibleViewport.fromLine >= renderedViewport.fromLine &&
+      visibleViewport.toLine <= renderedViewport.toLine
+    ) {
+      return;
+    }
+
+    renderedViewport = nextViewport;
+    rowViews = [];
+    topSpacer.style.height = `${renderedViewport.fromLine * metrics.lineHeight}px`;
+    bottomSpacer.style.height = `${Math.max(0, state.doc.lineCount - renderedViewport.toLine - 1) * metrics.lineHeight}px`;
+
+    const fragment = document.createDocumentFragment();
+
+    for (let lineIndex = renderedViewport.fromLine; lineIndex <= renderedViewport.toLine; lineIndex += 1) {
+      const view = createRowView(lineIndex);
+      view.row.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
+      patchRowView(view, lineIndex);
       rowViews.push(view);
       fragment.append(view.row);
     }
 
-    rows.append(fragment);
-    refreshGutterWidth(true);
-    patchAllRows();
+    viewportRows.replaceChildren(fragment);
+  }
+
+  function patchVisibleLines(lines: Iterable<number>): void {
+    const seen = new Set<number>();
+
+    for (const lineIndex of lines) {
+      if (
+        seen.has(lineIndex) ||
+        lineIndex < renderedViewport.fromLine ||
+        lineIndex > renderedViewport.toLine
+      ) {
+        continue;
+      }
+
+      seen.add(lineIndex);
+      const view = rowViews[lineIndex - renderedViewport.fromLine];
+
+      if (!view) {
+        continue;
+      }
+
+      patchRowView(view, lineIndex);
+    }
   }
 
   function patchStatus(): void {
@@ -825,64 +966,88 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     });
   }
 
-  function replaceHighlightCache(spans: HighlightSpan[]): Set<number> {
+  function replaceHighlightCache(
+    spans: HighlightSpan[],
+    viewport: { fromLine: number; toLine: number }
+  ): Set<number> {
     const nextCache = buildHighlightCache(spans);
     const dirty = new Set<number>();
 
-    for (let index = 0; index < Math.max(rowViews.length, state.doc.lineCount); index += 1) {
+    for (let index = viewport.fromLine; index <= viewport.toLine; index += 1) {
+      highlightCoverage.add(index);
       const previous = highlightCache.get(index) ?? [];
       const next = nextCache.get(index) ?? [];
 
       if (!spansEqual(previous, next)) {
         dirty.add(index);
       }
+
+      if (next.length > 0) {
+        highlightCache.set(index, next);
+      } else {
+        highlightCache.delete(index);
+      }
     }
 
-    highlightCache = nextCache;
     return dirty;
   }
 
-  async function refreshHighlights(force = false): Promise<void> {
-    if (!language || languageRevision === 0) {
+  async function refreshHighlights(
+    viewport = getHighlightViewport(renderedViewport.toLine >= renderedViewport.fromLine ? renderedViewport : expandViewport(getVisibleViewport())),
+    force = false
+  ): Promise<void> {
+    if (!language || languageRevision < 0) {
       if (highlightCache.size > 0) {
         highlightCache.clear();
-        patchAllRows();
+        highlightCoverage.clear();
+        renderVisibleRows(true);
       }
       return;
     }
 
-    if (!force && lastHighlightedRevision === languageRevision) {
+    const needsViewportHighlights =
+      force ||
+      lastHighlightedRevision !== languageRevision ||
+      Array.from({ length: viewport.toLine - viewport.fromLine + 1 }, (_, index) => viewport.fromLine + index)
+        .some((lineIndex) => !highlightCoverage.has(lineIndex));
+
+    if (!needsViewportHighlights) {
       return;
     }
 
     const requestId = ++highlightRequestId;
-    const next = await language.getHighlightRanges(
-      {
-        fromLine: 0,
-        toLine: Math.max(0, state.doc.lineCount - 1)
-      },
-      languageRevision
-    );
+    const next = await language.getHighlightRanges(viewport, languageRevision);
 
     if (destroyed || requestId !== highlightRequestId) {
       return;
     }
 
-    const dirty = replaceHighlightCache(next);
+    const dirty = replaceHighlightCache(next, viewport);
     lastHighlightedRevision = languageRevision;
-    patchRows(dirty);
+    if (Array.from(dirty).some((lineIndex) => lineIndex >= renderedViewport.fromLine && lineIndex <= renderedViewport.toLine)) {
+      patchVisibleLines(dirty);
+    }
   }
 
-  async function syncLanguage(changes: readonly TextChange[] = [], forceDocumentSync = false): Promise<void> {
+  async function syncLanguage(
+    changes: readonly TextChange[] = [],
+    forceDocumentSync = false,
+    viewport?: { fromLine: number; toLine: number }
+  ): Promise<void> {
     if (!language) {
       return;
     }
 
-    if (forceDocumentSync || languageRevision === 0) {
+    if (forceDocumentSync || languageRevision < 0) {
       await language.open(getSnapshot());
       languageRevision = state.revision;
       lastHighlightedRevision = -1;
-      await refreshHighlights(true);
+      await refreshHighlights(
+        getHighlightViewport(
+          renderedViewport.toLine >= renderedViewport.fromLine ? renderedViewport : expandViewport(getVisibleViewport())
+        ),
+        true
+      );
       return;
     }
 
@@ -893,7 +1058,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     await language.update(getSnapshot(), changes);
     languageRevision = state.revision;
     lastHighlightedRevision = -1;
-    await refreshHighlights(true);
+    await refreshHighlights(
+      viewport ?? getHighlightViewport(renderedViewport.toLine >= renderedViewport.fromLine ? renderedViewport : expandViewport(getVisibleViewport())),
+      true
+    );
   }
 
   function dispatch(transaction: Transaction): void {
@@ -908,22 +1076,19 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     state = nextState;
 
     if (hasDocumentChanges) {
-      highlightCache.clear();
       lastHighlightedRevision = -1;
+      highlightCache.clear();
+      highlightCoverage.clear();
 
-      if (lineStructureChanged) {
-        buildAllRows();
-      } else {
-        if (previousDigits !== nextDigits) {
-          refreshGutterWidth(true);
-        }
-
-        patchRows(getChangedLines(previousState, nextState, changes));
+      if (previousDigits !== nextDigits) {
+        refreshGutterWidth(true);
       }
 
       patchStatus();
       patchBottomRow();
-      void syncLanguage(changes);
+      revealCursor();
+      renderVisibleRows(true);
+      void syncLanguage(changes, false, getHighlightViewport(renderedViewport));
       return;
     }
 
@@ -931,9 +1096,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       refreshGutterWidth(true);
     }
 
-    patchRows(getVisualDirtyLines(previousState, nextState));
     patchStatus();
     patchBottomRow();
+    const previousViewport = renderedViewport;
+    revealCursor();
+    renderVisibleRows();
+
+    if (viewportEquals(previousViewport, renderedViewport)) {
+      patchVisibleLines(getVisualDirtyLines(previousState, nextState));
+    }
   }
 
   function openCommandLine(): void {
@@ -958,14 +1129,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function revealCursor(): void {
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
     const cursorPosition = state.doc.positionAt(activeOffset);
-    const activeRow = rowViews[cursorPosition.line]?.row;
-
-    if (!activeRow) {
-      return;
-    }
-
-    const rowTop = activeRow.offsetTop + SURFACE_VERTICAL_PADDING;
-    const rowBottom = rowTop + activeRow.offsetHeight;
+    const rowTop = SURFACE_VERTICAL_PADDING + cursorPosition.line * metrics.lineHeight;
+    const rowBottom = rowTop + metrics.lineHeight;
     const viewportTop = surface.scrollTop;
     const viewportBottom = viewportTop + surface.clientHeight;
 
@@ -1104,7 +1269,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     textarea.focus();
     textarea.value = "";
     runCommand(command);
-    revealCursor();
+  }
+
+  function handleScroll(): void {
+    renderVisibleRows();
+    void refreshHighlights(getHighlightViewport(renderedViewport), false);
   }
 
   root.addEventListener("focus", () => {
@@ -1117,8 +1286,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   });
   textarea.addEventListener("keydown", handleKeydown);
   surface.addEventListener("wheel", handleWheel, { passive: false });
+  surface.addEventListener("scroll", handleScroll);
 
-  buildAllRows();
+  refreshGutterWidth(true);
+  renderVisibleRows(true);
   patchStatus();
   patchBottomRow();
   void syncLanguage([], true);
@@ -1142,10 +1313,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     async setLanguage(nextLanguage: LanguageProvider | null) {
       language?.destroy?.();
       language = nextLanguage;
-      languageRevision = 0;
+      languageRevision = -1;
       lastHighlightedRevision = -1;
       highlightCache.clear();
-      buildAllRows();
+      highlightCoverage.clear();
+      renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
       await syncLanguage([], true);
@@ -1153,16 +1325,19 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     setTheme(nextTheme: ThemeSpec) {
       theme = nextTheme;
       applyThemeVariables(root, theme);
-      buildAllRows();
+      renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
     },
     async setValue(value: string) {
       state = createEditorState({ value, selection: createSelection(0, 0) });
-      languageRevision = 0;
+      languageRevision = -1;
       lastHighlightedRevision = -1;
       highlightCache.clear();
-      buildAllRows();
+      highlightCoverage.clear();
+      surface.scrollTop = 0;
+      refreshGutterWidth(true);
+      renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
       await syncLanguage([], true);
