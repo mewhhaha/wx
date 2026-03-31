@@ -33,10 +33,10 @@ function lineOffsets(text: string): number[] {
   return offsets;
 }
 
-function viewportBounds(text: string, viewport: { fromLine: number; toLine: number }): { from: number; to: number } {
+function viewportBounds(text: string, lines: { fromLine: number; toLine: number }): { from: number; to: number } {
   const offsets = lineOffsets(text);
-  const fromLine = Math.max(0, Math.min(offsets.length - 1, viewport.fromLine));
-  const toLine = Math.max(fromLine, Math.min(offsets.length - 1, viewport.toLine));
+  const fromLine = Math.max(0, Math.min(offsets.length - 1, lines.fromLine));
+  const toLine = Math.max(fromLine, Math.min(offsets.length - 1, lines.toLine));
   const from = offsets[fromLine];
   const to = toLine + 1 < offsets.length ? offsets[toLine + 1] - 1 : text.length;
   return { from, to };
@@ -122,15 +122,15 @@ function parseTextIncrementally(text: string, revision: number, changes: readonl
   previousTree.delete();
 }
 
-function buildHighlights(viewport: { fromLine: number; toLine: number }, revision: number): HighlightSpan[] {
+function buildHighlights(lines: { fromLine: number; toLine: number }, revision: number): HighlightSpan[] {
   if (!query || !currentTree || revision !== currentRevision) {
     return [];
   }
 
-  const bounds = viewportBounds(currentText, viewport);
+  const bounds = viewportBounds(currentText, lines);
   const captures = query.captures(currentTree.rootNode, {
-    startPosition: { row: viewport.fromLine, column: 0 },
-    endPosition: { row: viewport.toLine + 1, column: 0 }
+    startPosition: { row: lines.fromLine, column: 0 },
+    endPosition: { row: lines.toLine + 1, column: 0 }
   });
 
   return sortAndCompact(
@@ -185,7 +185,7 @@ globalScope.addEventListener("message", async (event: MessageEvent<TreeSitterWor
           type: "highlights",
           revision: payload.revision,
           requestId: payload.requestId,
-          spans: buildHighlights(payload.viewport, payload.revision)
+          spans: buildHighlights(payload.lines, payload.revision)
         });
         return;
       case "expand-selection":

@@ -13,6 +13,8 @@ This document defines the current editor motion semantics for `normal`, `insert`
 
 - `i` enters insert mode before the current character selection.
 - `a` enters insert mode after the current character selection.
+- `o` opens a new blank line below the current line and enters insert mode there.
+- `O` opens a new blank line above the current line and enters insert mode there.
 - `i` starts with the insert caret at the start edge of the selected character.
 - `a` starts with the insert caret at the end edge of the selected character.
 - `Escape` from insert mode restores the original selected character if the insert session did not move the caret.
@@ -48,6 +50,25 @@ This document defines the current editor motion semantics for `normal`, `insert`
   - `gh`: go to the start of the current line
   - `gl`: go to the end of the current line, excluding the newline
   - `gs`: go to the first non-whitespace character of the current line
+  - `gt`: go to the top visible line in the current viewport
+  - `gc`: go to the center visible line in the current viewport
+  - `gb`: go to the bottom visible line in the current viewport
+
+## Additional Word Motions
+
+- `w`
+  - Moves to the start of the next lowercase word run.
+  - Lowercase word runs use the same `word / whitespace / punctuation` classes as `e` and `b`.
+- `W`
+  - Moves to the start of the next non-whitespace run.
+- `B`
+  - Moves to the start of the current non-whitespace run if inside it.
+  - If already at its start, moves to the start of the previous non-whitespace run.
+- `E`
+  - Moves to the end of the current non-whitespace run if inside it.
+  - If already at its end, moves to the end of the next non-whitespace run.
+- In normal mode, these motions collapse to the destination character.
+- In visual mode, they preserve the existing anchor and move the active edge.
 
 ## Word Motions
 
@@ -86,11 +107,57 @@ Example `e` progression from `m` in `import { greet } from "./hello";`:
 - Printable characters insert at the insertion point in `insert` mode.
 - `Backspace`, `Delete`, and `Enter` operate on the insertion point in `insert` mode.
 - `normal` and `visual` mode do not type directly.
+- `x`
+  - Selects the current line.
+  - If the current selection already covers whole lines, extends the selection down by one more line.
 - `y`
   - Yanks the current selection into the default internal register.
   - In `visual` mode, exits back to `normal` mode after yanking.
+- `u`
+  - Undoes the latest document change.
+- `U`
+  - Redoes the latest undone document change.
 - `p`
   - Pastes the yanked contents after the current selection.
   - Characterwise yanks paste at `selection.to`.
   - If the yanked contents end with a newline, paste is treated as linewise and inserts after the current line.
   - The newly pasted text becomes the active selection in `normal` mode.
+
+## Character Find Motions
+
+- `f<char>`
+  - Moves to the next matching character in the document.
+- `F<char>`
+  - Moves to the previous matching character in the document.
+- `t<char>`
+  - Moves to the character immediately before the next matching character.
+- `T<char>`
+  - Moves to the character immediately after the previous matching character.
+- `Alt-.`
+  - Repeats the last repeatable motion implemented in this editor.
+  - Current repeatable motions are `f`, `F`, `t`, `T`, `mm`, `ma`, `mi`, `[p`, and `]p`.
+
+## Page And Screen Motions
+
+- `Home` and `End`
+  - Alias line start and line end.
+- `PageUp` / `Ctrl-b`
+  - Move up by `max(1, visibleLineCount - 1)` lines.
+- `PageDown` / `Ctrl-f`
+  - Move down by `max(1, visibleLineCount - 1)` lines.
+- `Ctrl-u`
+  - Move up by `max(1, floor(visibleLineCount / 2))` lines.
+- `Ctrl-d`
+  - Move down by `max(1, floor(visibleLineCount / 2))` lines.
+- These motions preserve preferred column in the same way as `j` / `k`.
+
+## Match And Paragraph Motions
+
+- `mm`
+  - If the active character is one of `()[]{}` or `<>`, jump to its matching pair using nesting-aware text matching.
+  - If the active character is not on a supported bracket, it is a no-op.
+- `]p`
+  - Move to the start of the next paragraph.
+- `[p`
+  - Move to the start of the current paragraph, or the previous one if already at its start.
+- Paragraphs are non-empty line blocks separated by one or more blank lines.

@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/editor-core" },
+    { "path": "./packages/editor-controller" },
     { "path": "./packages/editor-language" },
     { "path": "./packages/editor-theme" },
     { "path": "./packages/editor-tree-sitter" },
@@ -10,4 +11,3 @@
     { "path": "./apps/playground" }
   ]
 }
-

@@ -1,8 +1,8 @@
 import {
-  applyTransaction,
   appendInsertMode,
   createEditorState,
   createSelection,
+  deleteSelection,
   deleteBackward,
   deleteForward,
   enterInsertMode,
@@ -10,9 +10,26 @@ import {
   getActiveCharacterOffset,
   getCursorOffset,
   getSelectionOffsets,
+  mapOffsetThroughChanges,
+  gotoMatchingBracket,
+  gotoNextParagraph,
+  gotoPrevParagraph,
+  gotoWindowBottom,
+  gotoWindowCenter,
+  gotoWindowTop,
+  halfPageDown,
+  halfPageUp,
   insertNewline,
   insertText,
+  findNextChar,
+  findPrevChar,
+  findTillNextChar,
+  findTillPrevChar,
   moveDown,
+  moveNextLongWordEnd,
+  moveNextLongWordStart,
+  moveNextWordStart,
+  movePrevLongWordStart,
   moveWordBackward,
   moveWordForward,
   gotoFileStart,
@@ -23,30 +40,55 @@ import {
   moveLeft,
   moveRight,
   moveUp,
+  pageDown,
+  pageUp,
+  openAbove,
+  openBelow,
   pasteAfter,
+  redo,
   selectAll,
+  selectLineBelow,
+  selectTextobject,
   toggleVisualMode,
+  undo,
   yankSelection,
   type Command,
   type EditorState,
-  type TextChange,
-  type Transaction
+  type TextChange
 } from "@whx/editor-core";
-import type { HighlightRole, HighlightSpan, LanguageProvider } from "@whx/editor-language";
+import {
+  createEditorController,
+  type EditorController,
+  type EditorUpdate
+} from "@whx/editor-controller";
+import type {
+  EditorLanguageServices,
+  EditorLineRange,
+  HighlightRole,
+  HighlightSpan,
+  LanguageProvider
+} from "@whx/editor-language";
+import { languageProviderToServices } from "@whx/editor-language";
 import { defaultTheme, createThemeVariables, type ThemeSpec } from "@whx/editor-theme";
 
 export interface CreateEditorOptions {
+  controller?: EditorController;
   filePath?: string;
   value?: string;
   language?: LanguageProvider | null;
+  languageServices?: EditorLanguageServices | null;
   theme?: ThemeSpec;
 }
 
 export interface EditorHandle {
+  controller: EditorController;
+  mount(container: HTMLElement): void;
   destroy(): void;
   focus(): void;
+  subscribe(listener: (update: EditorUpdate) => void): () => void;
   getState(): EditorState;
   setFilePath(filePath: string): void;
+  setLanguageServices(languageServices: EditorLanguageServices | null): Promise<void>;
   setLanguage(language: LanguageProvider | null): Promise<void>;
   setTheme(theme: ThemeSpec): void;
   setValue(value: string): Promise<void>;
@@ -65,7 +107,19 @@ interface CommandLineState {
   value: string;
 }
 
-type PendingChord = "g" | null;
+type PendingAction =
+  | null
+  | { kind: "g" }
+  | { kind: "[" | "]" }
+  | { kind: "m" }
+  | { kind: "find"; variant: "f" | "F" | "t" | "T" }
+  | { kind: "textobject"; mode: "around" | "inside" };
+
+type RepeatableMotion =
+  | { kind: "find"; variant: "f" | "F" | "t" | "T"; target: string }
+  | { kind: "matching-bracket" }
+  | { kind: "paragraph"; direction: "next" | "prev" }
+  | { kind: "textobject"; mode: "around" | "inside"; object: string };
 
 const SURFACE_VERTICAL_PADDING = 16;
 const EMPTY_CELL_TEXT = "\u00a0";
@@ -303,6 +357,20 @@ function commandForNormalMode(key: string): Command | null {
   switch (key) {
     case "%":
       return selectAll;
+    case "B":
+      return movePrevLongWordStart;
+    case "E":
+      return moveNextLongWordEnd;
+    case "End":
+      return gotoLineEnd;
+    case "Home":
+      return gotoLineStart;
+    case "PageDown":
+      return pageDown;
+    case "PageUp":
+      return pageUp;
+    case "W":
+      return moveNextLongWordStart;
     case "a":
       return appendInsertMode;
     case "ArrowLeft":
@@ -319,14 +387,28 @@ function commandForNormalMode(key: string): Command | null {
       return moveDown;
     case "b":
       return moveWordBackward;
+    case "d":
+      return deleteSelection;
     case "e":
       return moveWordForward;
     case "i":
       return enterInsertMode;
+    case "o":
+      return openBelow;
+    case "O":
+      return openAbove;
     case "p":
       return pasteAfter;
+    case "u":
+      return undo;
+    case "U":
+      return redo;
     case "v":
       return toggleVisualMode;
+    case "w":
+      return moveNextWordStart;
+    case "x":
+      return selectLineBelow;
     case "y":
       return yankSelection;
     default:
@@ -338,8 +420,22 @@ function commandForVisualMode(key: string): Command | null {
   switch (key) {
     case "%":
       return selectAll;
+    case "B":
+      return movePrevLongWordStart;
+    case "E":
+      return moveNextLongWordEnd;
     case "Escape":
       return enterNormalMode;
+    case "End":
+      return gotoLineEnd;
+    case "Home":
+      return gotoLineStart;
+    case "PageDown":
+      return pageDown;
+    case "PageUp":
+      return pageUp;
+    case "W":
+      return moveNextLongWordStart;
     case "ArrowLeft":
     case "h":
       return moveLeft;
@@ -354,12 +450,26 @@ function commandForVisualMode(key: string): Command | null {
       return moveDown;
     case "b":
       return moveWordBackward;
+    case "d":
+      return deleteSelection;
     case "e":
       return moveWordForward;
+    case "o":
+      return openBelow;
+    case "O":
+      return openAbove;
     case "p":
       return pasteAfter;
+    case "u":
+      return undo;
+    case "U":
+      return redo;
     case "v":
       return toggleVisualMode;
+    case "w":
+      return moveNextWordStart;
+    case "x":
+      return selectLineBelow;
     case "y":
       return yankSelection;
     default:
@@ -419,6 +529,10 @@ function commandForGotoPrefix(key: string): Command | null {
   switch (key) {
     case "g":
       return gotoFileStart;
+    case "b":
+      return gotoWindowBottom;
+    case "c":
+      return gotoWindowCenter;
     case "e":
       return gotoLastLine;
     case "h":
@@ -431,9 +545,19 @@ function commandForGotoPrefix(key: string): Command | null {
       return gotoLineEnd;
     case "s":
       return gotoFirstNonWhitespace;
+    case "t":
+      return gotoWindowTop;
     default:
       return null;
   }
+}
+
+function commandForBracketPrefix(direction: "[" | "]", key: string): Command | null {
+  if (key !== "p") {
+    return null;
+  }
+
+  return direction === "[" ? gotoPrevParagraph : gotoNextParagraph;
 }
 
 function renderLineFragments(line: { start: number; text: string }, state: EditorState, spans: HighlightSpan[]): LineFragment[] {
@@ -520,21 +644,30 @@ function normalizeViewport(viewport: { fromLine: number; toLine: number }, lineC
 }
 
 export function createEditor(container: HTMLElement, options: CreateEditorOptions = {}): EditorHandle {
-  let state = createEditorState({ value: options.value ?? "" });
+  const controller =
+    options.controller ??
+    createEditorController({
+      value: options.value ?? "",
+      theme: options.theme?.name
+    });
+  let state = controller.getState();
   let filePath = options.filePath ?? "untitled.ts";
-  let language = options.language ?? null;
+  let languageServices = options.languageServices ?? languageProviderToServices(options.language ?? null);
   let theme = options.theme ?? defaultTheme;
   let highlightCache = new Map<number, HighlightSpan[]>();
   let highlightCoverage = new Set<number>();
   let rowViews: RowView[] = [];
   let renderedViewport: LineViewport = { fromLine: 0, toLine: -1 };
   let commandLine: CommandLineState = { active: false, value: "" };
-  let pendingChord: PendingChord = null;
+  let pendingAction: PendingAction = null;
+  let lastRepeatableMotion: RepeatableMotion | null = null;
   let languageRevision = -1;
   let lastHighlightedRevision = -1;
   let highlightRequestId = 0;
   let gutterWidth = 0;
   let destroyed = false;
+  let mountedContainer: HTMLElement | null = container;
+  let unsubscribeController = () => {};
 
   const root = document.createElement("div");
   const surface = document.createElement("div");
@@ -598,7 +731,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   rows.append(topSpacer, viewportRows, bottomSpacer);
   surface.append(rows, textarea);
   root.append(surface, status, bottomRow);
-  container.replaceChildren(root);
+  mountedContainer.replaceChildren(root);
 
   function getSnapshot() {
     return {
@@ -898,6 +1031,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     statusMeta.textContent = `1 sel   ${cursorPosition.line + 1}:${cursorPosition.column + 1}`;
   }
 
+  function getViewportContext() {
+    const viewport = getVisibleViewport();
+    return {
+      ...viewport,
+      visibleLineCount: Math.max(1, viewport.toLine - viewport.fromLine + 1)
+    };
+  }
+
   function patchBottomRow(): void {
     bottomRow.dataset.active = String(commandLine.active);
     bottomRow.replaceChildren();
@@ -992,11 +1133,89 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return dirty;
   }
 
+  function remapHighlightCacheForChanges(
+    previousState: EditorState,
+    nextState: EditorState,
+    changes: readonly TextChange[]
+  ): void {
+    if (changes.length === 0) {
+      return;
+    }
+
+    const nextCache = new Map<number, HighlightSpan[]>();
+
+    for (const spans of highlightCache.values()) {
+      for (const span of spans) {
+        const mappedFrom = Math.max(0, Math.min(nextState.doc.length, mapOffsetThroughChanges(span.from, changes, "left")));
+        const mappedTo = Math.max(mappedFrom, Math.min(nextState.doc.length, mapOffsetThroughChanges(span.to, changes, "right")));
+
+        if (mappedTo <= mappedFrom) {
+          continue;
+        }
+
+        const startLine = nextState.doc.positionAt(mappedFrom).line;
+        const endLine = nextState.doc.positionAt(Math.max(mappedFrom, mappedTo - 1)).line;
+
+        for (let line = startLine; line <= endLine; line += 1) {
+          const lineInfo = nextState.doc.lineAt(line);
+          const from = Math.max(mappedFrom, lineInfo.start);
+          const to = Math.min(mappedTo, lineInfo.end);
+
+          if (to <= from) {
+            continue;
+          }
+
+          const entry = nextCache.get(line);
+          const clipped = { from, to, role: span.role };
+
+          if (entry) {
+            entry.push(clipped);
+          } else {
+            nextCache.set(line, [clipped]);
+          }
+        }
+      }
+    }
+
+    highlightCache = nextCache;
+  }
+
+  function remapHighlightCoverageForChanges(
+    previousState: EditorState,
+    nextState: EditorState,
+    changes: readonly TextChange[]
+  ): void {
+    if (changes.length === 0) {
+      return;
+    }
+
+    const nextCoverage = new Set<number>();
+
+    for (const lineIndex of highlightCoverage) {
+      const previousLine = previousState.doc.lineAt(lineIndex);
+      const mappedOffset = Math.max(
+        0,
+        Math.min(nextState.doc.length, mapOffsetThroughChanges(previousLine.start, changes, "left"))
+      );
+      nextCoverage.add(nextState.doc.positionAt(mappedOffset).line);
+    }
+
+    highlightCoverage = nextCoverage;
+  }
+
+  function invalidateHighlightViewport(viewport: { fromLine: number; toLine: number }): void {
+    for (let index = viewport.fromLine; index <= viewport.toLine; index += 1) {
+      highlightCoverage.delete(index);
+    }
+  }
+
   async function refreshHighlights(
     viewport = getHighlightViewport(renderedViewport.toLine >= renderedViewport.fromLine ? renderedViewport : expandViewport(getVisibleViewport())),
     force = false
   ): Promise<void> {
-    if (!language || languageRevision < 0) {
+    const highlighter = languageServices?.highlighter;
+
+    if (!highlighter || languageRevision < 0) {
       if (highlightCache.size > 0) {
         highlightCache.clear();
         highlightCoverage.clear();
@@ -1016,7 +1235,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     const requestId = ++highlightRequestId;
-    const next = await language.getHighlightRanges(viewport, languageRevision);
+    const next = await highlighter.getHighlights(viewport, languageRevision);
 
     if (destroyed || requestId !== highlightRequestId) {
       return;
@@ -1034,12 +1253,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     forceDocumentSync = false,
     viewport?: { fromLine: number; toLine: number }
   ): Promise<void> {
-    if (!language) {
+    const highlighter = languageServices?.highlighter;
+
+    if (!highlighter) {
       return;
     }
 
     if (forceDocumentSync || languageRevision < 0) {
-      await language.open(getSnapshot());
+      await highlighter.open(getSnapshot());
       languageRevision = state.revision;
       lastHighlightedRevision = -1;
       await refreshHighlights(
@@ -1055,7 +1276,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    await language.update(getSnapshot(), changes);
+    await highlighter.update(getSnapshot(), changes);
     languageRevision = state.revision;
     lastHighlightedRevision = -1;
     await refreshHighlights(
@@ -1064,21 +1285,32 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     );
   }
 
-  function dispatch(transaction: Transaction): void {
-    const previousState = state;
-    const nextState = applyTransaction(state, transaction);
-    const changes = transaction.changes ?? [];
-    const hasDocumentChanges = changes.length > 0;
+  function handleControllerUpdate(update: EditorUpdate): void {
+    const previousState = update.prevState;
+    const nextState = update.nextState;
+    const changes = update.transaction.changes ?? [];
+    const hasDocumentChanges = update.docChanged || changes.length > 0;
     const previousDigits = String(Math.max(1, previousState.doc.lineCount)).length;
     const nextDigits = String(Math.max(1, nextState.doc.lineCount)).length;
-    const lineStructureChanged = previousState.doc.lineCount !== nextState.doc.lineCount;
+    const highlightViewports = hasDocumentChanges && changes.length > 0
+      ? getHighlightViewportsForChanges(previousState, nextState, changes)
+      : null;
 
     state = nextState;
 
     if (hasDocumentChanges) {
       lastHighlightedRevision = -1;
-      highlightCache.clear();
-      highlightCoverage.clear();
+      if (changes.length > 0) {
+        remapHighlightCacheForChanges(previousState, nextState, changes);
+        remapHighlightCoverageForChanges(previousState, nextState, changes);
+      } else {
+        highlightCache.clear();
+        highlightCoverage.clear();
+      }
+
+      if (highlightViewports) {
+        invalidateHighlightViewport(highlightViewports.nextViewport);
+      }
 
       if (previousDigits !== nextDigits) {
         refreshGutterWidth(true);
@@ -1088,7 +1320,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       patchBottomRow();
       revealCursor();
       renderVisibleRows(true);
-      void syncLanguage(changes, false, getHighlightViewport(renderedViewport));
+      revealCursor();
+      void syncLanguage(
+        changes,
+        changes.length === 0,
+        highlightViewports?.nextViewport ?? getHighlightViewport(renderedViewport)
+      );
       return;
     }
 
@@ -1101,6 +1338,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const previousViewport = renderedViewport;
     revealCursor();
     renderVisibleRows();
+    revealCursor();
 
     if (viewportEquals(previousViewport, renderedViewport)) {
       patchVisibleLines(getVisualDirtyLines(previousState, nextState));
@@ -1108,7 +1346,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function openCommandLine(): void {
-    pendingChord = null;
+    pendingAction = null;
     commandLine = { active: true, value: "" };
     patchBottomRow();
   }
@@ -1119,11 +1357,42 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function runCommand(command: Command): boolean {
-    return command(state, dispatch, {
+    return controller.execute(command, {
       requestFocus() {
         textarea.focus();
-      }
+      },
+      viewport: getViewportContext()
     });
+  }
+
+  function runRepeatableMotion(motion: RepeatableMotion): boolean {
+    switch (motion.kind) {
+      case "find":
+        switch (motion.variant) {
+          case "f":
+            return runCommand(findNextChar(motion.target));
+          case "F":
+            return runCommand(findPrevChar(motion.target));
+          case "t":
+            return runCommand(findTillNextChar(motion.target));
+          case "T":
+            return runCommand(findTillPrevChar(motion.target));
+        }
+      case "matching-bracket":
+        return runCommand(gotoMatchingBracket);
+      case "paragraph":
+        return runCommand(motion.direction === "next" ? gotoNextParagraph : gotoPrevParagraph);
+      case "textobject":
+        return runCommand(selectTextobject(motion.mode, motion.object));
+    }
+
+    return false;
+  }
+
+  function recordRepeatableMotion(candidate: RepeatableMotion, didChange: boolean): void {
+    if (didChange) {
+      lastRepeatableMotion = candidate;
+    }
   }
 
   function revealCursor(): void {
@@ -1152,8 +1421,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       state.mode !== "insert" &&
       (event.key === "ArrowUp" || event.key === "ArrowDown")
     ) {
+      const syntaxSelector = languageServices?.syntaxSelector;
       const syntaxSelection =
-        event.key === "ArrowUp" ? language?.expandSelection?.bind(language) : language?.shrinkSelection?.bind(language);
+        event.key === "ArrowUp"
+          ? syntaxSelector?.expandSelection?.bind(syntaxSelector)
+          : syntaxSelector?.shrinkSelection?.bind(syntaxSelector);
 
       if (syntaxSelection) {
         const revision = state.revision;
@@ -1167,11 +1439,44 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
             return;
           }
 
-          dispatch({
+          controller.dispatch({
             selection: selectionFromSyntaxRange(nextSelection.from, nextSelection.to)
           });
         });
       }
+      return;
+    }
+
+    if (
+      event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      state.mode !== "insert" &&
+      event.key === "."
+    ) {
+      if (!lastRepeatableMotion) {
+        return;
+      }
+
+      event.preventDefault();
+      textarea.value = "";
+      runRepeatableMotion(lastRepeatableMotion);
+      return;
+    }
+
+    if (
+      event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      state.mode !== "insert" &&
+      ["b", "d", "f", "u"].includes(event.key)
+    ) {
+      const command =
+        event.key === "b" ? pageUp : event.key === "f" ? pageDown : event.key === "u" ? halfPageUp : halfPageDown;
+
+      event.preventDefault();
+      textarea.value = "";
+      runCommand(command);
       return;
     }
 
@@ -1208,19 +1513,91 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    if (pendingChord) {
-      const chordCommand = pendingChord === "g" ? commandForGotoPrefix(event.key) : null;
-      pendingChord = null;
+    if (pendingAction) {
+      const nextPending = pendingAction;
+      pendingAction = null;
 
       if (event.key === "Escape") {
         event.preventDefault();
         return;
       }
 
-      if (chordCommand) {
+      if (nextPending.kind === "g") {
+        const chordCommand = commandForGotoPrefix(event.key);
+
+        if (chordCommand) {
+          event.preventDefault();
+          textarea.value = "";
+          runCommand(chordCommand);
+          return;
+        }
+      }
+
+      if (nextPending.kind === "[" || nextPending.kind === "]") {
+        const chordCommand = commandForBracketPrefix(nextPending.kind, event.key);
+
+        if (chordCommand) {
+          event.preventDefault();
+          textarea.value = "";
+          const previousRevision = state.revision;
+          runCommand(chordCommand);
+          recordRepeatableMotion(
+            { kind: "paragraph", direction: nextPending.kind === "]" ? "next" : "prev" },
+            state.revision !== previousRevision
+          );
+          return;
+        }
+      }
+
+      if (nextPending.kind === "m") {
+        if (event.key === "m") {
+          event.preventDefault();
+          textarea.value = "";
+          const previousRevision = state.revision;
+          runCommand(gotoMatchingBracket);
+          recordRepeatableMotion({ kind: "matching-bracket" }, state.revision !== previousRevision);
+          return;
+        }
+
+        if (event.key === "a" || event.key === "i") {
+          event.preventDefault();
+          pendingAction = {
+            kind: "textobject",
+            mode: event.key === "a" ? "around" : "inside"
+          };
+          return;
+        }
+      }
+
+      if (nextPending.kind === "find") {
         event.preventDefault();
         textarea.value = "";
-        runCommand(chordCommand);
+        const previousRevision = state.revision;
+        const command =
+          nextPending.variant === "f"
+            ? findNextChar(event.key)
+            : nextPending.variant === "F"
+              ? findPrevChar(event.key)
+              : nextPending.variant === "t"
+                ? findTillNextChar(event.key)
+                : findTillPrevChar(event.key);
+        runCommand(command);
+        recordRepeatableMotion(
+          { kind: "find", variant: nextPending.variant, target: event.key },
+          state.revision !== previousRevision
+        );
+        return;
+      }
+
+      if (nextPending.kind === "textobject") {
+        event.preventDefault();
+        textarea.value = "";
+        const previousRevision = state.revision;
+        runCommand(selectTextobject(nextPending.mode, event.key));
+        recordRepeatableMotion(
+          { kind: "textobject", mode: nextPending.mode, object: event.key },
+          state.revision !== previousRevision
+        );
         return;
       }
     }
@@ -1234,7 +1611,25 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     if ((state.mode === "normal" || state.mode === "visual") && event.key === "g") {
       event.preventDefault();
-      pendingChord = "g";
+      pendingAction = { kind: "g" };
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && (event.key === "[" || event.key === "]")) {
+      event.preventDefault();
+      pendingAction = { kind: event.key };
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === "m") {
+      event.preventDefault();
+      pendingAction = { kind: "m" };
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && ["f", "F", "t", "T"].includes(event.key)) {
+      event.preventDefault();
+      pendingAction = { kind: "find", variant: event.key as "f" | "F" | "t" | "T" };
       return;
     }
 
@@ -1287,6 +1682,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   textarea.addEventListener("keydown", handleKeydown);
   surface.addEventListener("wheel", handleWheel, { passive: false });
   surface.addEventListener("scroll", handleScroll);
+  unsubscribeController = controller.subscribe(handleControllerUpdate);
 
   refreshGutterWidth(true);
   renderVisibleRows(true);
@@ -1295,24 +1691,37 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   void syncLanguage([], true);
 
   return {
+    controller,
+    mount(nextContainer: HTMLElement) {
+      mountedContainer = nextContainer;
+      mountedContainer.replaceChildren(root);
+      refreshGutterWidth(true);
+      renderVisibleRows(true);
+      patchStatus();
+      patchBottomRow();
+    },
     destroy() {
       destroyed = true;
-      language?.destroy?.();
+      unsubscribeController();
+      languageServices?.highlighter?.destroy?.();
       root.remove();
     },
     focus() {
       textarea.focus();
     },
+    subscribe(listener) {
+      return controller.subscribe(listener);
+    },
     getState() {
-      return state;
+      return controller.getState();
     },
     setFilePath(nextFilePath: string) {
       filePath = nextFilePath;
       patchStatus();
     },
-    async setLanguage(nextLanguage: LanguageProvider | null) {
-      language?.destroy?.();
-      language = nextLanguage;
+    async setLanguageServices(nextLanguageServices: EditorLanguageServices | null) {
+      languageServices?.highlighter?.destroy?.();
+      languageServices = nextLanguageServices;
       languageRevision = -1;
       lastHighlightedRevision = -1;
       highlightCache.clear();
@@ -1322,6 +1731,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       patchBottomRow();
       await syncLanguage([], true);
     },
+    async setLanguage(nextLanguage: LanguageProvider | null) {
+      await this.setLanguageServices(languageProviderToServices(nextLanguage));
+    },
     setTheme(nextTheme: ThemeSpec) {
       theme = nextTheme;
       applyThemeVariables(root, theme);
@@ -1330,16 +1742,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       patchBottomRow();
     },
     async setValue(value: string) {
-      state = createEditorState({ value, selection: createSelection(0, 0) });
-      languageRevision = -1;
-      lastHighlightedRevision = -1;
       highlightCache.clear();
       highlightCoverage.clear();
+      languageRevision = -1;
+      lastHighlightedRevision = -1;
       surface.scrollTop = 0;
-      refreshGutterWidth(true);
-      renderVisibleRows(true);
-      patchStatus();
-      patchBottomRow();
+      controller.replaceState(createEditorState({ value, selection: createSelection(0, 0) }));
       await syncLanguage([], true);
     }
   };

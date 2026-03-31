@@ -1,13 +1,18 @@
-import type { LanguageProvider } from "@whx/editor-language";
+import type { EditorController, EditorUpdate } from "@whx/editor-controller";
+import type { EditorLanguageServices, LanguageProvider } from "@whx/editor-language";
+import { languageProviderToServices } from "@whx/editor-language";
 import { defaultTheme, type ThemeSpec } from "@whx/editor-theme";
 import { createEditor, type EditorHandle } from "@whx/editor-view-dom";
 
 export class WhxEditorElement extends HTMLElement {
   private readonly mountPoint: HTMLDivElement;
   private editor: EditorHandle | null = null;
+  private unsubscribe = () => {};
   private _value = "";
   private _language: LanguageProvider | null = null;
+  private _languageServices: EditorLanguageServices | null = null;
   private _theme: ThemeSpec = defaultTheme;
+  private _controller: EditorController | null = null;
 
   constructor() {
     super();
@@ -19,14 +24,19 @@ export class WhxEditorElement extends HTMLElement {
   connectedCallback(): void {
     if (!this.editor) {
       this.editor = createEditor(this.mountPoint, {
+        controller: this._controller ?? undefined,
         value: this._value,
-        language: this._language,
+        languageServices: this._languageServices ?? languageProviderToServices(this._language),
         theme: this._theme
       });
+      this._controller = this.editor.controller;
+      this.unsubscribe = this.editor.subscribe((update) => this.dispatchUpdateEvents(update));
     }
   }
 
   disconnectedCallback(): void {
+    this.unsubscribe();
+    this.unsubscribe = () => {};
     this.editor?.destroy();
     this.editor = null;
   }
@@ -40,12 +50,35 @@ export class WhxEditorElement extends HTMLElement {
     void this.editor?.setValue(nextValue);
   }
 
+  get controller(): EditorController | null {
+    return this._controller;
+  }
+
+  set controller(nextController: EditorController | null) {
+    this._controller = nextController;
+
+    if (this.isConnected) {
+      this.disconnectedCallback();
+      this.connectedCallback();
+    }
+  }
+
+  get languageServices(): EditorLanguageServices | null {
+    return this._languageServices;
+  }
+
+  set languageServices(nextLanguageServices: EditorLanguageServices | null) {
+    this._languageServices = nextLanguageServices;
+    void this.editor?.setLanguageServices(nextLanguageServices);
+  }
+
   get language(): LanguageProvider | null {
     return this._language;
   }
 
   set language(nextLanguage: LanguageProvider | null) {
     this._language = nextLanguage;
+    this._languageServices = languageProviderToServices(nextLanguage);
     void this.editor?.setLanguage(nextLanguage);
   }
 
@@ -57,6 +90,18 @@ export class WhxEditorElement extends HTMLElement {
     this._theme = nextTheme;
     this.editor?.setTheme(nextTheme);
   }
+
+  private dispatchUpdateEvents(update: EditorUpdate): void {
+    this.dispatchEvent(new CustomEvent("whx-update", { detail: update }));
+
+    if (update.modeChanged) {
+      this.dispatchEvent(new CustomEvent("whx-mode-change", { detail: update.nextState.mode }));
+    }
+
+    if (update.selectionChanged) {
+      this.dispatchEvent(new CustomEvent("whx-selection-change", { detail: update.nextState.selection }));
+    }
+  }
 }
 
 export function defineWhxEditorElement(tagName = "whx-editor"): typeof WhxEditorElement {
@@ -66,4 +111,3 @@ export function defineWhxEditorElement(tagName = "whx-editor"): typeof WhxEditor
 
   return customElements.get(tagName) as typeof WhxEditorElement;
 }
-

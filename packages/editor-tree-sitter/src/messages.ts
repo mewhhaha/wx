@@ -1,5 +1,5 @@
 import type { TextChange } from "@whx/editor-core";
-import type { HighlightSpan, SyntaxSelectionRange } from "@whx/editor-language";
+import type { EditorLineRange, HighlightSpan, SyntaxSelectionRange } from "@whx/editor-language";
 
 export interface WorkerInitMessage {
   type: "init";
@@ -25,10 +25,7 @@ export interface WorkerHighlightMessage {
   type: "highlight";
   revision: number;
   requestId: number;
-  viewport: {
-    fromLine: number;
-    toLine: number;
-  };
+  lines: EditorLineRange;
 }
 
 export interface WorkerExpandSelectionMessage {

@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@whx/editor-controller": "workspace:*",
     "@whx/editor-element": "workspace:*",
     "@whx/editor-theme": "workspace:*",
     "@whx/editor-tree-sitter": "workspace:*",

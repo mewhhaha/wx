@@ -2,7 +2,7 @@ import treeSitterWasmUrl from "./assets/web-tree-sitter.wasm?url";
 import typescriptWasmUrl from "./assets/tree-sitter-typescript.wasm?url";
 import { phTheme } from "./phTheme";
 
-import { createTreeSitterLanguageProvider, typescriptHighlightQuery } from "@whx/editor-tree-sitter";
+import { createTreeSitterLanguageServices, typescriptHighlightQuery } from "@whx/editor-tree-sitter";
 import { createEditor, type EditorHandle } from "@whx/editor-view-dom";
 
 declare global {
@@ -107,8 +107,8 @@ async function mountEditor(
   lineCount: number,
   useLanguage: boolean
 ): Promise<{ editor: EditorHandle; textarea: HTMLTextAreaElement; mountMs: number }> {
-  const language = useLanguage
-    ? createTreeSitterLanguageProvider({
+  const languageServices = useLanguage
+    ? createTreeSitterLanguageServices({
         parserWasmUrl: treeSitterWasmUrl,
         languageWasmUrl: typescriptWasmUrl,
         query: typescriptHighlightQuery
@@ -119,7 +119,7 @@ async function mountEditor(
   const editor = createEditor(mount, {
     filePath: "bench/large.ts",
     value: createBenchmarkSource(lineCount),
-    language,
+    languageServices,
     theme: phTheme
   });
 

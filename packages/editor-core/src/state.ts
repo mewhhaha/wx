@@ -36,6 +36,7 @@ export interface Transaction {
   mode?: EditorMode;
   insertSession?: InsertSession | null;
   yankBuffer?: string | null;
+  lastDeletedFrom?: number | null;
   effects?: readonly EditorEffect[];
 }
 
@@ -45,6 +46,7 @@ export interface EditorState {
   mode: EditorMode;
   revision: number;
   yankBuffer: string | null;
+  lastDeletedFrom: number | null;
   language?: string;
   theme?: string;
   insertSession: InsertSession | null;
@@ -138,6 +140,7 @@ export function createEditorState(options: {
     mode: options.mode ?? "normal",
     revision: 0,
     yankBuffer: null,
+    lastDeletedFrom: null,
     language: options.language,
     theme: options.theme,
     insertSession: null,
@@ -166,6 +169,7 @@ export function applyTransaction(state: EditorState, transaction: Transaction): 
     selection: normalizeSelection(nextDoc, nextSelection, nextMode),
     mode: nextMode,
     yankBuffer: transaction.yankBuffer ?? state.yankBuffer,
+    lastDeletedFrom: transaction.lastDeletedFrom !== undefined ? transaction.lastDeletedFrom : state.lastDeletedFrom,
     insertSession: nextInsertSession,
     revision: state.revision + 1
   };

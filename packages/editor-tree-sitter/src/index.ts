@@ -1,5 +1,13 @@
 import type { TextChange, TextDocument } from "@whx/editor-core";
-import type { EditorViewport, HighlightSpan, LanguageProvider, SyntaxSelectionRange } from "@whx/editor-language";
+import type {
+  EditorLanguageServices,
+  EditorLineRange,
+  HighlightSpan,
+  Highlighter,
+  LanguageProvider,
+  SyntaxSelectionRange,
+  SyntaxSelector
+} from "@whx/editor-language";
 
 import type { TreeSitterWorkerResponse } from "./messages";
 export { typescriptHighlightQuery } from "./highlightQuery";
@@ -23,7 +31,7 @@ function defaultWorkerFactory(): Worker {
   return new Worker(new URL("./treeSitter.worker.js", import.meta.url), { type: "module" });
 }
 
-export class TreeSitterLanguageProvider implements LanguageProvider {
+export class TreeSitterLanguageProvider implements Highlighter, SyntaxSelector {
   private readonly worker: Worker;
   private readonly pendingHighlights = new Map<number, DeferredHighlights>();
   private readonly pendingSelections = new Map<number, DeferredSelection>();
@@ -91,7 +99,7 @@ export class TreeSitterLanguageProvider implements LanguageProvider {
     });
   }
 
-  async getHighlightRanges(viewport: EditorViewport, revision: number): Promise<HighlightSpan[]> {
+  async getHighlights(lines: EditorLineRange, revision: number): Promise<HighlightSpan[]> {
     await this.ready;
     const requestId = this.nextRequestId++;
     return await new Promise<HighlightSpan[]>((resolve) => {
@@ -100,7 +108,7 @@ export class TreeSitterLanguageProvider implements LanguageProvider {
         type: "highlight",
         revision,
         requestId,
-        viewport
+        lines
       });
     });
   }
@@ -151,4 +159,13 @@ export class TreeSitterLanguageProvider implements LanguageProvider {
 
 export function createTreeSitterLanguageProvider(options: TreeSitterProviderOptions): LanguageProvider {
   return new TreeSitterLanguageProvider(options);
+}
+
+export function createTreeSitterLanguageServices(options: TreeSitterProviderOptions): EditorLanguageServices {
+  const provider = new TreeSitterLanguageProvider(options);
+
+  return {
+    highlighter: provider,
+    syntaxSelector: provider
+  };
 }

@@ -3,7 +3,7 @@ import typescriptWasmUrl from "./assets/tree-sitter-typescript.wasm?url";
 import { installBenchmarkHarness } from "./benchmarkHarness";
 import { phTheme } from "./phTheme";
 
-import { createTreeSitterLanguageProvider, typescriptHighlightQuery } from "@whx/editor-tree-sitter";
+import { createTreeSitterLanguageServices, typescriptHighlightQuery } from "@whx/editor-tree-sitter";
 import { createEditor } from "@whx/editor-view-dom";
 
 import "./style.css";
@@ -34,7 +34,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const language = createTreeSitterLanguageProvider({
+  const languageServices = createTreeSitterLanguageServices({
     parserWasmUrl: treeSitterWasmUrl,
     languageWasmUrl: typescriptWasmUrl,
     query: typescriptHighlightQuery
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
     createEditor(mount, {
       filePath: "examples/chat-worker/src/worker.ts",
       value: sample,
-      language,
+      languageServices,
       theme: phTheme
     }).focus();
   }

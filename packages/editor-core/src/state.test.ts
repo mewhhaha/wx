@@ -3,23 +3,45 @@ import { describe, expect, it } from "vitest";
 import {
   applyTransaction,
   appendInsertMode,
+  type Command,
   createEditorState,
   createSelection,
   createTextDocument,
   deleteBackward,
+  deleteSelection,
   deleteForward,
   enterInsertMode,
   enterNormalMode,
   getSelectionOffsets,
   getCursorOffset,
+  gotoMatchingBracket,
+  gotoNextParagraph,
+  gotoPrevParagraph,
+  gotoWindowBottom,
+  gotoWindowCenter,
+  gotoWindowTop,
+  halfPageDown,
+  halfPageUp,
   insertNewline,
   insertText,
+  findNextChar,
+  findPrevChar,
+  findTillNextChar,
+  findTillPrevChar,
   moveDown,
+  moveNextLongWordEnd,
+  moveNextLongWordStart,
+  moveNextWordStart,
+  movePrevLongWordStart,
   moveWordBackward,
   moveWordForward,
   moveLeft,
   moveRight,
   moveUp,
+  openAbove,
+  openBelow,
+  pageDown,
+  pageUp,
   pasteAfter,
   gotoFileStart,
   gotoFirstNonWhitespace,
@@ -27,7 +49,11 @@ import {
   gotoLineEnd,
   gotoLineStart,
   selectAll,
+  selectLineBelow,
+  selectTextobject,
   toggleVisualMode,
+  redo,
+  undo,
   yankSelection,
   type Transaction
 } from "./index";
@@ -38,27 +64,10 @@ function dispatchTransaction(state: { current: ReturnType<typeof createEditorSta
 
 function run(
   state: { current: ReturnType<typeof createEditorState> },
-  command:
-    | (typeof moveLeft)
-    | (typeof moveRight)
-    | (typeof moveUp)
-    | (typeof moveDown)
-    | (typeof moveWordForward)
-    | (typeof moveWordBackward)
-    | (typeof enterInsertMode)
-    | (typeof appendInsertMode)
-    | (typeof enterNormalMode)
-    | (typeof toggleVisualMode)
-    | (typeof gotoFileStart)
-    | (typeof gotoLastLine)
-    | (typeof gotoLineStart)
-    | (typeof gotoLineEnd)
-    | (typeof gotoFirstNonWhitespace)
-    | (typeof selectAll)
-    | (typeof yankSelection)
-    | (typeof pasteAfter)
+  command: Command,
+  viewport: { fromLine: number; toLine: number; visibleLineCount: number } | undefined = undefined
 ): void {
-  command(state.current, (transaction) => dispatchTransaction(state, transaction), {});
+  command(state.current, (transaction) => dispatchTransaction(state, transaction), { viewport });
 }
 
 describe("editor core", () => {
@@ -85,6 +94,59 @@ describe("editor core", () => {
 
     expect(state.current.doc.text).toBe("ad");
     expect(getCursorOffset(state.current.selection)).toBe(1);
+  });
+
+  it("deletes the current selection in normal mode", () => {
+    const state = { current: createEditorState({ value: "abcd", selection: createSelection(1, 2) }) };
+
+    run(state, deleteSelection);
+
+    expect(state.current.doc.text).toBe("ad");
+    expect(state.current.mode).toBe("normal");
+    expect(state.current.yankBuffer).toBe("bc");
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 1, to: 2 });
+  });
+
+  it("restores deleted text with d followed by p", () => {
+    const state = { current: createEditorState({ value: "abcd", selection: createSelection(1, 2) }) };
+
+    run(state, deleteSelection);
+    run(state, pasteAfter);
+
+    expect(state.current.doc.text).toBe("abcd");
+    expect(state.current.yankBuffer).toBe("bc");
+  });
+
+  it("undoes and redoes document changes with u and U", () => {
+    let undid = false;
+    let redid = false;
+    const state = { current: createEditorState({ value: "abc" }) };
+
+    undo(state.current, () => {}, {
+      history: {
+        undo() {
+          undid = true;
+          return true;
+        },
+        redo() {
+          return false;
+        }
+      }
+    });
+    redo(state.current, () => {}, {
+      history: {
+        undo() {
+          return false;
+        },
+        redo() {
+          redid = true;
+          return true;
+        }
+      }
+    });
+
+    expect(undid).toBe(true);
+    expect(redid).toBe(true);
   });
 
   it("moves across lines with clamping", () => {
@@ -194,6 +256,80 @@ describe("editor core", () => {
     run(state, enterNormalMode);
 
     expect(getSelectionOffsets(state.current)).toEqual({ from: 2, to: 3 });
+  });
+
+  it("keeps the cursor on the same line when escaping insert mode at column zero", () => {
+    const state = {
+      current: createEditorState({
+        value: "alpha\nbeta",
+        mode: "insert",
+        selection: createSelection(6, 6)
+      })
+    };
+
+    state.current = applyTransaction(state.current, {
+      insertSession: {
+        restoreOffset: 2,
+        restoreAffinity: "right",
+        moved: true
+      }
+    });
+
+    run(state, enterNormalMode);
+
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection))).toEqual({ line: 1, column: 0 });
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 6, to: 7 });
+  });
+
+  it("opens a new line below with o and enters insert mode there", () => {
+    const state = { current: createEditorState({ value: "alpha\nbeta", selection: createSelection(1, 1) }) };
+
+    run(state, openBelow);
+
+    expect(state.current.mode).toBe("insert");
+    expect(state.current.doc.text).toBe("alpha\n\nbeta");
+    expect(getCursorOffset(state.current.selection)).toBe(6);
+  });
+
+  it("opens a new line above with O and enters insert mode there", () => {
+    const state = { current: createEditorState({ value: "alpha\nbeta", selection: createSelection(7, 7) }) };
+
+    run(state, openAbove);
+
+    expect(state.current.mode).toBe("insert");
+    expect(state.current.doc.text).toBe("alpha\n\nbeta");
+    expect(getCursorOffset(state.current.selection)).toBe(6);
+  });
+
+  it("keeps the inserted line selected after o then Escape", () => {
+    const state = { current: createEditorState({ value: "alpha\nbeta", selection: createSelection(1, 1) }) };
+
+    run(state, openBelow);
+    run(state, enterNormalMode);
+
+    expect(state.current.mode).toBe("normal");
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 6, to: 7 });
+  });
+
+  it("keeps typed text on the inserted line selected after O then Escape", () => {
+    const state = { current: createEditorState({ value: "alpha\nbeta", selection: createSelection(7, 7) }) };
+
+    run(state, openAbove);
+    insertText("z")(state.current, (transaction) => dispatchTransaction(state, transaction), {});
+    run(state, enterNormalMode);
+
+    expect(state.current.doc.text).toBe("alpha\nz\nbeta");
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 6, to: 7 });
+  });
+
+  it("selects the current line and extends downward with x", () => {
+    const state = { current: createEditorState({ value: "alpha\nbeta\ngamma", selection: createSelection(1, 1) }) };
+
+    run(state, selectLineBelow);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 0, to: 6 });
+
+    run(state, selectLineBelow);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 0, to: 11 });
   });
 
   it("extends selection with visual h j k l motions", () => {
@@ -320,6 +456,161 @@ describe("editor core", () => {
     expect(getSelectionOffsets(state.current)).toEqual({ from: 5, to: 7 });
   });
 
+  it("moves w to the next lowercase word start", () => {
+    const state = { current: createEditorState({ value: "alpha beta", selection: createSelection(0, 0) }) };
+
+    run(state, moveNextWordStart);
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 6, to: 7 });
+  });
+
+  it("moves W to the next long-word start after whitespace", () => {
+    const state = { current: createEditorState({ value: "alpha += beta", selection: createSelection(0, 0) }) };
+
+    run(state, moveNextLongWordStart);
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 6, to: 7 });
+    run(state, moveNextLongWordStart);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 9, to: 10 });
+  });
+
+  it("moves B to the start of the current long word or previous one", () => {
+    const state = { current: createEditorState({ value: "alpha += beta", selection: createSelection(11, 11) }) };
+
+    run(state, movePrevLongWordStart);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 9, to: 10 });
+
+    run(state, movePrevLongWordStart);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 6, to: 7 });
+  });
+
+  it("moves E to the end of the current or next long word", () => {
+    const state = { current: createEditorState({ value: "alpha += beta", selection: createSelection(0, 0) }) };
+
+    run(state, moveNextLongWordEnd);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 4, to: 5 });
+
+    run(state, moveNextLongWordEnd);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 7, to: 8 });
+  });
+
+  it("keeps the visual anchor for w, W, B, and E", () => {
+    const state = { current: createEditorState({ value: "alpha += beta gamma" }) };
+
+    run(state, toggleVisualMode);
+    run(state, moveNextWordStart);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 0, to: 7 });
+
+    run(state, moveNextLongWordStart);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 0, to: 10 });
+
+    run(state, movePrevLongWordStart);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 0, to: 7 });
+
+    run(state, moveNextLongWordEnd);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 0, to: 8 });
+  });
+
+  it("finds the next and previous matching character across lines", () => {
+    const state = { current: createEditorState({ value: "abc\ndef\nghi", selection: createSelection(0, 0) }) };
+
+    run(state, findNextChar("e"));
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 5, to: 6 });
+
+    run(state, findPrevChar("b"));
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 1, to: 2 });
+  });
+
+  it("finds till the next and previous matching character across lines", () => {
+    const state = { current: createEditorState({ value: "abc\ndef\nghi", selection: createSelection(0, 0) }) };
+
+    run(state, findTillNextChar("e"));
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 4, to: 5 });
+
+    run(state, findTillPrevChar("a"));
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 1, to: 2 });
+  });
+
+  it("treats missing find targets as a no-op", () => {
+    const state = { current: createEditorState({ value: "abc", selection: createSelection(1, 1) }) };
+
+    run(state, findNextChar("z"));
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 1, to: 2 });
+  });
+
+  it("moves by page and half-page using the measured viewport size", () => {
+    const state = {
+      current: createEditorState({
+        value: Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n"),
+        selection: createSelection(0, 0)
+      })
+    };
+    const viewport = { fromLine: 0, toLine: 4, visibleLineCount: 5 };
+
+    run(state, pageDown, viewport);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(4);
+
+    run(state, halfPageDown, viewport);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(6);
+
+    run(state, halfPageUp, viewport);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(4);
+
+    run(state, pageUp, viewport);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(0);
+  });
+
+  it("moves to the visible top, center, and bottom lines", () => {
+    const state = {
+      current: createEditorState({
+        value: Array.from({ length: 12 }, (_, index) => `line ${index}`).join("\n"),
+        selection: createSelection(0, 0)
+      })
+    };
+    const viewport = { fromLine: 4, toLine: 8, visibleLineCount: 5 };
+
+    run(state, gotoWindowTop, viewport);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(4);
+
+    run(state, gotoWindowCenter, viewport);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(6);
+
+    run(state, gotoWindowBottom, viewport);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(8);
+  });
+
+  it("jumps between matching brackets with mm", () => {
+    const state = { current: createEditorState({ value: "fn(alpha[beta])", selection: createSelection(2, 2) }) };
+
+    run(state, gotoMatchingBracket);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 14, to: 15 });
+
+    run(state, gotoMatchingBracket);
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 2, to: 3 });
+  });
+
+  it("moves between paragraph boundaries", () => {
+    const state = {
+      current: createEditorState({
+        value: "alpha\nbeta\n\n\ngamma\ndelta\n\nepsilon",
+        selection: createSelection(1, 1)
+      })
+    };
+
+    run(state, gotoNextParagraph);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(4);
+
+    run(state, gotoNextParagraph);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(7);
+
+    run(state, gotoPrevParagraph);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(4);
+
+    run(state, gotoPrevParagraph);
+    expect(state.current.doc.positionAt(getCursorOffset(state.current.selection)).line).toBe(0);
+  });
+
   it("moves e to the end of the current word from its start", () => {
     const state = { current: createEditorState({ value: "alpha beta" }) };
     run(state, moveWordForward);
@@ -436,6 +727,48 @@ describe("editor core", () => {
 
     run(state, moveWordBackward);
     expect(getSelectionOffsets(state.current)).toEqual({ from: 0, to: 7 });
+  });
+
+  it("selects around a quoted textobject with ma'", () => {
+    const state = {
+      current: createEditorState({
+        value: "const value = 'hello';",
+        selection: createSelection(15, 15)
+      })
+    };
+
+    run(state, selectTextobject("around", "'"));
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 14, to: 21 });
+    expect(state.current.doc.text.slice(14, 21)).toBe("'hello'");
+  });
+
+  it("selects inside a quoted textobject with mi'", () => {
+    const state = {
+      current: createEditorState({
+        value: "const value = 'hello';",
+        selection: createSelection(15, 15)
+      })
+    };
+
+    run(state, selectTextobject("inside", "'"));
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 15, to: 20 });
+    expect(state.current.doc.text.slice(15, 20)).toBe("hello");
+  });
+
+  it("selects around bracket textobjects", () => {
+    const state = {
+      current: createEditorState({
+        value: "call(alpha, beta)",
+        selection: createSelection(6, 6)
+      })
+    };
+
+    run(state, selectTextobject("around", "("));
+
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 4, to: 17 });
+    expect(state.current.doc.text.slice(4, 17)).toBe("(alpha, beta)");
   });
 
   it("maps arrow-key-equivalent vertical insert motion to an insertion point", () => {
