@@ -50,6 +50,70 @@ const previewStyles = new Map<number, string>([
   [7, "scene-preview__cell--cursor"]
 ]);
 
+type LineChangeKind = "added" | "modified";
+
+function splitLines(text: string): string[] {
+  return text.split("\n");
+}
+
+function computeLineChanges(baseText: string, currentText: string): Array<{ line: number; kind: LineChangeKind }> {
+  const baseLines = splitLines(baseText);
+  const currentLines = splitLines(currentText);
+  const rowCount = baseLines.length + 1;
+  const columnCount = currentLines.length + 1;
+  const dp = Array.from({ length: rowCount }, () => new Array<number>(columnCount).fill(0));
+
+  for (let row = baseLines.length - 1; row >= 0; row -= 1) {
+    for (let column = currentLines.length - 1; column >= 0; column -= 1) {
+      dp[row]![column] =
+        baseLines[row] === currentLines[column]
+          ? 1 + dp[row + 1]![column + 1]!
+          : Math.max(dp[row + 1]![column]!, dp[row]![column + 1]!);
+    }
+  }
+
+  const matches: Array<[number, number]> = [];
+  let row = 0;
+  let column = 0;
+
+  while (row < baseLines.length && column < currentLines.length) {
+    if (baseLines[row] === currentLines[column]) {
+      matches.push([row, column]);
+      row += 1;
+      column += 1;
+      continue;
+    }
+
+    if (dp[row + 1]![column]! >= dp[row]![column + 1]!) {
+      row += 1;
+    } else {
+      column += 1;
+    }
+  }
+
+  const anchors: Array<[number, number]> = [[-1, -1], ...matches, [baseLines.length, currentLines.length]];
+  const changes: Array<{ line: number; kind: LineChangeKind }> = [];
+
+  for (let index = 0; index < anchors.length - 1; index += 1) {
+    const [baseAnchor, currentAnchor] = anchors[index]!;
+    const [nextBase, nextCurrent] = anchors[index + 1]!;
+    const baseCount = nextBase - baseAnchor - 1;
+    const currentCount = nextCurrent - currentAnchor - 1;
+
+    if (currentCount <= 0) {
+      continue;
+    }
+
+    const kind: LineChangeKind = baseCount === 0 ? "added" : "modified";
+
+    for (let line = currentAnchor + 1; line < nextCurrent; line += 1) {
+      changes.push({ line, kind });
+    }
+  }
+
+  return changes;
+}
+
 function hasDevBridge(): boolean {
   const host = window.location.hostname;
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
@@ -196,6 +260,7 @@ async function main(): Promise<void> {
 
   if (mount && preview) {
     const devBridgeEnabled = hasDevBridge();
+    const memoryFiles = new Map<string, string>([["examples/editor.scene", sample]]);
     let renderRunId = 0;
     let lastRenderedSource = controller.getState().doc.text;
     let resizeFrame = 0;
@@ -262,7 +327,17 @@ async function main(): Promise<void> {
               return payload.changes;
             }
           }
-        : undefined,
+        : {
+            async writeFile(context) {
+              memoryFiles.set(context.filePath, context.text);
+            },
+            async didWriteFile(context) {
+              await renderPreview(context.text);
+            },
+            async getLineChanges(context) {
+              return computeLineChanges(memoryFiles.get(context.filePath) ?? "", context.text);
+            }
+          },
       theme: phTheme,
       softWrap: true,
       indentGuides: {

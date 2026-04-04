@@ -1146,6 +1146,35 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("Wrote examples/editor.scene");
   });
 
+  it("writes to an explicit output path with :w <path>", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const writes: Array<{ filePath: string; text: string }> = [];
+
+    createEditor(container, {
+      value: "screen\n  size fill\n",
+      filePath: "examples/editor.scene",
+      host: {
+        async writeFile(context) {
+          writes.push(context);
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
+    for (const key of "w memory/demo.scene") {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(writes).toEqual([{ filePath: "memory/demo.scene", text: "screen\n  size fill\n" }]);
+    expect(container.querySelector("[data-wx-editor-status-file='true']")?.textContent).toBe("memory/demo.scene");
+  });
+
   it("renders added and modified gutter bars after the line number", async () => {
     const container = document.createElement("div");
     document.body.append(container);

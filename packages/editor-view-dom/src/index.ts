@@ -2776,7 +2776,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return true;
   }
 
-  async function saveDocument(): Promise<boolean> {
+  async function saveDocument(targetFilePath = filePath): Promise<boolean> {
     const writeFile = host?.writeFile;
 
     if (!writeFile) {
@@ -2786,25 +2786,30 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     try {
       await writeFile({
-        filePath,
+        filePath: targetFilePath,
         text: state.doc.text
       });
       await host?.didWriteFile?.({
-        filePath,
+        filePath: targetFilePath,
         text: state.doc.text
       });
     } catch {
-      setBottomMessage({ tone: "error", text: `Write failed for ${filePath}` });
+      setBottomMessage({ tone: "error", text: `Write failed for ${targetFilePath}` });
       return false;
     }
 
-    setBottomMessage({ tone: "info", text: `Wrote ${filePath}` });
+    filePath = targetFilePath;
+    patchStatus();
+    setBottomMessage({ tone: "info", text: `Wrote ${targetFilePath}` });
     refreshLineChanges();
     return true;
   }
 
   function runCommandLineCommand(rawValue: string): void {
-    const value = rawValue.trim().toLowerCase();
+    const trimmed = rawValue.trim();
+    const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
+    const value = commandName.toLowerCase();
+    const commandArgument = argumentParts.join(" ").trim();
 
     closeCommandLine();
 
@@ -2818,7 +2823,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     if (value === "w" || value === "write") {
-      void saveDocument();
+      void saveDocument(commandArgument || filePath);
       return;
     }
 
