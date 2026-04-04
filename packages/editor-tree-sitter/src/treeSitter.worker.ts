@@ -1,7 +1,7 @@
-import type { TextChange } from "@whx/editor-core";
+import type { TextChange } from "@wx/editor-core";
 import { Language, Parser, Query } from "web-tree-sitter";
 
-import type { HighlightRole, HighlightSpan, SyntaxSelectionRange } from "@whx/editor-language";
+import type { HighlightRole, HighlightSpan, SyntaxSelectionRange } from "@wx/editor-language";
 
 import { mapCaptureNameToRole } from "./highlightMapping";
 import { applyTextChange, buildTreeEdit, rebaseTextChanges } from "./incrementalEdits";

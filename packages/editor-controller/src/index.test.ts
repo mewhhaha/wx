@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { enterInsertMode, insertText, moveRight } from "@whx/editor-core";
+import { enterInsertMode, insertText, moveRight } from "@wx/editor-core";
 
 import { createEditorController } from "./index";
 

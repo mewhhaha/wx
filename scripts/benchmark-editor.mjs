@@ -144,14 +144,14 @@ async function main() {
     try {
       const page = await browser.newPage();
       await page.goto(`${serverUrl}/?bench=1`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => Boolean(window.__whxBench?.runSuite));
+      await page.waitForFunction(() => Boolean(window.__wxBench?.runSuite));
 
       const results = await page.evaluate(
-        async ({ lines, iterations }) => await window.__whxBench.runSuite({ lineCount: lines, iterations }),
+        async ({ lines, iterations }) => await window.__wxBench.runSuite({ lineCount: lines, iterations }),
         { lines: options.lines, iterations: options.iterations }
       );
 
-      console.log(`\nWHX editor benchmark`);
+      console.log(`\nWX editor benchmark`);
       console.log(`  lines: ${options.lines}`);
       console.log(`  iterations: ${options.iterations}`);
 

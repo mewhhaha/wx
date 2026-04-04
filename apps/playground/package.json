@@ -1,5 +1,5 @@
 {
-  "name": "@whx/playground",
+  "name": "@wx/playground",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,12 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@whx/editor-controller": "workspace:*",
-    "@whx/editor-element": "workspace:*",
-    "@whx/editor-theme": "workspace:*",
-    "@whx/editor-tree-sitter": "workspace:*",
-    "@whx/editor-view-dom": "workspace:*",
+    "@wx/editor-controller": "workspace:*",
+    "@wx/editor-element": "workspace:*",
+    "@wx/editor-theme": "workspace:*",
+    "@wx/editor-tree-sitter": "workspace:*",
+    "@wx/editor-view-dom": "workspace:*",
     "tree-sitter-typescript": "^0.23.2",
-    "web-tree-sitter": "^0.26.7"
+    "web-tree-sitter": "^0.26.8"
   }
 }

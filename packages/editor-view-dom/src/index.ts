@@ -55,21 +55,25 @@ import {
   type Command,
   type EditorState,
   type TextChange
-} from "@whx/editor-core";
+} from "@wx/editor-core";
 import {
   createEditorController,
   type EditorController,
   type EditorUpdate
-} from "@whx/editor-controller";
+} from "@wx/editor-controller";
 import type {
+  DiagnosticSeverity,
+  EditorCodeAction,
+  EditorDiagnostic,
+  EditorHover,
   EditorLanguageServices,
   EditorLineRange,
   HighlightRole,
   HighlightSpan,
   LanguageProvider
-} from "@whx/editor-language";
-import { languageProviderToServices } from "@whx/editor-language";
-import { defaultTheme, createThemeVariables, type ThemeSpec } from "@whx/editor-theme";
+} from "@wx/editor-language";
+import { languageProviderToServices } from "@wx/editor-language";
+import { defaultTheme, createThemeVariables, type ThemeSpec } from "@wx/editor-theme";
 
 export interface CreateEditorOptions {
   controller?: EditorController;
@@ -85,6 +89,9 @@ export interface EditorHandle {
   mount(container: HTMLElement): void;
   destroy(): void;
   focus(): void;
+  format(): Promise<boolean>;
+  getCodeActions(): Promise<readonly EditorCodeAction[]>;
+  applyCodeAction(action: EditorCodeAction): Promise<boolean>;
   subscribe(listener: (update: EditorUpdate) => void): () => void;
   getState(): EditorState;
   setFilePath(filePath: string): void;
@@ -95,11 +102,13 @@ export interface EditorHandle {
 }
 
 interface LineFragment {
+  offset: number | null;
   text: string;
   role: HighlightRole;
   isSelected: boolean;
   isCursor: boolean;
   cursorKind: "block" | null;
+  diagnosticSeverity: DiagnosticSeverity | null;
 }
 
 interface CommandLineState {
@@ -107,11 +116,33 @@ interface CommandLineState {
   value: string;
 }
 
+interface BottomMessageState {
+  tone: "info" | "warning" | "error";
+  text: string;
+}
+
+interface CodeActionMenuState {
+  active: boolean;
+  loading: boolean;
+  actions: readonly EditorCodeAction[];
+  selectedIndex: number;
+  error: string | null;
+}
+
+interface HoverState {
+  active: boolean;
+  pinned: boolean;
+  offset: number | null;
+  content: string;
+  source?: string;
+}
+
 type PendingAction =
   | null
   | { kind: "g" }
   | { kind: "[" | "]" }
   | { kind: "m" }
+  | { kind: "space" }
   | { kind: "find"; variant: "f" | "F" | "t" | "T" }
   | { kind: "textobject"; mode: "around" | "inside" };
 
@@ -120,6 +151,13 @@ type RepeatableMotion =
   | { kind: "matching-bracket" }
   | { kind: "paragraph"; direction: "next" | "prev" }
   | { kind: "textobject"; mode: "around" | "inside"; object: string };
+
+const DIAGNOSTIC_SEVERITY_ORDER: Record<DiagnosticSeverity, number> = {
+  error: 0,
+  warning: 1,
+  info: 2,
+  hint: 3
+};
 
 const SURFACE_VERTICAL_PADDING = 16;
 const EMPTY_CELL_TEXT = "\u00a0";
@@ -145,32 +183,36 @@ function addClassName(element: Element, className: string, when: boolean): void 
 }
 
 function roleClassName(role: HighlightRole): string {
-  return `whx-role-${role}`;
+  return `wx-role-${role}`;
+}
+
+function diagnosticClassName(severity: DiagnosticSeverity): string {
+  return `wx-diagnostic-${severity}`;
 }
 
 function mountStyles(styleHost: HTMLElement): void {
-  if (styleHost.querySelector("style[data-whx-style='true']")) {
+  if (styleHost.querySelector("style[data-wx-style='true']")) {
     return;
   }
 
   const styleElement = document.createElement("style");
-  styleElement.dataset.whxStyle = "true";
+  styleElement.dataset.wxStyle = "true";
   styleElement.textContent = `
-    .whx-editor {
+    .wx-editor {
       position: relative;
       display: flex;
       flex-direction: column;
       min-height: 240px;
       overflow: hidden;
-      background: var(--whx-color-background);
-      color: var(--whx-color-text);
+      background: var(--wx-color-background);
+      color: var(--wx-color-text);
       border: 1px solid rgba(148, 163, 184, 0.18);
       border-radius: 18px;
       font: 15px/1.6 "Iosevka Web", "SFMono-Regular", "Monaco", monospace;
       box-shadow: 0 24px 80px rgba(2, 8, 23, 0.28);
     }
 
-    .whx-editor__surface {
+    .wx-editor__surface {
       position: relative;
       flex: 1 1 auto;
       min-height: 0;
@@ -179,7 +221,7 @@ function mountStyles(styleHost: HTMLElement): void {
       outline: none;
     }
 
-    .whx-editor__input {
+    .wx-editor__input {
       position: absolute;
       inset: 0;
       opacity: 0;
@@ -189,78 +231,135 @@ function mountStyles(styleHost: HTMLElement): void {
       height: 1px;
     }
 
-    .whx-editor__rows {
+    .wx-editor__rows {
       position: relative;
       z-index: 1;
     }
 
-    .whx-editor__spacer {
+    .wx-editor__spacer {
       height: 0;
       pointer-events: none;
     }
 
-    .whx-editor__row {
+    .wx-editor__row {
       display: grid;
       align-items: center;
-      min-height: var(--whx-line-height, 24px);
+      min-height: var(--wx-line-height, 24px);
       white-space: pre;
     }
 
-    .whx-row-active {
-      background: color-mix(in srgb, var(--whx-color-current-line) 88%, transparent);
+    .wx-row-active {
+      background: color-mix(in srgb, var(--wx-color-current-line) 88%, transparent);
     }
 
-    .whx-editor__gutter {
+    .wx-editor__gutter {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.5ch;
       padding-right: 14px;
       text-align: right;
-      color: var(--whx-color-gutter);
+      color: var(--wx-color-gutter);
       user-select: none;
     }
 
-    .whx-editor__content {
+    .wx-editor__gutter-number {
+      display: inline-block;
+      min-width: 0;
+    }
+
+    .wx-editor__gutter-marker {
+      width: 0.55ch;
+      height: 0.55ch;
+      border-radius: 999px;
+      flex: 0 0 auto;
+      visibility: hidden;
+    }
+
+    .wx-editor__gutter-marker[data-severity="error"] {
+      visibility: visible;
+      background: var(--wx-color-diagnostic-error);
+    }
+
+    .wx-editor__gutter-marker[data-severity="warning"] {
+      visibility: visible;
+      background: var(--wx-color-diagnostic-warning);
+    }
+
+    .wx-editor__gutter-marker[data-severity="info"] {
+      visibility: visible;
+      background: var(--wx-color-diagnostic-info);
+    }
+
+    .wx-editor__gutter-marker[data-severity="hint"] {
+      visibility: visible;
+      background: var(--wx-color-diagnostic-hint);
+    }
+
+    .wx-editor__content {
       position: relative;
       white-space: pre;
-      color: var(--whx-color-text);
-      min-height: var(--whx-line-height, 24px);
+      color: var(--wx-color-text);
+      min-height: var(--wx-line-height, 24px);
     }
 
-    .whx-role-comment { color: var(--whx-color-comment); }
-    .whx-role-function { color: var(--whx-color-function); }
-    .whx-role-keyword { color: var(--whx-color-keyword); }
-    .whx-role-number { color: var(--whx-color-number); }
-    .whx-role-operator { color: var(--whx-color-operator); }
-    .whx-role-punctuation { color: var(--whx-color-punctuation); }
-    .whx-role-string { color: var(--whx-color-string); }
-    .whx-role-type { color: var(--whx-color-type); }
+    .wx-role-comment { color: var(--wx-color-comment); }
+    .wx-role-function { color: var(--wx-color-function); }
+    .wx-role-keyword { color: var(--wx-color-keyword); }
+    .wx-role-number { color: var(--wx-color-number); }
+    .wx-role-operator { color: var(--wx-color-operator); }
+    .wx-role-punctuation { color: var(--wx-color-punctuation); }
+    .wx-role-string { color: var(--wx-color-string); }
+    .wx-role-type { color: var(--wx-color-type); }
 
-    .whx-is-selected {
-      background: var(--whx-color-selection);
+    .wx-diagnostic-error {
+      text-decoration: underline wavy var(--wx-color-diagnostic-error);
+      text-underline-offset: 0.18em;
+    }
+
+    .wx-diagnostic-warning {
+      text-decoration: underline wavy var(--wx-color-diagnostic-warning);
+      text-underline-offset: 0.18em;
+    }
+
+    .wx-diagnostic-info {
+      text-decoration: underline dotted var(--wx-color-diagnostic-info);
+      text-underline-offset: 0.18em;
+    }
+
+    .wx-diagnostic-hint {
+      text-decoration: underline dotted var(--wx-color-diagnostic-hint);
+      text-underline-offset: 0.18em;
+    }
+
+    .wx-is-selected {
+      background: var(--wx-color-selection);
       border-radius: 4px;
     }
 
-    .whx-cursor-block {
+    .wx-cursor-block {
       display: inline-block;
       min-width: 1ch;
-      color: var(--whx-color-cursor-text);
-      background: var(--whx-color-cursor);
+      color: var(--wx-color-cursor-text);
+      background: var(--wx-color-cursor);
       border-radius: 4px;
     }
 
-    .whx-cursor-line {
+    .wx-cursor-line {
       position: absolute;
       top: 0;
       width: 2px;
-      background: var(--whx-color-cursor);
+      background: var(--wx-color-cursor);
       border-radius: 999px;
       pointer-events: none;
     }
 
-    .whx-editor__status {
+    .wx-editor__status {
       display: grid;
       grid-template-columns: auto minmax(0, 1fr) auto;
       align-items: center;
       gap: 14px;
-      height: var(--whx-line-height, 24px);
+      height: var(--wx-line-height, 24px);
       padding: 0 1ch 0 0;
       background: #0b0d12;
       border-top: 1px solid rgba(148, 163, 184, 0.14);
@@ -269,7 +368,7 @@ function mountStyles(styleHost: HTMLElement): void {
       line-height: 1;
     }
 
-    .whx-editor__status-mode {
+    .wx-editor__status-mode {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -282,14 +381,14 @@ function mountStyles(styleHost: HTMLElement): void {
       letter-spacing: 0.06em;
     }
 
-    .whx-editor__status-file {
+    .wx-editor__status-file {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       color: #eef2ff;
     }
 
-    .whx-editor__status-meta {
+    .wx-editor__status-meta {
       display: inline-flex;
       align-items: center;
       gap: 18px;
@@ -297,8 +396,8 @@ function mountStyles(styleHost: HTMLElement): void {
       white-space: nowrap;
     }
 
-    .whx-editor__bottom-row {
-      height: var(--whx-line-height, 24px);
+    .wx-editor__bottom-row {
+      height: var(--wx-line-height, 24px);
       background: #0a0b0f;
       border-top: 1px solid rgba(148, 163, 184, 0.08);
       color: #dbe2f0;
@@ -308,16 +407,57 @@ function mountStyles(styleHost: HTMLElement): void {
       white-space: pre;
     }
 
-    .whx-editor__bottom-row[data-active="false"] {
+    .wx-editor__bottom-row[data-active="false"] {
       color: transparent;
     }
 
-    .whx-editor__command-prompt {
+    .wx-editor__command-prompt {
       color: #eef2ff;
     }
 
-    .whx-editor__command-text {
+    .wx-editor__command-text {
       color: #dbe2f0;
+    }
+
+    .wx-editor__bottom-message {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .wx-editor__bottom-message[data-tone="error"] {
+      color: var(--wx-color-diagnostic-error);
+    }
+
+    .wx-editor__bottom-message[data-tone="warning"] {
+      color: var(--wx-color-diagnostic-warning);
+    }
+
+    .wx-editor__bottom-message[data-tone="info"] {
+      color: #dbe2f0;
+    }
+
+    .wx-editor__code-actions {
+      display: flex;
+      align-items: center;
+      gap: 1ch;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .wx-editor__code-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5ch;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .wx-editor__code-action[data-selected="true"] {
+      color: #ffffff;
+      font-weight: 700;
     }
   `;
 
@@ -560,7 +700,28 @@ function commandForBracketPrefix(direction: "[" | "]", key: string): Command | n
   return direction === "[" ? gotoPrevParagraph : gotoNextParagraph;
 }
 
-function renderLineFragments(line: { start: number; text: string }, state: EditorState, spans: HighlightSpan[]): LineFragment[] {
+function diagnosticSeverityAtOffset(entries: readonly EditorDiagnostic[], offset: number): DiagnosticSeverity | null {
+  let best: DiagnosticSeverity | null = null;
+
+  for (const entry of entries) {
+    if (offset < entry.from || offset >= entry.to) {
+      continue;
+    }
+
+    if (!best || DIAGNOSTIC_SEVERITY_ORDER[entry.severity] < DIAGNOSTIC_SEVERITY_ORDER[best]) {
+      best = entry.severity;
+    }
+  }
+
+  return best;
+}
+
+function renderLineFragments(
+  line: { start: number; text: string },
+  state: EditorState,
+  spans: HighlightSpan[],
+  lineDiagnostics: readonly EditorDiagnostic[]
+): LineFragment[] {
   const fragments: LineFragment[] = [];
   const activeOffset = getActiveCharacterOffset(state);
   const selection = getSelectionOffsets(state);
@@ -570,11 +731,13 @@ function renderLineFragments(line: { start: number; text: string }, state: Edito
     if (line.text.length === 0) {
       return [
         {
+          offset: line.start,
           text: EMPTY_CELL_TEXT,
           role: "text",
           isSelected: false,
           isCursor: false,
-          cursorKind: null
+          cursorKind: null,
+          diagnosticSeverity: null
         }
       ];
     }
@@ -583,11 +746,13 @@ function renderLineFragments(line: { start: number; text: string }, state: Edito
       const offset = line.start + index;
 
       fragments.push({
+        offset,
         text: line.text[index] ?? EMPTY_CELL_TEXT,
         role: roleAtOffset(spans, offset),
         isSelected: false,
         isCursor: false,
-        cursorKind: null
+        cursorKind: null,
+        diagnosticSeverity: diagnosticSeverityAtOffset(lineDiagnostics, offset)
       });
     }
 
@@ -598,11 +763,13 @@ function renderLineFragments(line: { start: number; text: string }, state: Edito
     const selected = selection.from <= line.start && line.start < selection.to;
     return [
       {
+        offset: line.start,
         text: EMPTY_CELL_TEXT,
         role: "text",
         isSelected: selected,
         isCursor: activeOffset === line.start,
-        cursorKind: activeOffset === line.start ? "block" : null
+        cursorKind: activeOffset === line.start ? "block" : null,
+        diagnosticSeverity: null
       }
     ];
   }
@@ -610,11 +777,13 @@ function renderLineFragments(line: { start: number; text: string }, state: Edito
   for (let index = 0; index < line.text.length; index += 1) {
     const offset = line.start + index;
     fragments.push({
+      offset,
       text: line.text[index] ?? " ",
       role: roleAtOffset(spans, offset),
       isSelected: offset >= selection.from && offset < selection.to,
       isCursor: offset === activeOffset,
-      cursorKind: offset === activeOffset ? "block" : null
+      cursorKind: offset === activeOffset ? "block" : null,
+      diagnosticSeverity: diagnosticSeverityAtOffset(lineDiagnostics, offset)
     });
   }
 
@@ -624,11 +793,13 @@ function renderLineFragments(line: { start: number; text: string }, state: Edito
 
   if (lineEndingSelected || lineEndingCursor) {
     fragments.push({
+      offset: lineEnd,
       text: EMPTY_CELL_TEXT,
       role: "text",
       isSelected: lineEndingSelected,
       isCursor: lineEndingCursor,
-      cursorKind: lineEndingCursor ? "block" : null
+      cursorKind: lineEndingCursor ? "block" : null,
+      diagnosticSeverity: null
     });
   }
 
@@ -659,11 +830,29 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let rowViews: RowView[] = [];
   let renderedViewport: LineViewport = { fromLine: 0, toLine: -1 };
   let commandLine: CommandLineState = { active: false, value: "" };
+  let bottomMessage: BottomMessageState | null = null;
+  let codeActionMenu: CodeActionMenuState = {
+    active: false,
+    loading: false,
+    actions: [],
+    selectedIndex: 0,
+    error: null
+  };
+  let hoverState: HoverState = {
+    active: false,
+    pinned: false,
+    offset: null,
+    content: ""
+  };
+  let diagnostics: readonly EditorDiagnostic[] = [];
+  let diagnosticsByLine = new Map<number, EditorDiagnostic[]>();
   let pendingAction: PendingAction = null;
   let lastRepeatableMotion: RepeatableMotion | null = null;
   let languageRevision = -1;
   let lastHighlightedRevision = -1;
   let highlightRequestId = 0;
+  let diagnosticsRequestId = 0;
+  let hoverRequestId = 0;
   let gutterWidth = 0;
   let destroyed = false;
   let mountedContainer: HTMLElement | null = container;
@@ -686,42 +875,42 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   mountStyles(root);
   applyThemeVariables(root, theme);
 
-  root.className = "whx-editor";
-  root.dataset.whxEditor = "root";
+  root.className = "wx-editor";
+  root.dataset.wxEditor = "root";
   root.tabIndex = 0;
-  root.style.setProperty("--whx-line-height", `${metrics.lineHeight}px`);
+  root.style.setProperty("--wx-line-height", `${metrics.lineHeight}px`);
 
-  surface.className = "whx-editor__surface";
-  surface.dataset.whxEditor = "surface";
+  surface.className = "wx-editor__surface";
+  surface.dataset.wxEditor = "surface";
 
-  rows.className = "whx-editor__rows";
-  rows.dataset.whxEditor = "rows";
+  rows.className = "wx-editor__rows";
+  rows.dataset.wxEditor = "rows";
 
-  topSpacer.className = "whx-editor__spacer";
-  topSpacer.dataset.whxEditorSpacer = "top";
+  topSpacer.className = "wx-editor__spacer";
+  topSpacer.dataset.wxEditorSpacer = "top";
 
-  viewportRows.dataset.whxEditor = "viewport";
+  viewportRows.dataset.wxEditor = "viewport";
 
-  bottomSpacer.className = "whx-editor__spacer";
-  bottomSpacer.dataset.whxEditorSpacer = "bottom";
+  bottomSpacer.className = "wx-editor__spacer";
+  bottomSpacer.dataset.wxEditorSpacer = "bottom";
 
-  status.className = "whx-editor__status";
-  status.dataset.whxEditor = "status";
+  status.className = "wx-editor__status";
+  status.dataset.wxEditor = "status";
 
-  statusMode.className = "whx-editor__status-mode";
-  statusMode.dataset.whxEditorStatusMode = "true";
+  statusMode.className = "wx-editor__status-mode";
+  statusMode.dataset.wxEditorStatusMode = "true";
 
-  statusFile.className = "whx-editor__status-file";
-  statusFile.dataset.whxEditorStatusFile = "true";
+  statusFile.className = "wx-editor__status-file";
+  statusFile.dataset.wxEditorStatusFile = "true";
 
-  statusMeta.className = "whx-editor__status-meta";
-  statusMeta.dataset.whxEditorStatusMeta = "true";
+  statusMeta.className = "wx-editor__status-meta";
+  statusMeta.dataset.wxEditorStatusMeta = "true";
 
-  bottomRow.className = "whx-editor__bottom-row";
-  bottomRow.dataset.whxEditorBottomRow = "true";
+  bottomRow.className = "wx-editor__bottom-row";
+  bottomRow.dataset.wxEditorBottomRow = "true";
 
-  textarea.className = "whx-editor__input";
-  textarea.dataset.whxEditor = "input";
+  textarea.className = "wx-editor__input";
+  textarea.dataset.wxEditor = "input";
   textarea.spellcheck = false;
   textarea.autocapitalize = "off";
   textarea.autocomplete = "off";
@@ -852,14 +1041,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const gutter = document.createElement("div");
     const content = document.createElement("div");
 
-    row.className = "whx-editor__row";
-    row.dataset.whxEditorRow = String(lineIndex + 1);
+    row.className = "wx-editor__row";
+    row.dataset.wxEditorRow = String(lineIndex + 1);
 
-    gutter.className = "whx-editor__gutter";
-    gutter.dataset.whxEditorGutter = String(lineIndex + 1);
+    gutter.className = "wx-editor__gutter";
+    gutter.dataset.wxEditorGutter = String(lineIndex + 1);
 
-    content.className = "whx-editor__content";
-    content.dataset.whxEditorContent = String(lineIndex + 1);
+    content.className = "wx-editor__content";
+    content.dataset.wxEditorContent = String(lineIndex + 1);
 
     row.append(gutter, content);
 
@@ -893,29 +1082,89 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return highlightCache.get(lineIndex) ?? [];
   }
 
+  function getLineDiagnostics(lineIndex: number): readonly EditorDiagnostic[] {
+    return diagnosticsByLine.get(lineIndex) ?? [];
+  }
+
+  function getLineDiagnosticSeverity(lineIndex: number): DiagnosticSeverity | null {
+    const entries = getLineDiagnostics(lineIndex);
+    let best: DiagnosticSeverity | null = null;
+
+    for (const entry of entries) {
+      if (!best || DIAGNOSTIC_SEVERITY_ORDER[entry.severity] < DIAGNOSTIC_SEVERITY_ORDER[best]) {
+        best = entry.severity;
+      }
+    }
+
+    return best;
+  }
+
+  function getDiagnosticsSummary(): { errors: number; warnings: number } {
+    let errors = 0;
+    let warnings = 0;
+
+    for (const entry of diagnostics) {
+      if (entry.severity === "error") {
+        errors += 1;
+      } else if (entry.severity === "warning") {
+        warnings += 1;
+      }
+    }
+
+    return { errors, warnings };
+  }
+
+  function getCurrentDiagnostic(): EditorDiagnostic | null {
+    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+    const activeLine = state.doc.positionAt(activeOffset).line;
+    const activeLineDiagnostics = getLineDiagnostics(activeLine);
+
+    for (const entry of activeLineDiagnostics) {
+      if (activeOffset >= entry.from && activeOffset < entry.to) {
+        return entry;
+      }
+    }
+
+    return activeLineDiagnostics[0] ?? null;
+  }
+
   function patchRowView(view: RowView, lineIndex: number): void {
     const line = state.doc.lineAt(lineIndex);
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
     const cursorPosition = state.doc.positionAt(activeOffset);
+    const lineDiagnostics = getLineDiagnostics(lineIndex);
+    const lineDiagnosticSeverity = getLineDiagnosticSeverity(lineIndex);
+    const gutterMarker = document.createElement("span");
+    const gutterNumber = document.createElement("span");
 
     view.lineIndex = lineIndex;
-    view.row.dataset.whxEditorRow = String(lineIndex + 1);
-    view.gutter.dataset.whxEditorGutter = String(lineIndex + 1);
-    view.content.dataset.whxEditorContent = String(lineIndex + 1);
-    view.gutter.textContent = String(lineIndex + 1);
-    view.row.classList.toggle("whx-row-active", lineIndex === cursorPosition.line);
+    view.row.dataset.wxEditorRow = String(lineIndex + 1);
+    view.gutter.dataset.wxEditorGutter = String(lineIndex + 1);
+    view.content.dataset.wxEditorContent = String(lineIndex + 1);
+    gutterMarker.className = "wx-editor__gutter-marker";
+    gutterMarker.dataset.severity = lineDiagnosticSeverity ?? "";
+    gutterMarker.dataset.wxEditorDiagnosticMarker = lineDiagnosticSeverity ?? "";
+    gutterNumber.className = "wx-editor__gutter-number";
+    gutterNumber.textContent = String(lineIndex + 1);
+    view.gutter.replaceChildren(gutterMarker, gutterNumber);
+    view.row.classList.toggle("wx-row-active", lineIndex === cursorPosition.line);
     view.content.replaceChildren();
 
-    for (const segment of renderLineFragments(line, state, getLineHighlights(lineIndex))) {
+    for (const segment of renderLineFragments(line, state, getLineHighlights(lineIndex), lineDiagnostics)) {
       const token = document.createElement("span");
-      token.className = "whx-token";
+      token.className = "wx-token";
       token.classList.add(roleClassName(segment.role));
-      addClassName(token, "whx-is-selected", segment.isSelected);
+      addClassName(token, "wx-is-selected", segment.isSelected);
+      addClassName(token, diagnosticClassName(segment.diagnosticSeverity), !!segment.diagnosticSeverity);
 
       if (segment.isCursor) {
-        token.classList.add("whx-cursor-block");
-        token.dataset.whxEditorCursor = "true";
-        token.dataset.whxEditorCursorKind = segment.cursorKind ?? "";
+        token.classList.add("wx-cursor-block");
+        token.dataset.wxEditorCursor = "true";
+        token.dataset.wxEditorCursorKind = segment.cursorKind ?? "";
+      }
+
+      if (segment.offset !== null) {
+        token.dataset.wxEditorOffset = String(segment.offset);
       }
 
       token.textContent = segment.text;
@@ -927,9 +1176,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       const caretHeight = Math.max(14, Math.round(metrics.lineHeight * 0.84));
       const caretTop = Math.max(0, Math.round((metrics.lineHeight - caretHeight) / 2));
 
-      caret.className = "whx-cursor-line";
-      caret.dataset.whxEditorCursor = "true";
-      caret.dataset.whxEditorCursorKind = "line";
+      caret.className = "wx-cursor-line";
+      caret.dataset.wxEditorCursor = "true";
+      caret.dataset.wxEditorCursorKind = "line";
       caret.style.left = `${cursorPosition.column * metrics.charWidth}px`;
       caret.style.top = `${caretTop}px`;
       caret.style.height = `${caretHeight}px`;
@@ -1025,10 +1274,22 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function patchStatus(): void {
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
     const cursorPosition = state.doc.positionAt(activeOffset);
+    const { errors, warnings } = getDiagnosticsSummary();
+    const parts = ["1 sel"];
+
+    if (errors > 0) {
+      parts.push(`E${errors}`);
+    }
+
+    if (warnings > 0) {
+      parts.push(`W${warnings}`);
+    }
+
+    parts.push(`${cursorPosition.line + 1}:${cursorPosition.column + 1}`);
 
     statusMode.textContent = state.mode === "insert" ? "INS" : state.mode === "visual" ? "VIS" : "NOR";
     statusFile.textContent = filePath;
-    statusMeta.textContent = `1 sel   ${cursorPosition.line + 1}:${cursorPosition.column + 1}`;
+    statusMeta.textContent = parts.join("   ");
   }
 
   function getViewportContext() {
@@ -1040,22 +1301,86 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function patchBottomRow(): void {
-    bottomRow.dataset.active = String(commandLine.active);
+    bottomRow.dataset.active = String(
+      commandLine.active || codeActionMenu.active || !!bottomMessage || !!getCurrentDiagnostic()
+    );
     bottomRow.replaceChildren();
 
     if (commandLine.active) {
       const prompt = document.createElement("span");
       const value = document.createElement("span");
 
-      prompt.className = "whx-editor__command-prompt";
-      prompt.dataset.whxEditorCommandPrompt = "true";
+      prompt.className = "wx-editor__command-prompt";
+      prompt.dataset.wxEditorCommandPrompt = "true";
       prompt.textContent = ":";
 
-      value.className = "whx-editor__command-text";
-      value.dataset.whxEditorCommandText = "true";
+      value.className = "wx-editor__command-text";
+      value.dataset.wxEditorCommandText = "true";
       value.textContent = commandLine.value;
 
       bottomRow.append(prompt, value);
+      return;
+    }
+
+    if (codeActionMenu.active) {
+      const actions = document.createElement("div");
+      actions.className = "wx-editor__code-actions";
+      actions.dataset.wxEditorCodeActions = "true";
+
+      if (codeActionMenu.loading) {
+        actions.textContent = "Loading code actions...";
+      } else if (codeActionMenu.error) {
+        actions.textContent = codeActionMenu.error;
+      } else {
+        codeActionMenu.actions.slice(0, 9).forEach((action, index) => {
+          const item = document.createElement("span");
+          item.className = "wx-editor__code-action";
+          item.dataset.selected = String(index === codeActionMenu.selectedIndex);
+          item.dataset.wxEditorCodeAction = String(index + 1);
+          item.textContent = `${index + 1}:${action.title}`;
+          actions.append(item);
+        });
+      }
+
+      bottomRow.append(actions);
+      return;
+    }
+
+    const currentDiagnostic = getCurrentDiagnostic();
+
+    if (bottomMessage) {
+      const message = document.createElement("span");
+      message.className = "wx-editor__bottom-message";
+      message.dataset.tone = bottomMessage.tone;
+      message.dataset.wxEditorBottomMessage = "true";
+      message.textContent = bottomMessage.text;
+      bottomRow.append(message);
+      return;
+    }
+
+    if (hoverState.active) {
+      const message = document.createElement("span");
+      message.className = "wx-editor__bottom-message";
+      message.dataset.tone = "info";
+      message.dataset.wxEditorBottomMessage = "true";
+      message.textContent = hoverState.source ? `${hoverState.source}: ${hoverState.content}` : hoverState.content;
+      bottomRow.append(message);
+      return;
+    }
+
+    if (currentDiagnostic) {
+      const message = document.createElement("span");
+      const tone =
+        currentDiagnostic.severity === "error"
+          ? "error"
+          : currentDiagnostic.severity === "warning"
+            ? "warning"
+            : "info";
+      message.className = "wx-editor__bottom-message";
+      message.dataset.tone = tone;
+      message.dataset.wxEditorBottomMessage = "true";
+      message.textContent = `${currentDiagnostic.severity.toUpperCase()}: ${currentDiagnostic.message}`;
+      bottomRow.append(message);
       return;
     }
 
@@ -1131,6 +1456,70 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     return dirty;
+  }
+
+  function buildDiagnosticsCache(nextDiagnostics: readonly EditorDiagnostic[]): Map<number, EditorDiagnostic[]> {
+    const nextByLine = new Map<number, EditorDiagnostic[]>();
+
+    for (const diagnostic of nextDiagnostics) {
+      const safeFrom = Math.max(0, Math.min(state.doc.length, diagnostic.from));
+      const safeTo = Math.max(safeFrom, Math.min(state.doc.length, Math.max(diagnostic.from + 1, diagnostic.to)));
+      const startLine = state.doc.positionAt(safeFrom).line;
+      const endLine = state.doc.positionAt(Math.max(safeFrom, safeTo - 1)).line;
+
+      for (let line = startLine; line <= endLine; line += 1) {
+        const entry = nextByLine.get(line);
+
+        if (entry) {
+          entry.push({ ...diagnostic, from: safeFrom, to: safeTo });
+        } else {
+          nextByLine.set(line, [{ ...diagnostic, from: safeFrom, to: safeTo }]);
+        }
+      }
+    }
+
+    return nextByLine;
+  }
+
+  function refreshDiagnostics(): void {
+    const diagnosticsSource = languageServices?.diagnostics;
+    const requestId = ++diagnosticsRequestId;
+
+    if (!diagnosticsSource) {
+      if (diagnostics.length > 0 || diagnosticsByLine.size > 0) {
+        diagnostics = [];
+        diagnosticsByLine = new Map();
+        patchStatus();
+        patchBottomRow();
+        renderVisibleRows(true);
+      }
+      return;
+    }
+
+    void diagnosticsSource
+      .diagnostics(getSnapshot())
+      .then((nextDiagnostics) => {
+        if (destroyed || requestId !== diagnosticsRequestId) {
+          return;
+        }
+
+        diagnostics = nextDiagnostics;
+        diagnosticsByLine = buildDiagnosticsCache(nextDiagnostics);
+        patchStatus();
+        patchBottomRow();
+        renderVisibleRows(true);
+      })
+      .catch(() => {
+        if (destroyed || requestId !== diagnosticsRequestId) {
+          return;
+        }
+
+        diagnostics = [];
+        diagnosticsByLine = new Map();
+        setBottomMessage({ tone: "error", text: "Diagnostics request failed" });
+        patchStatus();
+        renderVisibleRows(true);
+      });
   }
 
   function remapHighlightCacheForChanges(
@@ -1326,6 +1715,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         changes.length === 0,
         highlightViewports?.nextViewport ?? getHighlightViewport(renderedViewport)
       );
+      refreshDiagnostics();
       return;
     }
 
@@ -1347,6 +1737,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   function openCommandLine(): void {
     pendingAction = null;
+    clearHover();
     commandLine = { active: true, value: "" };
     patchBottomRow();
   }
@@ -1356,7 +1747,242 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     patchBottomRow();
   }
 
+  function closeCodeActionMenu(): void {
+    codeActionMenu = {
+      active: false,
+      loading: false,
+      actions: [],
+      selectedIndex: 0,
+      error: null
+    };
+    patchBottomRow();
+  }
+
+  function setBottomMessage(message: BottomMessageState | null): void {
+    bottomMessage = message;
+    patchBottomRow();
+  }
+
+  function setHoverState(next: HoverState): void {
+    hoverState = next;
+    patchBottomRow();
+  }
+
+  function clearHover(preservePinned = false): void {
+    if (preservePinned && hoverState.pinned) {
+      return;
+    }
+
+    if (!hoverState.active) {
+      return;
+    }
+
+    setHoverState({
+      active: false,
+      pinned: false,
+      offset: null,
+      content: ""
+    });
+  }
+
+  function normalizeHover(hover: EditorHover | null): HoverState | null {
+    if (!hover || !hover.content.trim()) {
+      return null;
+    }
+
+    return {
+      active: true,
+      pinned: false,
+      offset: null,
+      content: hover.content,
+      source: hover.source
+    };
+  }
+
+  async function requestHover(offset: number, pinned = false): Promise<boolean> {
+    const hoverSource = languageServices?.hover;
+
+    if (!hoverSource) {
+      if (pinned) {
+        setBottomMessage({ tone: "warning", text: "No hover provider" });
+      }
+      return false;
+    }
+
+    if (hoverState.active && hoverState.offset === offset && hoverState.pinned === pinned) {
+      return true;
+    }
+
+    const requestId = ++hoverRequestId;
+    const nextHover = await hoverSource.hover(getSnapshot(), offset);
+
+    if (destroyed || requestId !== hoverRequestId) {
+      return false;
+    }
+
+    const normalized = normalizeHover(nextHover);
+
+    if (!normalized) {
+      if (pinned) {
+        setBottomMessage({ tone: "info", text: "No hover information" });
+      } else {
+        clearHover();
+      }
+      return false;
+    }
+
+    setBottomMessage(null);
+    setHoverState({
+      ...normalized,
+      pinned,
+      offset
+    });
+    return true;
+  }
+
+  function getCodeActionContext() {
+    const selection = getSelectionOffsets(state);
+    const overlappingDiagnostics = diagnostics.filter(
+      (entry) => entry.from < selection.to && entry.to > selection.from
+    );
+    const fallbackDiagnostics =
+      overlappingDiagnostics.length > 0 ? overlappingDiagnostics : getLineDiagnostics(getActiveLine(state));
+
+    return {
+      document: getSnapshot(),
+      selection,
+      diagnostics: fallbackDiagnostics
+    };
+  }
+
+  async function resolveCodeActionChanges(action: EditorCodeAction): Promise<readonly TextChange[] | null> {
+    if (action.changes && action.changes.length > 0) {
+      return action.changes;
+    }
+
+    return (await action.apply?.(getCodeActionContext())) ?? null;
+  }
+
+  async function applyCodeActionInternal(action: EditorCodeAction): Promise<boolean> {
+    const changes = await resolveCodeActionChanges(action);
+
+    if (!changes || changes.length === 0) {
+      setBottomMessage({ tone: "warning", text: `No edits for ${action.title}` });
+      return false;
+    }
+
+    controller.dispatch({
+      changes,
+      effects: [{ type: "language.code-action", value: action.title }]
+    });
+    closeCodeActionMenu();
+    setBottomMessage({ tone: "info", text: `Applied ${action.title}` });
+    return true;
+  }
+
+  async function loadCodeActions(): Promise<readonly EditorCodeAction[]> {
+    const codeActionSource = languageServices?.codeActions;
+
+    if (!codeActionSource) {
+      setBottomMessage({ tone: "warning", text: "No code actions provider" });
+      return [];
+    }
+
+    codeActionMenu = {
+      active: true,
+      loading: true,
+      actions: [],
+      selectedIndex: 0,
+      error: null
+    };
+    patchBottomRow();
+
+    let actions: readonly EditorCodeAction[];
+
+    try {
+      actions = await codeActionSource.getCodeActions(getCodeActionContext());
+    } catch {
+      closeCodeActionMenu();
+      setBottomMessage({ tone: "error", text: "Code actions request failed" });
+      return [];
+    }
+
+    codeActionMenu = {
+      active: true,
+      loading: false,
+      actions,
+      selectedIndex: 0,
+      error: actions.length === 0 ? "No code actions" : null
+    };
+    patchBottomRow();
+
+    if (actions.length === 0) {
+      closeCodeActionMenu();
+      setBottomMessage({ tone: "warning", text: "No code actions available" });
+    }
+
+    return actions;
+  }
+
+  async function formatDocument(): Promise<boolean> {
+    const formatter = languageServices?.formatter;
+
+    if (!formatter) {
+      setBottomMessage({ tone: "warning", text: "No formatter provider" });
+      return false;
+    }
+
+    let changes: readonly TextChange[];
+
+    try {
+      changes = await formatter.format({
+        document: getSnapshot(),
+        selection: getSelectionOffsets(state)
+      });
+    } catch {
+      setBottomMessage({ tone: "error", text: "Formatting failed" });
+      return false;
+    }
+
+    if (!changes || changes.length === 0) {
+      setBottomMessage({ tone: "info", text: "Already formatted" });
+      return false;
+    }
+
+    controller.dispatch({
+      changes,
+      effects: [{ type: "language.format" }]
+    });
+    setBottomMessage({ tone: "info", text: "Formatted document" });
+    return true;
+  }
+
+  function runCommandLineCommand(rawValue: string): void {
+    const value = rawValue.trim().toLowerCase();
+
+    closeCommandLine();
+
+    if (!value) {
+      return;
+    }
+
+    if (value === "format" || value === "fmt") {
+      void formatDocument();
+      return;
+    }
+
+    if (value === "code-actions" || value === "codeaction" || value === "ca") {
+      void loadCodeActions();
+      return;
+    }
+
+    setBottomMessage({ tone: "warning", text: `Unknown command: ${rawValue}` });
+  }
+
   function runCommand(command: Command): boolean {
+    setBottomMessage(null);
+    clearHover();
+    closeCodeActionMenu();
     return controller.execute(command, {
       requestFocus() {
         textarea.focus();
@@ -1484,10 +2110,72 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
+    if (codeActionMenu.active) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeCodeActionMenu();
+        return;
+      }
+
+      if (event.key === "ArrowLeft" || event.key === "h" || event.key === "ArrowUp" || event.key === "k") {
+        event.preventDefault();
+        if (codeActionMenu.actions.length > 0) {
+          codeActionMenu = {
+            ...codeActionMenu,
+            selectedIndex: Math.max(0, codeActionMenu.selectedIndex - 1)
+          };
+          patchBottomRow();
+        }
+        return;
+      }
+
+      if (event.key === "ArrowRight" || event.key === "l" || event.key === "ArrowDown" || event.key === "j") {
+        event.preventDefault();
+        if (codeActionMenu.actions.length > 0) {
+          codeActionMenu = {
+            ...codeActionMenu,
+            selectedIndex: Math.min(codeActionMenu.actions.length - 1, codeActionMenu.selectedIndex + 1)
+          };
+          patchBottomRow();
+        }
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const action = codeActionMenu.actions[codeActionMenu.selectedIndex];
+        if (action) {
+          void applyCodeActionInternal(action);
+        } else {
+          closeCodeActionMenu();
+        }
+        return;
+      }
+
+      if (/^[1-9]$/.test(event.key)) {
+        event.preventDefault();
+        const action = codeActionMenu.actions[Number(event.key) - 1];
+        if (action) {
+          void applyCodeActionInternal(action);
+        }
+        return;
+      }
+
+      return;
+    }
+
     if (commandLine.active) {
-      if (event.key === "Escape" || event.key === "Enter") {
+      if (event.key === "Escape") {
         event.preventDefault();
         closeCommandLine();
+        textarea.focus();
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const nextValue = commandLine.value;
+        runCommandLineCommand(nextValue);
         textarea.focus();
         return;
       }
@@ -1569,6 +2257,21 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         }
       }
 
+      if (nextPending.kind === "space") {
+        event.preventDefault();
+
+        if (event.key === "a") {
+          void loadCodeActions();
+          return;
+        }
+
+        if (event.key === "k") {
+          const hoverOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+          void requestHover(hoverOffset, true);
+          return;
+        }
+      }
+
       if (nextPending.kind === "find") {
         event.preventDefault();
         textarea.value = "";
@@ -1606,6 +2309,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       event.preventDefault();
       textarea.value = "";
       openCommandLine();
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === " ") {
+      event.preventDefault();
+      pendingAction = { kind: "space" };
       return;
     }
 
@@ -1671,6 +2380,30 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     void refreshHighlights(getHighlightViewport(renderedViewport), false);
   }
 
+  function handleMouseMove(event: MouseEvent): void {
+    if (commandLine.active || codeActionMenu.active) {
+      return;
+    }
+
+    const target = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-wx-editor-offset]") : null;
+    const offset = target?.dataset.wxEditorOffset ? Number(target.dataset.wxEditorOffset) : null;
+
+    if (offset === null || Number.isNaN(offset)) {
+      clearHover(true);
+      return;
+    }
+
+    if (hoverState.active && hoverState.offset === offset && !hoverState.pinned) {
+      return;
+    }
+
+    void requestHover(offset, false);
+  }
+
+  function handleMouseLeave(): void {
+    clearHover(true);
+  }
+
   root.addEventListener("focus", () => {
     if (document.activeElement !== textarea) {
       textarea.focus();
@@ -1682,6 +2415,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   textarea.addEventListener("keydown", handleKeydown);
   surface.addEventListener("wheel", handleWheel, { passive: false });
   surface.addEventListener("scroll", handleScroll);
+  viewportRows.addEventListener("mousemove", handleMouseMove);
+  viewportRows.addEventListener("mouseleave", handleMouseLeave);
   unsubscribeController = controller.subscribe(handleControllerUpdate);
 
   refreshGutterWidth(true);
@@ -1689,6 +2424,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   patchStatus();
   patchBottomRow();
   void syncLanguage([], true);
+  refreshDiagnostics();
 
   return {
     controller,
@@ -1709,6 +2445,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     focus() {
       textarea.focus();
     },
+    format() {
+      return formatDocument();
+    },
+    getCodeActions() {
+      return loadCodeActions();
+    },
+    applyCodeAction(action: EditorCodeAction) {
+      return applyCodeActionInternal(action);
+    },
     subscribe(listener) {
       return controller.subscribe(listener);
     },
@@ -1726,10 +2471,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       lastHighlightedRevision = -1;
       highlightCache.clear();
       highlightCoverage.clear();
+      diagnostics = [];
+      diagnosticsByLine = new Map();
       renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
       await syncLanguage([], true);
+      refreshDiagnostics();
     },
     async setLanguage(nextLanguage: LanguageProvider | null) {
       await this.setLanguageServices(languageProviderToServices(nextLanguage));
@@ -1746,9 +2494,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       highlightCoverage.clear();
       languageRevision = -1;
       lastHighlightedRevision = -1;
+      diagnostics = [];
+      diagnosticsByLine = new Map();
       surface.scrollTop = 0;
       controller.replaceState(createEditorState({ value, selection: createSelection(0, 0) }));
       await syncLanguage([], true);
+      refreshDiagnostics();
     }
   };
 }

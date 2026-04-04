@@ -1,6 +1,14 @@
-import type { HighlightRole } from "@whx/editor-language";
+import type { HighlightRole } from "@wx/editor-language";
 
-export type ThemeRole = HighlightRole | "background" | "currentLine" | "cursorText";
+export type ThemeRole =
+  | HighlightRole
+  | "background"
+  | "currentLine"
+  | "cursorText"
+  | "diagnosticError"
+  | "diagnosticWarning"
+  | "diagnosticInfo"
+  | "diagnosticHint";
 
 export interface ThemeSpec {
   name: string;
@@ -13,6 +21,10 @@ const roleFallbacks: Record<ThemeRole, string> = {
   currentLine: "#181d27",
   cursor: "#f5f5f5",
   cursorText: "#101218",
+  diagnosticError: "#ef4444",
+  diagnosticHint: "#94a3b8",
+  diagnosticInfo: "#38bdf8",
+  diagnosticWarning: "#f59e0b",
   function: "#8bd5ff",
   gutter: "#6f7a90",
   keyword: "#f7b267",
@@ -26,7 +38,7 @@ const roleFallbacks: Record<ThemeRole, string> = {
 };
 
 export const defaultTheme: ThemeSpec = {
-  name: "whx-daybreak",
+  name: "wx-daybreak",
   colors: roleFallbacks
 };
 
@@ -36,20 +48,24 @@ export function resolveThemeColor(theme: ThemeSpec, role: ThemeRole): string {
 
 export function createThemeVariables(theme: ThemeSpec): Record<string, string> {
   return {
-    "--whx-color-background": resolveThemeColor(theme, "background"),
-    "--whx-color-comment": resolveThemeColor(theme, "comment"),
-    "--whx-color-current-line": resolveThemeColor(theme, "currentLine"),
-    "--whx-color-cursor": resolveThemeColor(theme, "cursor"),
-    "--whx-color-cursor-text": resolveThemeColor(theme, "cursorText"),
-    "--whx-color-function": resolveThemeColor(theme, "function"),
-    "--whx-color-gutter": resolveThemeColor(theme, "gutter"),
-    "--whx-color-keyword": resolveThemeColor(theme, "keyword"),
-    "--whx-color-number": resolveThemeColor(theme, "number"),
-    "--whx-color-operator": resolveThemeColor(theme, "operator"),
-    "--whx-color-punctuation": resolveThemeColor(theme, "punctuation"),
-    "--whx-color-selection": resolveThemeColor(theme, "selection"),
-    "--whx-color-string": resolveThemeColor(theme, "string"),
-    "--whx-color-text": resolveThemeColor(theme, "text"),
-    "--whx-color-type": resolveThemeColor(theme, "type")
+    "--wx-color-background": resolveThemeColor(theme, "background"),
+    "--wx-color-comment": resolveThemeColor(theme, "comment"),
+    "--wx-color-current-line": resolveThemeColor(theme, "currentLine"),
+    "--wx-color-cursor": resolveThemeColor(theme, "cursor"),
+    "--wx-color-cursor-text": resolveThemeColor(theme, "cursorText"),
+    "--wx-color-diagnostic-error": resolveThemeColor(theme, "diagnosticError"),
+    "--wx-color-diagnostic-hint": resolveThemeColor(theme, "diagnosticHint"),
+    "--wx-color-diagnostic-info": resolveThemeColor(theme, "diagnosticInfo"),
+    "--wx-color-diagnostic-warning": resolveThemeColor(theme, "diagnosticWarning"),
+    "--wx-color-function": resolveThemeColor(theme, "function"),
+    "--wx-color-gutter": resolveThemeColor(theme, "gutter"),
+    "--wx-color-keyword": resolveThemeColor(theme, "keyword"),
+    "--wx-color-number": resolveThemeColor(theme, "number"),
+    "--wx-color-operator": resolveThemeColor(theme, "operator"),
+    "--wx-color-punctuation": resolveThemeColor(theme, "punctuation"),
+    "--wx-color-selection": resolveThemeColor(theme, "selection"),
+    "--wx-color-string": resolveThemeColor(theme, "string"),
+    "--wx-color-text": resolveThemeColor(theme, "text"),
+    "--wx-color-type": resolveThemeColor(theme, "type")
   };
 }

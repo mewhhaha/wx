@@ -1,4 +1,4 @@
-import { mapOffsetThroughChanges, type TextChange } from "@whx/editor-core";
+import { mapOffsetThroughChanges, type TextChange } from "@wx/editor-core";
 
 export interface TreeEditPosition {
   row: number;

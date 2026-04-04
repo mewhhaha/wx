@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { TextChange } from "@whx/editor-core";
+import type { TextChange } from "@wx/editor-core";
 
 import { advancePosition, applyTextChange, buildTreeEdit, positionAtOffset, rebaseTextChanges } from "./incrementalEdits";
 

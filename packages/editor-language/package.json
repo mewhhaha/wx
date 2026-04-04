@@ -1,5 +1,5 @@
 {
-  "name": "@whx/editor-language",
+  "name": "@wx/editor-language",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -16,6 +16,6 @@
     "build": "tsup src/index.ts --format esm --out-dir dist"
   },
   "dependencies": {
-    "@whx/editor-core": "workspace:*"
+    "@wx/editor-core": "workspace:*"
   }
 }

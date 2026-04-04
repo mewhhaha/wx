@@ -1,4 +1,4 @@
-import type { HighlightRole } from "@whx/editor-language";
+import type { HighlightRole } from "@wx/editor-language";
 
 export function mapCaptureNameToRole(name: string): HighlightRole {
   if (name.startsWith("comment")) {

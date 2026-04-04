@@ -1,4 +1,4 @@
-# WHX Motion Spec
+# WX Motion Spec
 
 This document defines the current editor motion semantics for `normal`, `insert`, and `visual` mode.
 

@@ -1,37 +1,37 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createEditorController, type EditorUpdate } from "@whx/editor-controller";
+import { createEditorController, type EditorUpdate } from "@wx/editor-controller";
 
-import { WhxEditorElement, defineWhxEditorElement } from "./index";
+import { WxEditorElement, defineWxEditorElement } from "./index";
 
-const TEST_TAG = "whx-editor-test";
+const TEST_TAG = "wx-editor-test";
 
-defineWhxEditorElement(TEST_TAG);
+defineWxEditorElement(TEST_TAG);
 
 afterEach(() => {
   document.body.replaceChildren();
 });
 
-describe("WhxEditorElement", () => {
+describe("WxEditorElement", () => {
   it("emits update, mode, and selection events", async () => {
-    const element = document.createElement(TEST_TAG) as WhxEditorElement;
+    const element = document.createElement(TEST_TAG) as WxEditorElement;
     element.value = "abc";
     document.body.append(element);
 
     const updates: EditorUpdate[] = [];
     const modes: string[] = [];
     const selections: number[] = [];
-    element.addEventListener("whx-update", (event) => {
+    element.addEventListener("wx-update", (event) => {
       updates.push((event as CustomEvent<EditorUpdate>).detail);
     });
-    element.addEventListener("whx-mode-change", (event) => {
+    element.addEventListener("wx-mode-change", (event) => {
       modes.push((event as CustomEvent<string>).detail);
     });
-    element.addEventListener("whx-selection-change", (event) => {
+    element.addEventListener("wx-selection-change", (event) => {
       selections.push((event as CustomEvent<{ ranges: Array<{ head: number }> }>).detail.ranges[0]?.head ?? -1);
     });
 
-    const textarea = element.shadowRoot?.querySelector("[data-whx-editor='input']") as HTMLTextAreaElement;
+    const textarea = element.shadowRoot?.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
 
@@ -42,7 +42,7 @@ describe("WhxEditorElement", () => {
 
   it("preserves externally owned controller state across reconnect", () => {
     const controller = createEditorController({ value: "abc" });
-    const element = document.createElement(TEST_TAG) as WhxEditorElement;
+    const element = document.createElement(TEST_TAG) as WxEditorElement;
     element.controller = controller;
     document.body.append(element);
 
@@ -51,11 +51,11 @@ describe("WhxEditorElement", () => {
       return true;
     });
 
-    expect(element.shadowRoot?.querySelector("[data-whx-editor-cursor='true']")?.textContent).toBe("b");
+    expect(element.shadowRoot?.querySelector("[data-wx-editor-cursor='true']")?.textContent).toBe("b");
 
     element.remove();
     document.body.append(element);
 
-    expect(element.shadowRoot?.querySelector("[data-whx-editor-cursor='true']")?.textContent).toBe("b");
+    expect(element.shadowRoot?.querySelector("[data-wx-editor-cursor='true']")?.textContent).toBe("b");
   });
 });

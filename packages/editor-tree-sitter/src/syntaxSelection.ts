@@ -1,4 +1,4 @@
-import type { SyntaxSelectionRange } from "@whx/editor-language";
+import type { SyntaxSelectionRange } from "@wx/editor-language";
 
 export interface SyntaxNodeLike {
   startIndex: number;

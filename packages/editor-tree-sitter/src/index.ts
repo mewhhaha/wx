@@ -1,4 +1,4 @@
-import type { TextChange, TextDocument } from "@whx/editor-core";
+import type { TextChange, TextDocument } from "@wx/editor-core";
 import type {
   EditorLanguageServices,
   EditorLineRange,
@@ -7,7 +7,7 @@ import type {
   LanguageProvider,
   SyntaxSelectionRange,
   SyntaxSelector
-} from "@whx/editor-language";
+} from "@wx/editor-language";
 
 import type { TreeSitterWorkerResponse } from "./messages";
 export { typescriptHighlightQuery } from "./highlightQuery";

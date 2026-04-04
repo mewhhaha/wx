@@ -1,5 +1,5 @@
 {
-  "name": "@whx/editor-tree-sitter",
+  "name": "@wx/editor-tree-sitter",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -16,8 +16,8 @@
     "build": "tsup src/index.ts src/treeSitter.worker.ts --format esm --out-dir dist"
   },
   "dependencies": {
-    "@whx/editor-core": "workspace:*",
-    "@whx/editor-language": "workspace:*",
-    "web-tree-sitter": "^0.26.7"
+    "@wx/editor-core": "workspace:*",
+    "@wx/editor-language": "workspace:*",
+    "web-tree-sitter": "^0.26.8"
   }
 }

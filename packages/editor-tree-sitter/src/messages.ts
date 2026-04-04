@@ -1,5 +1,5 @@
-import type { TextChange } from "@whx/editor-core";
-import type { EditorLineRange, HighlightSpan, SyntaxSelectionRange } from "@whx/editor-language";
+import type { TextChange } from "@wx/editor-core";
+import type { EditorLineRange, HighlightSpan, SyntaxSelectionRange } from "@wx/editor-language";
 
 export interface WorkerInitMessage {
   type: "init";

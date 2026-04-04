@@ -1,4 +1,4 @@
-import type { TextChange, TextDocument } from "@whx/editor-core";
+import type { TextChange, TextDocument } from "@wx/editor-core";
 
 export type HighlightRole =
   | "text"
@@ -40,6 +40,31 @@ export interface SyntaxSelectionRange {
   to: number;
 }
 
+export type DiagnosticSeverity = "error" | "warning" | "info" | "hint";
+
+export interface EditorDiagnostic {
+  from: number;
+  to: number;
+  severity: DiagnosticSeverity;
+  message: string;
+  source?: string;
+  code?: string | number;
+}
+
+export interface CodeActionContext {
+  document: LanguageDocumentSnapshot;
+  selection: SyntaxSelectionRange;
+  diagnostics: readonly EditorDiagnostic[];
+}
+
+export interface EditorCodeAction {
+  title: string;
+  kind?: string;
+  diagnostics?: readonly EditorDiagnostic[];
+  changes?: readonly TextChange[];
+  apply?(context: CodeActionContext): Promise<readonly TextChange[] | null> | readonly TextChange[] | null;
+}
+
 export interface Highlighter {
   open(document: LanguageDocumentSnapshot): Promise<void>;
   update(document: LanguageDocumentSnapshot, changes: readonly TextChange[]): Promise<void>;
@@ -64,16 +89,25 @@ export interface CompletionSource {
   complete(document: LanguageDocumentSnapshot, offset: number): Promise<unknown[]>;
 }
 
+export interface EditorHover {
+  content: string;
+  source?: string;
+}
+
 export interface HoverSource {
-  hover(document: LanguageDocumentSnapshot, offset: number): Promise<unknown | null>;
+  hover(document: LanguageDocumentSnapshot, offset: number): Promise<EditorHover | null>;
 }
 
 export interface DiagnosticsSource {
-  diagnostics(document: LanguageDocumentSnapshot): Promise<unknown[]>;
+  diagnostics(document: LanguageDocumentSnapshot): Promise<readonly EditorDiagnostic[]>;
+}
+
+export interface CodeActionSource {
+  getCodeActions(context: CodeActionContext): Promise<readonly EditorCodeAction[]>;
 }
 
 export interface Formatter {
-  format(document: LanguageDocumentSnapshot): Promise<readonly TextChange[]>;
+  format(context: { document: LanguageDocumentSnapshot; selection: SyntaxSelectionRange }): Promise<readonly TextChange[]>;
 }
 
 export interface EditorLanguageServices {
@@ -82,6 +116,7 @@ export interface EditorLanguageServices {
   completion?: CompletionSource;
   hover?: HoverSource;
   diagnostics?: DiagnosticsSource;
+  codeActions?: CodeActionSource;
   formatter?: Formatter;
 }
 

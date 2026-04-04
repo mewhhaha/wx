@@ -12,7 +12,7 @@ import {
   type InsertSession,
   type SelectionSet,
   type Transaction
-} from "@whx/editor-core";
+} from "@wx/editor-core";
 
 export interface HistoryEntry {
   doc: EditorState["doc"];

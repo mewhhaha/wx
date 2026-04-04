@@ -28,7 +28,7 @@ body {
   overflow: hidden;
 }
 
-.workspace__editor [data-whx-editor="root"] {
+.workspace__editor [data-wx-editor="root"] {
   height: 100%;
   border: 0;
   border-radius: 0;

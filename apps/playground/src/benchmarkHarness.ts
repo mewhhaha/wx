@@ -2,12 +2,12 @@ import treeSitterWasmUrl from "./assets/web-tree-sitter.wasm?url";
 import typescriptWasmUrl from "./assets/tree-sitter-typescript.wasm?url";
 import { phTheme } from "./phTheme";
 
-import { createTreeSitterLanguageServices, typescriptHighlightQuery } from "@whx/editor-tree-sitter";
-import { createEditor, type EditorHandle } from "@whx/editor-view-dom";
+import { createTreeSitterLanguageServices, typescriptHighlightQuery } from "@wx/editor-tree-sitter";
+import { createEditor, type EditorHandle } from "@wx/editor-view-dom";
 
 declare global {
   interface Window {
-    __whxBench?: {
+    __wxBench?: {
       runSuite(options?: Partial<BenchmarkRunOptions>): Promise<BenchmarkSuiteResult>;
     };
   }
@@ -126,7 +126,7 @@ async function mountEditor(
   editor.focus();
   await waitForDomQuiet(mount);
 
-  const textarea = mount.querySelector("[data-whx-editor='input']");
+  const textarea = mount.querySelector("[data-wx-editor='input']");
 
   if (!(textarea instanceof HTMLTextAreaElement)) {
     throw new Error("Benchmark could not find editor textarea");
@@ -178,7 +178,7 @@ async function runScenario(
     try {
       const moveDownMs = await measureMovement(textarea, mount);
       const newlineAtTopMs = await measureNewlineAtTop(textarea, mount);
-      const rowCount = mount.querySelectorAll("[data-whx-editor-row]").length;
+      const rowCount = mount.querySelectorAll("[data-wx-editor-row]").length;
 
       runs.push({
         mountMs,
@@ -212,7 +212,7 @@ export function installBenchmarkHarness(app: HTMLDivElement): void {
     throw new Error("Benchmark harness could not find mount point");
   }
 
-  window.__whxBench = {
+  window.__wxBench = {
     async runSuite(input = {}) {
       const options: BenchmarkRunOptions = {
         ...DEFAULT_OPTIONS,

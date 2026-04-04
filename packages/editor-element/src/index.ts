@@ -1,10 +1,10 @@
-import type { EditorController, EditorUpdate } from "@whx/editor-controller";
-import type { EditorLanguageServices, LanguageProvider } from "@whx/editor-language";
-import { languageProviderToServices } from "@whx/editor-language";
-import { defaultTheme, type ThemeSpec } from "@whx/editor-theme";
-import { createEditor, type EditorHandle } from "@whx/editor-view-dom";
+import type { EditorController, EditorUpdate } from "@wx/editor-controller";
+import type { EditorLanguageServices, LanguageProvider } from "@wx/editor-language";
+import { languageProviderToServices } from "@wx/editor-language";
+import { defaultTheme, type ThemeSpec } from "@wx/editor-theme";
+import { createEditor, type EditorHandle } from "@wx/editor-view-dom";
 
-export class WhxEditorElement extends HTMLElement {
+export class WxEditorElement extends HTMLElement {
   private readonly mountPoint: HTMLDivElement;
   private editor: EditorHandle | null = null;
   private unsubscribe = () => {};
@@ -92,22 +92,22 @@ export class WhxEditorElement extends HTMLElement {
   }
 
   private dispatchUpdateEvents(update: EditorUpdate): void {
-    this.dispatchEvent(new CustomEvent("whx-update", { detail: update }));
+    this.dispatchEvent(new CustomEvent("wx-update", { detail: update }));
 
     if (update.modeChanged) {
-      this.dispatchEvent(new CustomEvent("whx-mode-change", { detail: update.nextState.mode }));
+      this.dispatchEvent(new CustomEvent("wx-mode-change", { detail: update.nextState.mode }));
     }
 
     if (update.selectionChanged) {
-      this.dispatchEvent(new CustomEvent("whx-selection-change", { detail: update.nextState.selection }));
+      this.dispatchEvent(new CustomEvent("wx-selection-change", { detail: update.nextState.selection }));
     }
   }
 }
 
-export function defineWhxEditorElement(tagName = "whx-editor"): typeof WhxEditorElement {
+export function defineWxEditorElement(tagName = "wx-editor"): typeof WxEditorElement {
   if (!customElements.get(tagName)) {
-    customElements.define(tagName, WhxEditorElement);
+    customElements.define(tagName, WxEditorElement);
   }
 
-  return customElements.get(tagName) as typeof WhxEditorElement;
+  return customElements.get(tagName) as typeof WxEditorElement;
 }
