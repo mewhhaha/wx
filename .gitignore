@@ -8,3 +8,4 @@ test-results
 *.tsbuildinfo
 .DS_Store
 pnpm-debug.log*
+target

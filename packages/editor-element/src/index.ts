@@ -1,5 +1,5 @@
 import type { EditorController, EditorUpdate } from "@wx/editor-controller";
-import type { EditorLanguageServices, LanguageProvider } from "@wx/editor-language";
+import type { EditorLanguageServiceInput, LanguageProvider } from "@wx/editor-language";
 import { languageProviderToServices } from "@wx/editor-language";
 import { defaultTheme, type ThemeSpec } from "@wx/editor-theme";
 import { createEditor, type EditorHandle } from "@wx/editor-view-dom";
@@ -10,7 +10,7 @@ export class WxEditorElement extends HTMLElement {
   private unsubscribe = () => {};
   private _value = "";
   private _language: LanguageProvider | null = null;
-  private _languageServices: EditorLanguageServices | null = null;
+  private _languageServices: EditorLanguageServiceInput | null = null;
   private _theme: ThemeSpec = defaultTheme;
   private _controller: EditorController | null = null;
 
@@ -63,11 +63,11 @@ export class WxEditorElement extends HTMLElement {
     }
   }
 
-  get languageServices(): EditorLanguageServices | null {
+  get languageServices(): EditorLanguageServiceInput | null {
     return this._languageServices;
   }
 
-  set languageServices(nextLanguageServices: EditorLanguageServices | null) {
+  set languageServices(nextLanguageServices: EditorLanguageServiceInput | null) {
     this._languageServices = nextLanguageServices;
     void this.editor?.setLanguageServices(nextLanguageServices);
   }

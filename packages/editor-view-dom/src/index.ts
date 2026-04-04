@@ -1,9 +1,11 @@
 import {
   appendInsertMode,
+  changeSelection,
   createEditorState,
+  createCharacterSelection,
   createSelection,
   deleteSelection,
-  deleteBackward,
+  deleteBackwardIndentAware,
   deleteForward,
   enterInsertMode,
   enterNormalMode,
@@ -66,6 +68,7 @@ import type {
   EditorCodeAction,
   EditorDiagnostic,
   EditorHover,
+  EditorLanguageServiceInput,
   EditorLanguageServices,
   EditorLineRange,
   HighlightRole,
@@ -78,10 +81,30 @@ import { defaultTheme, createThemeVariables, type ThemeSpec } from "@wx/editor-t
 export interface CreateEditorOptions {
   controller?: EditorController;
   filePath?: string;
+  host?: EditorHostServices;
   value?: string;
   language?: LanguageProvider | null;
-  languageServices?: EditorLanguageServices | null;
+  languageServices?: EditorLanguageServiceInput | null;
   theme?: ThemeSpec;
+  softWrap?: boolean;
+  indentGuides?: {
+    render?: boolean;
+    character?: string;
+    skipLevels?: number;
+  };
+}
+
+export type EditorLineChangeKind = "added" | "modified";
+
+export interface EditorLineChange {
+  line: number;
+  kind: EditorLineChangeKind;
+}
+
+export interface EditorHostServices {
+  writeFile?(context: { filePath: string; text: string }): Promise<void>;
+  getLineChanges?(context: { filePath: string; text: string }): Promise<readonly EditorLineChange[]>;
+  didWriteFile?(context: { filePath: string; text: string }): Promise<void> | void;
 }
 
 export interface EditorHandle {
@@ -95,7 +118,7 @@ export interface EditorHandle {
   subscribe(listener: (update: EditorUpdate) => void): () => void;
   getState(): EditorState;
   setFilePath(filePath: string): void;
-  setLanguageServices(languageServices: EditorLanguageServices | null): Promise<void>;
+  setLanguageServices(languageServices: EditorLanguageServiceInput | null): Promise<void>;
   setLanguage(language: LanguageProvider | null): Promise<void>;
   setTheme(theme: ThemeSpec): void;
   setValue(value: string): Promise<void>;
@@ -106,6 +129,7 @@ interface LineFragment {
   endOffset: number | null;
   text: string;
   role: HighlightRole;
+  isIndentGuide: boolean;
   isSelected: boolean;
   isCursor: boolean;
   cursorKind: "block" | null;
@@ -141,6 +165,8 @@ interface HoverState {
   top: number;
 }
 
+type LineChangesByLine = Map<number, EditorLineChangeKind>;
+
 type PendingAction =
   | null
   | { kind: "g" }
@@ -165,6 +191,8 @@ const DIAGNOSTIC_SEVERITY_ORDER: Record<DiagnosticSeverity, number> = {
 
 const SURFACE_VERTICAL_PADDING = 16;
 const EMPTY_CELL_TEXT = "\u00a0";
+const INSERT_TAB_TEXT = "  ";
+const DEFAULT_INDENT_GUIDE_CHARACTER = "│";
 const HIGHLIGHT_CONTEXT_LINES = 2;
 const VIEWPORT_OVERSCAN_LINES = 6;
 const END_OF_LINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "hint";
@@ -172,7 +200,7 @@ const CURSOR_LINE_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "warning";
 const OTHER_LINES_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "error";
 
 interface RowView {
-  lineIndex: number;
+  visualRowIndex: number;
   host: HTMLDivElement;
   row: HTMLDivElement;
   gutter: HTMLDivElement;
@@ -182,6 +210,16 @@ interface RowView {
 interface LineViewport {
   fromLine: number;
   toLine: number;
+}
+
+interface VisualRow {
+  docLine: number;
+  visualRowIndex: number;
+  segmentStart: number;
+  segmentEnd: number;
+  startColumn: number;
+  isContinuation: boolean;
+  isLastSegment: boolean;
 }
 
 function addClassName(element: Element, className: string, when: boolean): void {
@@ -206,6 +244,14 @@ function meetsDiagnosticThreshold(severity: DiagnosticSeverity, minimum: Diagnos
   return DIAGNOSTIC_SEVERITY_ORDER[severity] <= DIAGNOSTIC_SEVERITY_ORDER[minimum];
 }
 
+function normalizeLanguageServices(input: EditorLanguageServiceInput | null | undefined): EditorLanguageServices[] {
+  if (!input) {
+    return [];
+  }
+
+  return Array.isArray(input) ? [...input] : [input];
+}
+
 function mountStyles(styleHost: HTMLElement): void {
   if (styleHost.querySelector("style[data-wx-style='true']")) {
     return;
@@ -220,6 +266,7 @@ function mountStyles(styleHost: HTMLElement): void {
       flex-direction: column;
       min-height: 240px;
       overflow: hidden;
+      box-sizing: border-box;
       background: var(--wx-color-background);
       color: var(--wx-color-text);
       border: 1px solid rgba(148, 163, 184, 0.18);
@@ -288,11 +335,10 @@ function mountStyles(styleHost: HTMLElement): void {
 
     .wx-editor__gutter {
       display: inline-grid;
-      grid-template-columns: 1ch minmax(0, 1fr);
+      grid-template-columns: 1ch minmax(calc(var(--wx-gutter-digits, 2) * 1ch), 1fr) 0.6ch;
       align-items: center;
       gap: 0.5ch;
       padding-right: 14px;
-      text-align: right;
       color: var(--wx-color-gutter);
       user-select: none;
     }
@@ -300,6 +346,26 @@ function mountStyles(styleHost: HTMLElement): void {
     .wx-editor__gutter-number {
       display: inline-block;
       min-width: 0;
+      width: 100%;
+      text-align: right;
+      justify-self: end;
+    }
+
+    .wx-editor__gutter-change {
+      width: 0.45ch;
+      min-height: calc(var(--wx-line-height, 24px) * 0.92);
+      justify-self: end;
+      visibility: hidden;
+    }
+
+    .wx-editor__gutter-change[data-change="added"] {
+      visibility: visible;
+      background: #22c55e;
+    }
+
+    .wx-editor__gutter-change[data-change="modified"] {
+      visibility: visible;
+      background: #f59e0b;
     }
 
     .wx-editor__gutter-marker {
@@ -359,6 +425,10 @@ function mountStyles(styleHost: HTMLElement): void {
     .wx-role-punctuation { color: var(--wx-color-punctuation); }
     .wx-role-string { color: var(--wx-color-string); }
     .wx-role-type { color: var(--wx-color-type); }
+
+    .wx-indent-guide {
+      color: color-mix(in srgb, var(--wx-color-gutter) 88%, transparent);
+    }
 
     .wx-diagnostic-error {
       text-decoration: underline wavy var(--wx-color-diagnostic-error);
@@ -470,7 +540,6 @@ function mountStyles(styleHost: HTMLElement): void {
 
     .wx-is-selected {
       background: var(--wx-color-selection);
-      border-radius: 4px;
     }
 
     .wx-cursor-block {
@@ -478,7 +547,6 @@ function mountStyles(styleHost: HTMLElement): void {
       min-width: 1ch;
       color: var(--wx-color-cursor-text);
       background: var(--wx-color-cursor);
-      border-radius: 4px;
     }
 
     .wx-cursor-line {
@@ -495,13 +563,15 @@ function mountStyles(styleHost: HTMLElement): void {
       grid-template-columns: auto minmax(0, 1fr) auto;
       align-items: center;
       gap: 14px;
+      box-sizing: border-box;
+      flex: 0 0 var(--wx-line-height, 24px);
       height: var(--wx-line-height, 24px);
       padding: 0 1ch 0 0;
       background: #0b0d12;
       border-top: 1px solid rgba(148, 163, 184, 0.14);
       color: #dbe2f0;
       font-size: 15px;
-      line-height: 1;
+      line-height: var(--wx-line-height, 24px);
     }
 
     .wx-editor__status-mode {
@@ -533,6 +603,8 @@ function mountStyles(styleHost: HTMLElement): void {
     }
 
     .wx-editor__bottom-row {
+      box-sizing: border-box;
+      flex: 0 0 var(--wx-line-height, 24px);
       height: var(--wx-line-height, 24px);
       background: #0a0b0f;
       border-top: 1px solid rgba(148, 163, 184, 0.08);
@@ -540,6 +612,7 @@ function mountStyles(styleHost: HTMLElement): void {
       display: flex;
       align-items: center;
       padding: 0 1ch;
+      line-height: var(--wx-line-height, 24px);
       white-space: pre;
     }
 
@@ -647,8 +720,11 @@ function mountStyles(styleHost: HTMLElement): void {
     }
 
     .wx-editor__filler-gutter {
+      display: inline-grid;
+      grid-template-columns: 1ch minmax(calc(var(--wx-gutter-digits, 2) * 1ch), 1fr) 0.6ch;
+      align-items: center;
+      gap: 0.5ch;
       padding-right: 14px;
-      text-align: right;
     }
   `;
 
@@ -719,6 +795,8 @@ function commandForNormalMode(key: string): Command | null {
       return moveDown;
     case "b":
       return moveWordBackward;
+    case "c":
+      return changeSelection;
     case "d":
       return deleteSelection;
     case "e":
@@ -782,6 +860,8 @@ function commandForVisualMode(key: string): Command | null {
       return moveDown;
     case "b":
       return moveWordBackward;
+    case "c":
+      return changeSelection;
     case "d":
       return deleteSelection;
     case "e":
@@ -813,6 +893,8 @@ function commandForInsertMode(key: string): Command | null {
   switch (key) {
     case "Escape":
       return enterNormalMode;
+    case "Tab":
+      return insertText(INSERT_TAB_TEXT);
     case "ArrowLeft":
       return moveLeft;
     case "ArrowRight":
@@ -822,7 +904,7 @@ function commandForInsertMode(key: string): Command | null {
     case "ArrowDown":
       return moveDown;
     case "Backspace":
-      return deleteBackward;
+      return deleteBackwardIndentAware(INSERT_TAB_TEXT);
     case "Delete":
       return deleteForward;
     case "Enter":
@@ -932,16 +1014,57 @@ function resolveOffsetWithinRun(
   return startOffset + index;
 }
 
+function getIndentGuideOffsets(
+  lineText: string,
+  lineStart: number,
+  options: { render: boolean; character: string; skipLevels: number; indentWidth: number }
+): Set<number> {
+  const offsets = new Set<number>();
+
+  if (!options.render || !lineText || options.indentWidth <= 0) {
+    return offsets;
+  }
+
+  let visualColumn = 0;
+  let indentLevel = 0;
+
+  for (let index = 0; index < lineText.length; index += 1) {
+    const character = lineText[index];
+
+    if (character !== " " && character !== "\t") {
+      break;
+    }
+
+    if (visualColumn % options.indentWidth === 0) {
+      if (indentLevel >= options.skipLevels) {
+        offsets.add(lineStart + index);
+      }
+      indentLevel += 1;
+    }
+
+    visualColumn += character === "\t" ? options.indentWidth : 1;
+  }
+
+  return offsets;
+}
+
 function renderLineFragments(
   line: { start: number; text: string },
   state: EditorState,
   spans: HighlightSpan[],
-  lineDiagnostics: readonly EditorDiagnostic[]
+  lineDiagnostics: readonly EditorDiagnostic[],
+  segmentStart: number,
+  segmentEnd: number,
+  includeLineEndingCell: boolean,
+  indentGuideOptions: { render: boolean; character: string; skipLevels: number; indentWidth: number }
 ): LineFragment[] {
   const fragments: LineFragment[] = [];
   const activeOffset = getActiveCharacterOffset(state);
   const selection = getSelectionOffsets(state);
   const lineEnd = line.start + line.text.length;
+  const segmentStartIndex = Math.max(0, segmentStart - line.start);
+  const segmentEndIndex = Math.max(segmentStartIndex, segmentEnd - line.start);
+  const indentGuideOffsets = getIndentGuideOffsets(line.text, line.start, indentGuideOptions);
   const pushFragment = (fragment: LineFragment): void => {
     const previous = fragments[fragments.length - 1];
 
@@ -954,6 +1077,7 @@ function renderLineFragments(
       !previous.isCursor &&
       !fragment.isCursor &&
       previous.role === fragment.role &&
+      previous.isIndentGuide === fragment.isIndentGuide &&
       previous.isSelected === fragment.isSelected &&
       previous.diagnosticSeverity === fragment.diagnosticSeverity &&
       previous.endOffset === fragment.offset
@@ -974,6 +1098,7 @@ function renderLineFragments(
           endOffset: line.start + 1,
           text: EMPTY_CELL_TEXT,
           role: "text",
+          isIndentGuide: false,
           isSelected: false,
           isCursor: false,
           cursorKind: null,
@@ -982,14 +1107,15 @@ function renderLineFragments(
       ];
     }
 
-    for (let index = 0; index < line.text.length; index += 1) {
+    for (let index = segmentStartIndex; index < segmentEndIndex; index += 1) {
       const offset = line.start + index;
 
       pushFragment({
         offset,
         endOffset: offset + 1,
-        text: line.text[index] ?? EMPTY_CELL_TEXT,
+        text: indentGuideOffsets.has(offset) ? indentGuideOptions.character : line.text[index] ?? EMPTY_CELL_TEXT,
         role: roleAtOffset(spans, offset),
+        isIndentGuide: indentGuideOffsets.has(offset),
         isSelected: false,
         isCursor: false,
         cursorKind: null,
@@ -1008,6 +1134,7 @@ function renderLineFragments(
         endOffset: line.start + 1,
         text: EMPTY_CELL_TEXT,
         role: "text",
+        isIndentGuide: false,
         isSelected: selected,
         isCursor: activeOffset === line.start,
         cursorKind: activeOffset === line.start ? "block" : null,
@@ -1016,13 +1143,14 @@ function renderLineFragments(
     ];
   }
 
-  for (let index = 0; index < line.text.length; index += 1) {
+  for (let index = segmentStartIndex; index < segmentEndIndex; index += 1) {
     const offset = line.start + index;
     pushFragment({
       offset,
       endOffset: offset + 1,
-      text: line.text[index] ?? " ",
+      text: indentGuideOffsets.has(offset) ? indentGuideOptions.character : line.text[index] ?? " ",
       role: roleAtOffset(spans, offset),
+      isIndentGuide: indentGuideOffsets.has(offset),
       isSelected: offset >= selection.from && offset < selection.to,
       isCursor: offset === activeOffset,
       cursorKind: offset === activeOffset ? "block" : null,
@@ -1034,12 +1162,13 @@ function renderLineFragments(
   const lineEndingSelected = hasLineEnding && lineEnd >= selection.from && lineEnd < selection.to;
   const lineEndingCursor = hasLineEnding && activeOffset === lineEnd;
 
-  if (lineEndingSelected || lineEndingCursor) {
+  if (includeLineEndingCell && (lineEndingSelected || lineEndingCursor)) {
     pushFragment({
       offset: lineEnd,
       endOffset: lineEnd + 1,
       text: EMPTY_CELL_TEXT,
       role: "text",
+      isIndentGuide: false,
       isSelected: lineEndingSelected,
       isCursor: lineEndingCursor,
       cursorKind: lineEndingCursor ? "block" : null,
@@ -1083,6 +1212,13 @@ function normalizeViewport(viewport: { fromLine: number; toLine: number }, lineC
 }
 
 export function createEditor(container: HTMLElement, options: CreateEditorOptions = {}): EditorHandle {
+  const softWrap = options.softWrap ?? false;
+  const indentGuides = {
+    render: options.indentGuides?.render ?? false,
+    character: options.indentGuides?.character ?? DEFAULT_INDENT_GUIDE_CHARACTER,
+    skipLevels: Math.max(0, options.indentGuides?.skipLevels ?? 0),
+    indentWidth: INSERT_TAB_TEXT.length
+  };
   const controller =
     options.controller ??
     createEditorController({
@@ -1091,12 +1227,19 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     });
   let state = controller.getState();
   let filePath = options.filePath ?? "untitled.ts";
-  let languageServices = options.languageServices ?? languageProviderToServices(options.language ?? null);
+  const host = options.host ?? null;
+  let languageServices = normalizeLanguageServices(
+    options.languageServices ?? languageProviderToServices(options.language ?? null)
+  );
   let theme = options.theme ?? defaultTheme;
   let highlightCache = new Map<number, HighlightSpan[]>();
   let highlightCoverage = new Set<number>();
   let rowViews: RowView[] = [];
   let renderedViewport: LineViewport = { fromLine: 0, toLine: -1 };
+  let visualRows: VisualRow[] = [];
+  let lineVisualRanges: Array<{ from: number; to: number }> = [];
+  let wrapColumns = -1;
+  let wrapRevision = -1;
   let commandLine: CommandLineState = { active: false, value: "" };
   let bottomMessage: BottomMessageState | null = null;
   let codeActionMenu: CodeActionMenuState = {
@@ -1117,17 +1260,27 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   };
   let diagnostics: readonly EditorDiagnostic[] = [];
   let diagnosticsByLine = new Map<number, EditorDiagnostic[]>();
+  let lineChangesByLine: LineChangesByLine = new Map();
   let pendingAction: PendingAction = null;
+  let pendingCount = "";
   let lastRepeatableMotion: RepeatableMotion | null = null;
   let languageRevision = -1;
   let lastHighlightedRevision = -1;
   let highlightRequestId = 0;
   let diagnosticsRequestId = 0;
+  let lineChangesRequestId = 0;
   let hoverRequestId = 0;
   let gutterWidth = 0;
   let destroyed = false;
   let mountedContainer: HTMLElement | null = container;
   let unsubscribeController = () => {};
+
+  const getHighlighter = () => languageServices.find((services) => services.highlighter)?.highlighter;
+  const getSyntaxSelector = () => languageServices.find((services) => services.syntaxSelector)?.syntaxSelector;
+  const getHoverSource = () => languageServices.find((services) => services.hover)?.hover;
+  const getDiagnosticsSource = () => languageServices.find((services) => services.diagnostics)?.diagnostics;
+  const getCodeActionSource = () => languageServices.find((services) => services.codeActions)?.codeActions;
+  const getFormatter = () => languageServices.find((services) => services.formatter)?.formatter;
 
   const root = document.createElement("div");
   const surface = document.createElement("div");
@@ -1151,6 +1304,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   root.dataset.wxEditor = "root";
   root.tabIndex = 0;
   root.style.setProperty("--wx-line-height", `${metrics.lineHeight}px`);
+  root.style.setProperty("--wx-gutter-digits", String(Math.max(2, String(Math.max(1, state.doc.lineCount)).length)));
 
   surface.className = "wx-editor__surface";
   surface.dataset.wxEditor = "surface";
@@ -1312,7 +1466,145 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     };
   }
 
-  function createRowView(lineIndex: number): RowView {
+  function getContentColumns(): number {
+    if (!softWrap) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    const surfaceWidth = surface.clientWidth || root.clientWidth || container.clientWidth || 800;
+    const contentWidth = Math.max(metrics.charWidth, surfaceWidth - gutterWidth - 8);
+    return Math.max(1, Math.floor(contentWidth / metrics.charWidth));
+  }
+
+  function rebuildVisualRows(force = false): boolean {
+    const nextWrapColumns = getContentColumns();
+
+    if (!force && wrapRevision === state.revision && wrapColumns === nextWrapColumns) {
+      return false;
+    }
+
+    wrapColumns = nextWrapColumns;
+    wrapRevision = state.revision;
+    visualRows = [];
+    lineVisualRanges = [];
+
+    for (let lineIndex = 0; lineIndex < state.doc.lineCount; lineIndex += 1) {
+      const line = state.doc.lineAt(lineIndex);
+      const lineStartRow = visualRows.length;
+      const textLength = line.text.length;
+
+      if (!softWrap || textLength <= wrapColumns || wrapColumns === Number.MAX_SAFE_INTEGER) {
+        visualRows.push({
+          docLine: lineIndex,
+          visualRowIndex: visualRows.length,
+          segmentStart: line.start,
+          segmentEnd: line.end,
+          startColumn: 0,
+          isContinuation: false,
+          isLastSegment: true
+        });
+      } else {
+        for (let startColumn = 0; startColumn < textLength; startColumn += wrapColumns) {
+          const endColumn = Math.min(textLength, startColumn + wrapColumns);
+          visualRows.push({
+            docLine: lineIndex,
+            visualRowIndex: visualRows.length,
+            segmentStart: line.start + startColumn,
+            segmentEnd: line.start + endColumn,
+            startColumn,
+            isContinuation: startColumn > 0,
+            isLastSegment: endColumn >= textLength
+          });
+        }
+      }
+
+      if (visualRows.length === lineStartRow) {
+        visualRows.push({
+          docLine: lineIndex,
+          visualRowIndex: visualRows.length,
+          segmentStart: line.start,
+          segmentEnd: line.start,
+          startColumn: 0,
+          isContinuation: false,
+          isLastSegment: true
+        });
+      }
+
+      lineVisualRanges[lineIndex] = {
+        from: lineStartRow,
+        to: visualRows.length - 1
+      };
+    }
+
+    return true;
+  }
+
+  function getVisualRow(visualRowIndex: number): VisualRow {
+    return visualRows[Math.max(0, Math.min(visualRows.length - 1, visualRowIndex))] ?? {
+      docLine: 0,
+      visualRowIndex: 0,
+      segmentStart: 0,
+      segmentEnd: 0,
+      startColumn: 0,
+      isContinuation: false,
+      isLastSegment: true
+    };
+  }
+
+  function getVisibleLineCountForViewport(viewport: LineViewport): number {
+    return Math.max(1, viewport.toLine - viewport.fromLine + 1);
+  }
+
+  function getLineViewportForVisualViewport(viewport: LineViewport): LineViewport {
+    if (visualRows.length === 0) {
+      return { fromLine: 0, toLine: Math.max(0, state.doc.lineCount - 1) };
+    }
+
+    const fromRow = getVisualRow(viewport.fromLine);
+    const toRow = getVisualRow(viewport.toLine);
+
+    return normalizeViewport(
+      {
+        fromLine: fromRow.docLine,
+        toLine: toRow.docLine
+      },
+      state.doc.lineCount
+    );
+  }
+
+  function getHighlightViewport(viewport: LineViewport): LineViewport {
+    const lineViewport = getLineViewportForVisualViewport(viewport);
+    return normalizeViewport(
+      {
+        fromLine: lineViewport.fromLine - HIGHLIGHT_CONTEXT_LINES,
+        toLine: lineViewport.toLine + HIGHLIGHT_CONTEXT_LINES
+      },
+      state.doc.lineCount
+    );
+  }
+
+  function getVisualRowForOffset(offset: number): { rowIndex: number; column: number; row: VisualRow } {
+    const position = state.doc.positionAt(offset);
+    const line = state.doc.lineAt(position.line);
+    const range = lineVisualRanges[position.line] ?? { from: 0, to: 0 };
+    const rowOffset = softWrap && wrapColumns !== Number.MAX_SAFE_INTEGER ? Math.floor(position.column / wrapColumns) : 0;
+    const rowIndex = Math.max(range.from, Math.min(range.to, range.from + rowOffset));
+    const row = getVisualRow(rowIndex);
+    const maxColumn = Math.max(0, line.text.length - row.startColumn);
+    return {
+      rowIndex,
+      column: Math.max(0, Math.min(maxColumn, position.column - row.startColumn)),
+      row
+    };
+  }
+
+  function isDocLineVisible(lineIndex: number): boolean {
+    const range = lineVisualRanges[lineIndex];
+    return !!range && range.to >= renderedViewport.fromLine && range.from <= renderedViewport.toLine;
+  }
+
+  function createRowView(visualRowIndex: number): RowView {
+    const visualRow = getVisualRow(visualRowIndex);
     const host = document.createElement("div");
     const row = document.createElement("div");
     const gutter = document.createElement("div");
@@ -1320,19 +1612,20 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     host.className = "wx-editor__line-group";
     row.className = "wx-editor__row";
-    row.dataset.wxEditorRow = String(lineIndex + 1);
+    row.dataset.wxEditorRow = String(visualRow.docLine + 1);
+    row.dataset.wxEditorVisualRow = String(visualRowIndex + 1);
 
     gutter.className = "wx-editor__gutter";
-    gutter.dataset.wxEditorGutter = String(lineIndex + 1);
+    gutter.dataset.wxEditorGutter = String(visualRow.docLine + 1);
 
     content.className = "wx-editor__content";
-    content.dataset.wxEditorContent = String(lineIndex + 1);
+    content.dataset.wxEditorContent = String(visualRow.docLine + 1);
 
     row.append(gutter, content);
     host.append(row);
 
     return {
-      lineIndex,
+      visualRowIndex,
       host,
       row,
       gutter,
@@ -1345,13 +1638,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function refreshGutterWidth(force = false): void {
-    const nextWidth = Math.max(2, String(Math.max(1, state.doc.lineCount)).length) * metrics.charWidth + 24;
+    const digitCount = Math.max(2, String(Math.max(1, state.doc.lineCount)).length);
+    const nextWidth = (1 + digitCount + 0.6 + 1) * metrics.charWidth + 20;
 
     if (!force && nextWidth === gutterWidth) {
       return;
     }
 
     gutterWidth = nextWidth;
+    root.style.setProperty("--wx-gutter-digits", String(digitCount));
 
     for (const view of rowViews) {
       view.row.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
@@ -1377,6 +1672,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     return best;
+  }
+
+  function getLineChangeKind(lineIndex: number): EditorLineChangeKind | null {
+    return lineChangesByLine.get(lineIndex) ?? null;
   }
 
   function getInlineDiagnosticForLine(lineIndex: number): EditorDiagnostic | null {
@@ -1422,38 +1721,60 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return activeLineDiagnostics[0] ?? null;
   }
 
-  function patchRowView(view: RowView, lineIndex: number): void {
+  function patchRowView(view: RowView, visualRowIndex: number): void {
+    const visualRow = getVisualRow(visualRowIndex);
+    const lineIndex = visualRow.docLine;
     const line = state.doc.lineAt(lineIndex);
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const cursorPosition = state.doc.positionAt(activeOffset);
+    const cursorVisual = getVisualRowForOffset(activeOffset);
     const lineDiagnostics = getLineDiagnostics(lineIndex);
-    const lineDiagnosticSeverity = getLineDiagnosticSeverity(lineIndex);
+    const lineDiagnosticSeverity = visualRow.isContinuation ? null : getLineDiagnosticSeverity(lineIndex);
+    const lineChangeKind = visualRow.isContinuation ? null : getLineChangeKind(lineIndex);
     const inlineDiagnostic = getInlineDiagnosticForLine(lineIndex);
-    const endOfLineDiagnostic = getEndOfLineDiagnosticForLine(lineIndex);
+    const inlineDiagnosticInRow =
+      inlineDiagnostic && inlineDiagnostic.from >= visualRow.segmentStart && inlineDiagnostic.from <= visualRow.segmentEnd
+        ? inlineDiagnostic
+        : null;
+    const endOfLineDiagnostic = visualRow.isLastSegment ? getEndOfLineDiagnosticForLine(lineIndex) : null;
     const gutterMarker = document.createElement("span");
     const gutterNumber = document.createElement("span");
+    const gutterChange = document.createElement("span");
     const lineText = document.createElement("span");
 
-    view.lineIndex = lineIndex;
+    view.visualRowIndex = visualRowIndex;
     view.row.dataset.wxEditorRow = String(lineIndex + 1);
+    view.row.dataset.wxEditorVisualRow = String(visualRowIndex + 1);
     view.gutter.dataset.wxEditorGutter = String(lineIndex + 1);
     view.content.dataset.wxEditorContent = String(lineIndex + 1);
     gutterMarker.className = "wx-editor__gutter-marker";
     gutterMarker.dataset.severity = lineDiagnosticSeverity ?? "";
     gutterMarker.dataset.wxEditorDiagnosticMarker = lineDiagnosticSeverity ?? "";
     gutterNumber.className = "wx-editor__gutter-number";
-    gutterNumber.textContent = String(lineIndex + 1);
-    view.gutter.replaceChildren(gutterMarker, gutterNumber);
-    view.row.classList.toggle("wx-row-active", lineIndex === cursorPosition.line);
+    gutterNumber.textContent = visualRow.isContinuation ? "↪" : String(lineIndex + 1);
+    gutterChange.className = "wx-editor__gutter-change";
+    gutterChange.dataset.change = lineChangeKind ?? "";
+    gutterChange.dataset.wxEditorLineChange = lineChangeKind ?? "";
+    view.gutter.replaceChildren(gutterMarker, gutterNumber, gutterChange);
+    view.row.classList.toggle("wx-row-active", visualRowIndex === cursorVisual.rowIndex);
     view.content.replaceChildren();
     view.host.replaceChildren(view.row);
     lineText.className = "wx-editor__line-text";
     view.content.append(lineText);
 
-    for (const segment of renderLineFragments(line, state, getLineHighlights(lineIndex), lineDiagnostics)) {
+    for (const segment of renderLineFragments(
+      line,
+      state,
+      getLineHighlights(lineIndex),
+      lineDiagnostics,
+      visualRow.segmentStart,
+      visualRow.segmentEnd,
+      visualRow.isLastSegment,
+      indentGuides
+    )) {
       const token = document.createElement("span");
       token.className = "wx-token";
       token.classList.add(roleClassName(segment.role));
+      addClassName(token, "wx-indent-guide", segment.isIndentGuide);
       addClassName(token, "wx-is-selected", segment.isSelected);
       addClassName(token, diagnosticClassName(segment.diagnosticSeverity), !!segment.diagnosticSeverity);
 
@@ -1483,7 +1804,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       view.content.append(note);
     }
 
-    if (inlineDiagnostic) {
+    if (inlineDiagnosticInRow) {
       const detailRow = document.createElement("div");
       const detailGutter = document.createElement("div");
       const detailContent = document.createElement("div");
@@ -1492,7 +1813,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       const text = document.createElement("span");
       const diagnosticStartColumn = Math.max(
         0,
-        inlineDiagnostic.from > line.start ? state.doc.positionAt(inlineDiagnostic.from).column : 0
+        inlineDiagnosticInRow.from > visualRow.segmentStart
+          ? state.doc.positionAt(inlineDiagnosticInRow.from).column - visualRow.startColumn
+          : 0
       );
       detailRow.className = "wx-editor__diagnostic-row";
       detailGutter.className = "wx-editor__diagnostic-gutter";
@@ -1500,20 +1823,20 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       detailRow.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
       detailGutter.textContent = " ";
       detail.className = "wx-editor__inline-diagnostic";
-      detail.dataset.severity = inlineDiagnostic.severity;
+      detail.dataset.severity = inlineDiagnosticInRow.severity;
       detail.dataset.wxEditorDiagnosticNote = "inline";
       detail.style.marginLeft = `${diagnosticStartColumn * metrics.charWidth}px`;
       hook.className = "wx-editor__inline-diagnostic-hook";
-      hook.dataset.wxEditorDiagnosticHook = inlineDiagnostic.severity;
+      hook.dataset.wxEditorDiagnosticHook = inlineDiagnosticInRow.severity;
       text.className = "wx-editor__inline-diagnostic-text";
-      text.textContent = inlineDiagnostic.message;
+      text.textContent = inlineDiagnosticInRow.message;
       detail.append(hook, text);
       detailContent.append(detail);
       detailRow.append(detailGutter, detailContent);
       view.host.append(detailRow);
     }
 
-    if (state.mode === "insert" && lineIndex === cursorPosition.line) {
+    if (state.mode === "insert" && visualRowIndex === cursorVisual.rowIndex) {
       const caret = document.createElement("span");
       const caretHeight = Math.max(14, Math.round(metrics.lineHeight * 0.84));
       const caretTop = Math.max(0, Math.round((metrics.lineHeight - caretHeight) / 2));
@@ -1521,7 +1844,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       caret.className = "wx-cursor-line";
       caret.dataset.wxEditorCursor = "true";
       caret.dataset.wxEditorCursorKind = "line";
-      caret.style.left = `${cursorPosition.column * metrics.charWidth}px`;
+      caret.style.left = `${cursorVisual.column * metrics.charWidth}px`;
       caret.style.top = `${caretTop}px`;
       caret.style.height = `${caretHeight}px`;
       view.content.append(caret);
@@ -1529,7 +1852,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function getVisibleViewport(): LineViewport {
-    const lineCount = Math.max(1, state.doc.lineCount);
+    rebuildVisualRows();
+    const lineCount = Math.max(1, visualRows.length);
     const startOffset = Math.max(0, surface.scrollTop - SURFACE_VERTICAL_PADDING);
     const viewportHeight = Math.max(metrics.lineHeight, surface.clientHeight || metrics.lineHeight * 20);
     const visibleLineCount = Math.max(1, Math.ceil(viewportHeight / metrics.lineHeight));
@@ -1550,21 +1874,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         fromLine: viewport.fromLine - VIEWPORT_OVERSCAN_LINES,
         toLine: viewport.toLine + VIEWPORT_OVERSCAN_LINES
       },
-      state.doc.lineCount
-    );
-  }
-
-  function getHighlightViewport(viewport: LineViewport): LineViewport {
-    return normalizeViewport(
-      {
-        fromLine: viewport.fromLine - HIGHLIGHT_CONTEXT_LINES,
-        toLine: viewport.toLine + HIGHLIGHT_CONTEXT_LINES
-      },
-      state.doc.lineCount
+      Math.max(1, visualRows.length)
     );
   }
 
   function renderVisibleRows(force = false): void {
+    const wrapChanged = rebuildVisualRows();
+    if (wrapChanged) {
+      force = true;
+    }
     const visibleViewport = getVisibleViewport();
     const nextViewport = expandViewport(visibleViewport);
 
@@ -1580,14 +1898,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     renderedViewport = nextViewport;
     rowViews = [];
     topSpacer.style.height = `${renderedViewport.fromLine * metrics.lineHeight}px`;
-    bottomSpacer.style.height = `${Math.max(0, state.doc.lineCount - renderedViewport.toLine - 1) * metrics.lineHeight}px`;
+    bottomSpacer.style.height = `${Math.max(0, visualRows.length - renderedViewport.toLine - 1) * metrics.lineHeight}px`;
 
     const fragment = document.createDocumentFragment();
 
-    for (let lineIndex = renderedViewport.fromLine; lineIndex <= renderedViewport.toLine; lineIndex += 1) {
-      const view = createRowView(lineIndex);
+    for (let visualRowIndex = renderedViewport.fromLine; visualRowIndex <= renderedViewport.toLine; visualRowIndex += 1) {
+      const view = createRowView(visualRowIndex);
       view.row.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
-      patchRowView(view, lineIndex);
+      patchRowView(view, visualRowIndex);
       rowViews.push(view);
       fragment.append(view.host);
     }
@@ -1597,15 +1915,22 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     for (let index = 0; index < fillerCount; index += 1) {
       const fillerRow = document.createElement("div");
       const fillerGutter = document.createElement("div");
+      const fillerMarker = document.createElement("span");
+      const fillerNumber = document.createElement("span");
+      const fillerChange = document.createElement("span");
       const fillerContent = document.createElement("div");
 
       fillerRow.className = "wx-editor__filler-row";
       fillerGutter.className = "wx-editor__filler-gutter";
+      fillerMarker.className = "wx-editor__gutter-marker";
+      fillerNumber.className = "wx-editor__gutter-number";
+      fillerChange.className = "wx-editor__gutter-change";
       fillerContent.className = "wx-editor__content";
       fillerRow.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
       fillerRow.dataset.wxEditorFillerRow = String(index);
-      fillerGutter.textContent = "~";
+      fillerNumber.textContent = index === 0 ? "~" : " ";
       fillerContent.textContent = " ";
+      fillerGutter.append(fillerMarker, fillerNumber, fillerChange);
       fillerRow.append(fillerGutter, fillerContent);
       fragment.append(fillerRow);
     }
@@ -1617,22 +1942,18 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const seen = new Set<number>();
 
     for (const lineIndex of lines) {
-      if (
-        seen.has(lineIndex) ||
-        lineIndex < renderedViewport.fromLine ||
-        lineIndex > renderedViewport.toLine
-      ) {
+      if (seen.has(lineIndex) || !isDocLineVisible(lineIndex)) {
         continue;
       }
 
       seen.add(lineIndex);
-      const view = rowViews[lineIndex - renderedViewport.fromLine];
 
-      if (!view) {
-        continue;
+      for (const view of rowViews) {
+        const visualRow = getVisualRow(view.visualRowIndex);
+        if (visualRow.docLine === lineIndex) {
+          patchRowView(view, view.visualRowIndex);
+        }
       }
-
-      patchRowView(view, lineIndex);
     }
   }
 
@@ -1658,10 +1979,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function getViewportContext() {
-    const viewport = getVisibleViewport();
+    const viewport = getLineViewportForVisualViewport(getVisibleViewport());
     return {
       ...viewport,
-      visibleLineCount: Math.max(1, viewport.toLine - viewport.fromLine + 1)
+      visibleLineCount: getVisibleLineCountForViewport(getVisibleViewport())
     };
   }
 
@@ -1825,8 +2146,42 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return nextByLine;
   }
 
+  function remapDiagnosticsForChanges(
+    previousState: EditorState,
+    nextState: EditorState,
+    changes: readonly TextChange[]
+  ): void {
+    if (changes.length === 0 || diagnostics.length === 0) {
+      return;
+    }
+
+    diagnostics = diagnostics
+      .map((diagnostic) => {
+        const from = Math.max(
+          0,
+          Math.min(nextState.doc.length, mapOffsetThroughChanges(diagnostic.from, changes, "left"))
+        );
+        const to = Math.max(
+          from,
+          Math.min(nextState.doc.length, mapOffsetThroughChanges(Math.max(diagnostic.from + 1, diagnostic.to), changes, "right"))
+        );
+
+        if (to <= from) {
+          return null;
+        }
+
+        return {
+          ...diagnostic,
+          from,
+          to
+        };
+      })
+      .filter((diagnostic): diagnostic is EditorDiagnostic => diagnostic !== null);
+    diagnosticsByLine = buildDiagnosticsCache(diagnostics);
+  }
+
   function refreshDiagnostics(): void {
-    const diagnosticsSource = languageServices?.diagnostics;
+    const diagnosticsSource = getDiagnosticsSource();
     const requestId = ++diagnosticsRequestId;
 
     if (!diagnosticsSource) {
@@ -1862,6 +2217,54 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         diagnosticsByLine = new Map();
         setBottomMessage({ tone: "error", text: "Diagnostics request failed" });
         patchStatus();
+        renderVisibleRows(true);
+      });
+  }
+
+  function buildLineChangesMap(changes: readonly EditorLineChange[]): LineChangesByLine {
+    const next = new Map<number, EditorLineChangeKind>();
+
+    for (const change of changes) {
+      if (change.line < 0 || !Number.isFinite(change.line)) {
+        continue;
+      }
+
+      next.set(change.line, change.kind);
+    }
+
+    return next;
+  }
+
+  function refreshLineChanges(): void {
+    const getLineChanges = host?.getLineChanges;
+    const requestId = ++lineChangesRequestId;
+
+    if (!getLineChanges) {
+      if (lineChangesByLine.size > 0) {
+        lineChangesByLine = new Map();
+        renderVisibleRows(true);
+      }
+      return;
+    }
+
+    void getLineChanges({
+      filePath,
+      text: state.doc.text
+    })
+      .then((changes) => {
+        if (destroyed || requestId !== lineChangesRequestId) {
+          return;
+        }
+
+        lineChangesByLine = buildLineChangesMap(changes);
+        renderVisibleRows(true);
+      })
+      .catch(() => {
+        if (destroyed || requestId !== lineChangesRequestId) {
+          return;
+        }
+
+        lineChangesByLine = new Map();
         renderVisibleRows(true);
       });
   }
@@ -1946,7 +2349,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     viewport = getHighlightViewport(renderedViewport.toLine >= renderedViewport.fromLine ? renderedViewport : expandViewport(getVisibleViewport())),
     force = false
   ): Promise<void> {
-    const highlighter = languageServices?.highlighter;
+    const highlighter = getHighlighter();
 
     if (!highlighter || languageRevision < 0) {
       if (highlightCache.size > 0) {
@@ -1986,7 +2389,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     forceDocumentSync = false,
     viewport?: { fromLine: number; toLine: number }
   ): Promise<void> {
-    const highlighter = languageServices?.highlighter;
+    const highlighter = getHighlighter();
 
     if (!highlighter) {
       return;
@@ -2032,12 +2435,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     state = nextState;
 
     if (hasDocumentChanges) {
+      invalidateHover();
       lastHighlightedRevision = -1;
       if (changes.length > 0) {
         remapHighlightCacheForChanges(previousState, nextState, changes);
         remapHighlightCoverageForChanges(previousState, nextState, changes);
+        remapDiagnosticsForChanges(previousState, nextState, changes);
       } else {
-        highlightCache.clear();
         highlightCoverage.clear();
       }
 
@@ -2060,6 +2464,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         highlightViewports?.nextViewport ?? getHighlightViewport(renderedViewport)
       );
       refreshDiagnostics();
+      refreshLineChanges();
       return;
     }
 
@@ -2157,6 +2562,24 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     });
   }
 
+  function invalidateHover(keepPosition = true): void {
+    hoverRequestId += 1;
+
+    if (!hoverState.active) {
+      return;
+    }
+
+    setHoverState({
+      active: false,
+      pinned: false,
+      offset: null,
+      content: "",
+      tone: "info",
+      left: keepPosition ? hoverState.left : 16,
+      top: keepPosition ? hoverState.top : 16
+    });
+  }
+
   function normalizeHover(hover: EditorHover | null): HoverState | null {
     if (!hover || !hover.content.trim()) {
       return null;
@@ -2195,7 +2618,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   async function requestHover(offset: number, anchor: DOMRect, pinned = false): Promise<boolean> {
-    const hoverSource = languageServices?.hover;
+    const hoverSource = getHoverSource();
 
     if (!hoverSource) {
       if (pinned) {
@@ -2277,7 +2700,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   async function loadCodeActions(): Promise<readonly EditorCodeAction[]> {
-    const codeActionSource = languageServices?.codeActions;
+    const codeActionSource = getCodeActionSource();
 
     if (!codeActionSource) {
       setBottomMessage({ tone: "warning", text: "No code actions provider" });
@@ -2321,7 +2744,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   async function formatDocument(): Promise<boolean> {
-    const formatter = languageServices?.formatter;
+    const formatter = getFormatter();
 
     if (!formatter) {
       setBottomMessage({ tone: "warning", text: "No formatter provider" });
@@ -2353,6 +2776,33 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return true;
   }
 
+  async function saveDocument(): Promise<boolean> {
+    const writeFile = host?.writeFile;
+
+    if (!writeFile) {
+      setBottomMessage({ tone: "warning", text: "No file writer available" });
+      return false;
+    }
+
+    try {
+      await writeFile({
+        filePath,
+        text: state.doc.text
+      });
+      await host?.didWriteFile?.({
+        filePath,
+        text: state.doc.text
+      });
+    } catch {
+      setBottomMessage({ tone: "error", text: `Write failed for ${filePath}` });
+      return false;
+    }
+
+    setBottomMessage({ tone: "info", text: `Wrote ${filePath}` });
+    refreshLineChanges();
+    return true;
+  }
+
   function runCommandLineCommand(rawValue: string): void {
     const value = rawValue.trim().toLowerCase();
 
@@ -2367,6 +2817,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
+    if (value === "w" || value === "write") {
+      void saveDocument();
+      return;
+    }
+
     if (value === "code-actions" || value === "codeaction" || value === "ca") {
       void loadCodeActions();
       return;
@@ -2375,10 +2830,136 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     setBottomMessage({ tone: "warning", text: `Unknown command: ${rawValue}` });
   }
 
+  function dispatchOffsetSelection(targetOffset: number, preferredColumn: number | null): boolean {
+    if (state.mode === "insert") {
+      controller.dispatch({
+        selection: createSelection(targetOffset, targetOffset, preferredColumn)
+      });
+      return true;
+    }
+
+    if (state.mode === "visual") {
+      const anchor = state.selection.ranges[state.selection.primaryIndex]?.anchor ?? targetOffset;
+      controller.dispatch({
+        selection: createSelection(anchor, targetOffset, preferredColumn)
+      });
+      return true;
+    }
+
+    controller.dispatch({
+      selection: createCharacterSelection(state.doc, targetOffset, preferredColumn)
+    });
+    return true;
+  }
+
+  function moveByVisualRows(delta: number): boolean {
+    rebuildVisualRows();
+    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+    const current = getVisualRowForOffset(activeOffset);
+    const preferredColumn = state.selection.ranges[state.selection.primaryIndex]?.preferredColumn ?? current.column;
+    const targetRowIndex = Math.max(0, Math.min(visualRows.length - 1, current.rowIndex + delta));
+    const targetRow = getVisualRow(targetRowIndex);
+    const segmentLength = targetRow.segmentEnd - targetRow.segmentStart;
+    const maxColumn = state.mode === "insert" ? segmentLength : Math.max(0, segmentLength - 1);
+    const targetColumn = Math.max(0, Math.min(preferredColumn, maxColumn));
+    const targetOffset =
+      segmentLength === 0 ? targetRow.segmentStart : targetRow.segmentStart + targetColumn;
+    return dispatchOffsetSelection(targetOffset, preferredColumn);
+  }
+
+  function gotoVisibleRow(position: "top" | "center" | "bottom"): boolean {
+    rebuildVisualRows();
+    const viewport = getVisibleViewport();
+    const targetRowIndex =
+      position === "top"
+        ? viewport.fromLine
+        : position === "bottom"
+          ? viewport.toLine
+          : Math.floor((viewport.fromLine + viewport.toLine) / 2);
+    const targetRow = getVisualRow(targetRowIndex);
+    return dispatchOffsetSelection(targetRow.segmentStart, 0);
+  }
+
+  function readPendingCount(): number {
+    if (!pendingCount) {
+      return 1;
+    }
+
+    const parsed = Number.parseInt(pendingCount, 10);
+    pendingCount = "";
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  }
+
+  function clearPendingCount(): void {
+    pendingCount = "";
+  }
+
+  function runCommandWithCount(command: Command, explicitCount?: number): boolean {
+    const count = explicitCount ?? readPendingCount();
+    let applied = false;
+
+    for (let index = 0; index < count; index += 1) {
+      const previousMode = state.mode;
+      const previousRevision = state.revision;
+      const didRun = runCommand(command);
+
+      if (!didRun) {
+        break;
+      }
+
+      applied = true;
+
+      if (state.mode !== previousMode || state.revision === previousRevision) {
+        break;
+      }
+    }
+
+    return applied;
+  }
+
   function runCommand(command: Command): boolean {
     setBottomMessage(null);
     clearHover();
     closeCodeActionMenu();
+
+    if (softWrap) {
+      if (command === moveUp) {
+        return moveByVisualRows(-1);
+      }
+
+      if (command === moveDown) {
+        return moveByVisualRows(1);
+      }
+
+      if (command === pageUp) {
+        return moveByVisualRows(-(Math.max(1, getVisibleLineCountForViewport(getVisibleViewport()) - 1)));
+      }
+
+      if (command === pageDown) {
+        return moveByVisualRows(Math.max(1, getVisibleLineCountForViewport(getVisibleViewport()) - 1));
+      }
+
+      if (command === halfPageUp) {
+        return moveByVisualRows(-Math.max(1, Math.floor(getVisibleLineCountForViewport(getVisibleViewport()) / 2)));
+      }
+
+      if (command === halfPageDown) {
+        return moveByVisualRows(Math.max(1, Math.floor(getVisibleLineCountForViewport(getVisibleViewport()) / 2)));
+      }
+
+      if (command === gotoWindowTop) {
+        return gotoVisibleRow("top");
+      }
+
+      if (command === gotoWindowCenter) {
+        return gotoVisibleRow("center");
+      }
+
+      if (command === gotoWindowBottom) {
+        return gotoVisibleRow("bottom");
+      }
+    }
+
     return controller.execute(command, {
       requestFocus() {
         textarea.focus();
@@ -2418,9 +2999,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function revealCursor(): void {
+    rebuildVisualRows();
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const cursorPosition = state.doc.positionAt(activeOffset);
-    const rowTop = SURFACE_VERTICAL_PADDING + cursorPosition.line * metrics.lineHeight;
+    const cursorVisual = getVisualRowForOffset(activeOffset);
+    const rowTop = SURFACE_VERTICAL_PADDING + cursorVisual.rowIndex * metrics.lineHeight;
     const rowBottom = rowTop + metrics.lineHeight;
     const viewportTop = surface.scrollTop;
     const viewportBottom = viewportTop + surface.clientHeight;
@@ -2443,7 +3025,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       state.mode !== "insert" &&
       (event.key === "ArrowUp" || event.key === "ArrowDown")
     ) {
-      const syntaxSelector = languageServices?.syntaxSelector;
+      const syntaxSelector = getSyntaxSelector();
       const syntaxSelection =
         event.key === "ArrowUp"
           ? syntaxSelector?.expandSelection?.bind(syntaxSelector)
@@ -2490,6 +3072,19 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       event.ctrlKey &&
       !event.metaKey &&
       !event.altKey &&
+      state.mode === "insert" &&
+      event.key === "s"
+    ) {
+      event.preventDefault();
+      textarea.value = "";
+      controller.execute((_state, _dispatch, context) => context.history?.checkpoint() ?? false);
+      return;
+    }
+
+    if (
+      event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
       state.mode !== "insert" &&
       ["b", "d", "f", "u"].includes(event.key)
     ) {
@@ -2498,7 +3093,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
       event.preventDefault();
       textarea.value = "";
-      runCommand(command);
+      runCommandWithCount(command);
       return;
     }
 
@@ -2600,6 +3195,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     if (hoverState.active && event.key === "Escape") {
       event.preventDefault();
       clearHover();
+      clearPendingCount();
       return;
     }
 
@@ -2610,6 +3206,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
       if (event.key === "Escape") {
         event.preventDefault();
+        clearPendingCount();
         return;
       }
 
@@ -2619,7 +3216,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         if (chordCommand) {
           event.preventDefault();
           textarea.value = "";
-          runCommand(chordCommand);
+          runCommandWithCount(chordCommand);
           return;
         }
       }
@@ -2631,7 +3228,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
           event.preventDefault();
           textarea.value = "";
           const previousRevision = state.revision;
-          runCommand(chordCommand);
+          runCommandWithCount(chordCommand);
           recordRepeatableMotion(
             { kind: "paragraph", direction: nextPending.kind === "]" ? "next" : "prev" },
             state.revision !== previousRevision
@@ -2645,7 +3242,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
           event.preventDefault();
           textarea.value = "";
           const previousRevision = state.revision;
-          runCommand(gotoMatchingBracket);
+          runCommandWithCount(gotoMatchingBracket);
           recordRepeatableMotion({ kind: "matching-bracket" }, state.revision !== previousRevision);
           return;
         }
@@ -2695,7 +3292,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
               : nextPending.variant === "t"
                 ? findTillNextChar(event.key)
                 : findTillPrevChar(event.key);
-        runCommand(command);
+        runCommandWithCount(command);
         recordRepeatableMotion(
           { kind: "find", variant: nextPending.variant, target: event.key },
           state.revision !== previousRevision
@@ -2707,7 +3304,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         event.preventDefault();
         textarea.value = "";
         const previousRevision = state.revision;
-        runCommand(selectTextobject(nextPending.mode, event.key));
+        runCommandWithCount(selectTextobject(nextPending.mode, event.key));
         recordRepeatableMotion(
           { kind: "textobject", mode: nextPending.mode, object: event.key },
           state.revision !== previousRevision
@@ -2719,7 +3316,18 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     if ((state.mode === "normal" || state.mode === "visual") && event.key === ":") {
       event.preventDefault();
       textarea.value = "";
+      clearPendingCount();
       openCommandLine();
+      return;
+    }
+
+    if (
+      (state.mode === "normal" || state.mode === "visual") &&
+      /^[0-9]$/.test(event.key) &&
+      !(pendingCount === "" && event.key === "0")
+    ) {
+      event.preventDefault();
+      pendingCount = `${pendingCount}${event.key}`;
       return;
     }
 
@@ -2767,7 +3375,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     event.preventDefault();
     textarea.value = "";
-    runCommand(command);
+    runCommandWithCount(command);
   }
 
   function handleWheel(event: WheelEvent): void {
@@ -2866,6 +3474,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   patchBottomRow();
   void syncLanguage([], true);
   refreshDiagnostics();
+  refreshLineChanges();
 
   return {
     controller,
@@ -2880,7 +3489,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     destroy() {
       destroyed = true;
       unsubscribeController();
-      languageServices?.highlighter?.destroy?.();
+      for (const services of languageServices) {
+        services.highlighter?.destroy?.();
+      }
       root.remove();
     },
     focus() {
@@ -2904,10 +3515,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     setFilePath(nextFilePath: string) {
       filePath = nextFilePath;
       patchStatus();
+      refreshLineChanges();
     },
-    async setLanguageServices(nextLanguageServices: EditorLanguageServices | null) {
-      languageServices?.highlighter?.destroy?.();
-      languageServices = nextLanguageServices;
+    async setLanguageServices(nextLanguageServices: EditorLanguageServiceInput | null) {
+      for (const services of languageServices) {
+        services.highlighter?.destroy?.();
+      }
+      languageServices = normalizeLanguageServices(nextLanguageServices);
       languageRevision = -1;
       lastHighlightedRevision = -1;
       highlightCache.clear();

@@ -1,0 +1,33 @@
+screen
+  size fill
+
+  status
+    left " NOR "
+    file "examples/editor.scene"
+    right "10:8"
+
+  line 1
+    gutter number 8
+    text "status file is owned by the status block"
+    diagnostic info at 0
+      eol "The status block renders once per frame"
+
+  line 8
+    gutter number 8
+    text "status file is owned by the status block"
+    diagnostic info at 0
+      eol "The status block renders once per frame"
+
+  line 9
+    gutter number 9
+    text "const message = greet(user.name)"
+    diagnostic warning at 18
+      eol "Replace guttr with gutter"
+
+  line 10
+    gutter number 10
+    text "return message"
+    diagnostic error at 0
+      below "expected number, got string"
+
+  cursor block at line 10 col 6

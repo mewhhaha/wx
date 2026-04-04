@@ -120,6 +120,8 @@ export interface EditorLanguageServices {
   formatter?: Formatter;
 }
 
+export type EditorLanguageServiceInput = EditorLanguageServices | readonly EditorLanguageServices[];
+
 export interface EditorLanguageRegistration {
   id: string;
   services: EditorLanguageServices;

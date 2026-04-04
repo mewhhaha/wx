@@ -1,0 +1,10 @@
+[package]
+name = "scene-lang-compiler"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+scene-lang-core = { path = "../scene-lang-core" }

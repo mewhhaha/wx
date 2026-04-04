@@ -51,6 +51,30 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-status-meta='true']")?.textContent).toContain("2:2");
   });
 
+  it("supports count prefixes for normal mode commands", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "one\ntwo\nthree\nfour\nfive" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+
+    expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0)).toEqual({
+      line: 3,
+      column: 0
+    });
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+
+    expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0)).toEqual({
+      line: 3,
+      column: 2
+    });
+  });
+
   it("renders only a viewport slice for large files", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -59,6 +83,63 @@ describe("createEditor", () => {
 
     expect(container.querySelectorAll("[data-wx-editor-row]").length).toBeLessThan(80);
     expect(container.querySelector('[data-wx-editor-row="150"]')).toBeNull();
+  });
+
+  it("moves by visual rows when soft wrap is enabled", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, {
+      value: "abcdefghijklmnopqrstuvwxyz",
+      softWrap: true
+    });
+    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+    Object.defineProperty(surface, "clientWidth", { value: 120, configurable: true });
+    surface.dispatchEvent(new Event("scroll"));
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    const movedPosition = editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0);
+    expect(movedPosition.line).toBe(0);
+    expect(movedPosition.column).toBeGreaterThan(0);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
+    expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0)).toEqual({
+      line: 0,
+      column: 0
+    });
+  });
+
+  it("keeps EOF filler rows after wrapped content", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, { value: "abcdefghijklmnopqrstuvwxyz", softWrap: true });
+    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
+    Object.defineProperty(surface, "clientWidth", { value: 120, configurable: true });
+    Object.defineProperty(surface, "clientHeight", { value: 240, configurable: true });
+    surface.dispatchEvent(new Event("scroll"));
+
+    expect(container.querySelector("[data-wx-editor-filler-row]")?.textContent).toContain("~");
+    expect(container.querySelector("[data-wx-editor-filler-row] .wx-editor__gutter-number")?.textContent).toBe("~");
+    expect(container.querySelector('[data-wx-editor-filler-row="1"] .wx-editor__gutter-number')?.textContent).toBe(" ");
+  });
+
+  it("renders indent guides in leading whitespace after skipped levels", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, {
+      value: "  alpha\n    beta",
+      indentGuides: {
+        render: true,
+        character: "╎",
+        skipLevels: 1
+      }
+    });
+
+    expect(container.querySelector('[data-wx-editor-content="1"] .wx-indent-guide')).toBeNull();
+    expect(container.querySelector('[data-wx-editor-content="2"] .wx-indent-guide')?.textContent).toBe("╎");
   });
 
   it("moves the cursor with mouse wheel scrolling", () => {
@@ -153,6 +234,135 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("NOR");
   });
 
+  it("inserts indentation spaces in insert mode when tab is pressed", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "abc" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(editor.getState().doc.text).toBe("  abc");
+  });
+
+  it("removes one soft tab of leading indentation with backspace", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }));
+
+    expect(editor.getState().doc.text).toBe("");
+  });
+
+  it("removes only one soft tab when multiple indentation levels are present", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }));
+
+    expect(editor.getState().doc.text).toBe("  ");
+  });
+
+  it("undos a whole insert session in one step after escape", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "abc" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "y", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(editor.getState().doc.text).toBe("xyabc");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "u", bubbles: true }));
+    expect(editor.getState().doc.text).toBe("abc");
+  });
+
+  it("splits insert undo history with Ctrl-s checkpoints", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "abc" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "y", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(editor.getState().doc.text).toBe("xyabc");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "u", bubbles: true }));
+    expect(editor.getState().doc.text).toBe("xabc");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "u", bubbles: true }));
+    expect(editor.getState().doc.text).toBe("abc");
+  });
+
+  it("keeps existing highlight classes visible during undo before async refresh completes", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    let resolveOpen: (() => void) | null = null;
+    let openCalls = 0;
+    const editor = createEditor(container, {
+      value: "abc",
+      language: {
+        async open() {
+          openCalls += 1;
+          if (openCalls > 1) {
+            await new Promise<void>((resolve) => {
+              resolveOpen = resolve;
+            });
+          }
+        },
+        async update() {},
+        async getHighlightRanges() {
+          return [{ from: 0, to: 3, role: "string" }];
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    const flush = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+
+    return (async () => {
+      await flush();
+
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "u", bubbles: true }));
+
+      expect(container.querySelector(".wx-role-string")).not.toBeNull();
+
+      resolveOpen?.();
+      await flush();
+      expect(editor.getState().doc.text).toBe("abc");
+    })();
+  });
+
   it("routes o and O through the DOM key handler", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -202,6 +412,26 @@ describe("createEditor", () => {
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "U", bubbles: true }));
     expect(editor.getState().doc.text).toBe("!alpha\nbeta\ngamma");
+  });
+
+  it("routes c through the DOM key handler and enters insert mode", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "abcd" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true }));
+
+    expect(editor.getState().doc.text).toBe("a");
+    expect(editor.getState().mode).toBe("insert");
+    expect(editor.getState().yankBuffer).toBe("bcd");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(editor.getState().doc.text).toBe("ax");
   });
 
   it("applies syntax highlighting on initial open without needing an edit", async () => {
@@ -815,6 +1045,45 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent).toContain("Bad keyword");
   });
 
+  it("remaps diagnostics through local edits before async refresh completes", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    let diagnosticsCallCount = 0;
+
+    createEditor(container, {
+      value: "const bad = value;",
+      languageServices: {
+        diagnostics: {
+          diagnostics() {
+            diagnosticsCallCount += 1;
+
+            if (diagnosticsCallCount === 1) {
+              return Promise.resolve([{ from: 6, to: 9, severity: "warning" as const, message: "Suspicious name" }]);
+            }
+
+            return new Promise<readonly { from: number; to: number; severity: "warning"; message: string }[]>(
+              () => {}
+            );
+          }
+        }
+      }
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    await Promise.resolve();
+
+    expect(container.querySelector('[data-wx-editor-content="1"] .wx-diagnostic-warning')?.textContent).toContain("bad");
+    expect(container.querySelector('[data-wx-editor-diagnostic-note="inline"], [data-wx-editor-diagnostic-note="eol"]')?.textContent).toContain(
+      "Suspicious name"
+    );
+  });
+
   it("runs :format through the formatter service", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -843,6 +1112,99 @@ describe("createEditor", () => {
 
     expect(editor.getState().doc.text).toBe("let x = 1;");
     expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("Formatted");
+  });
+
+  it("runs :w through the host file writer", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const writes: Array<{ filePath: string; text: string }> = [];
+    const didWrites: Array<{ filePath: string; text: string }> = [];
+
+    createEditor(container, {
+      value: "screen\n  size fill\n",
+      filePath: "examples/editor.scene",
+      host: {
+        async writeFile(context) {
+          writes.push(context);
+        },
+        didWriteFile(context) {
+          didWrites.push(context);
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "w", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(writes).toEqual([{ filePath: "examples/editor.scene", text: "screen\n  size fill\n" }]);
+    expect(didWrites).toEqual([{ filePath: "examples/editor.scene", text: "screen\n  size fill\n" }]);
+    expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("Wrote examples/editor.scene");
+  });
+
+  it("renders added and modified gutter bars after the line number", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, {
+      value: "one\ntwo\nthree",
+      host: {
+        async getLineChanges() {
+          return [
+            { line: 0, kind: "added" as const },
+            { line: 1, kind: "modified" as const }
+          ];
+        }
+      }
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelector('[data-wx-editor-gutter="1"] [data-wx-editor-line-change="added"]')).not.toBeNull();
+    expect(container.querySelector('[data-wx-editor-gutter="2"] [data-wx-editor-line-change="modified"]')).not.toBeNull();
+  });
+
+  it("runs :format through the first formatter in a service list", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, {
+      value: "let x=1;",
+      languageServices: [
+        {
+          formatter: {
+            async format() {
+              return [{ from: 0, to: 8, insert: "let x = 1;" }];
+            }
+          }
+        },
+        {
+          formatter: {
+            async format() {
+              return [{ from: 0, to: 8, insert: "const y = 2;" }];
+            }
+          }
+        }
+      ]
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "o", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "m", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+
+    expect(editor.getState().doc.text).toBe("let x = 1;");
   });
 
   it("shows code actions and applies the selected action", async () => {
@@ -945,6 +1307,41 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-tooltip='true']")).toHaveProperty("hidden", true);
   });
 
+  it("invalidates stale hover responses after document edits", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    let resolveHover: ((value: { source: string; content: string }) => void) | null = null;
+
+    createEditor(container, {
+      value: "screen",
+      languageServices: {
+        hover: {
+          hover() {
+            return new Promise((resolve) => {
+              resolveHover = resolve;
+            });
+          }
+        }
+      }
+    });
+
+    const token = container.querySelector('[data-wx-editor-offset="0"]') as HTMLElement;
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    token.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    await Promise.resolve();
+
+    resolveHover?.({ source: "fake-lsp", content: "stale hover" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelector("[data-wx-editor-tooltip='true']")).toHaveProperty("hidden", true);
+    expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent ?? "").not.toContain("stale hover");
+  });
+
   it("renders filler rows with ~ after the end of the file", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -955,6 +1352,7 @@ describe("createEditor", () => {
     surface.dispatchEvent(new Event("scroll"));
 
     expect(container.querySelector("[data-wx-editor-filler-row]")?.textContent).toContain("~");
+    expect(container.querySelector('[data-wx-editor-filler-row="1"] .wx-editor__gutter-number')?.textContent).toBe(" ");
   });
 
   it("subscribes hosts to controller-backed updates without polling", () => {

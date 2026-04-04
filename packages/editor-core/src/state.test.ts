@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   applyTransaction,
   appendInsertMode,
+  changeSelection,
   type Command,
   createEditorState,
   createSelection,
   createTextDocument,
   deleteBackward,
+  deleteBackwardIndentAware,
   deleteSelection,
   deleteForward,
   enterInsertMode,
@@ -96,6 +98,27 @@ describe("editor core", () => {
     expect(getCursorOffset(state.current.selection)).toBe(1);
   });
 
+  it("deletes back to the previous soft-tab stop in leading whitespace", () => {
+    const state = { current: createEditorState({ value: "    ", mode: "insert", selection: createSelection(4) }) };
+
+    deleteBackwardIndentAware("  ")(state.current, (transaction) => dispatchTransaction(state, transaction), {});
+    expect(state.current.doc.text).toBe("  ");
+    expect(getCursorOffset(state.current.selection)).toBe(2);
+
+    deleteBackwardIndentAware("  ")(state.current, (transaction) => dispatchTransaction(state, transaction), {});
+    expect(state.current.doc.text).toBe("");
+    expect(getCursorOffset(state.current.selection)).toBe(0);
+  });
+
+  it("falls back to single-character backspace after non-whitespace", () => {
+    const state = { current: createEditorState({ value: "  a", mode: "insert", selection: createSelection(3) }) };
+
+    deleteBackwardIndentAware("  ")(state.current, (transaction) => dispatchTransaction(state, transaction), {});
+
+    expect(state.current.doc.text).toBe("  ");
+    expect(getCursorOffset(state.current.selection)).toBe(2);
+  });
+
   it("deletes the current selection in normal mode", () => {
     const state = { current: createEditorState({ value: "abcd", selection: createSelection(1, 2) }) };
 
@@ -105,6 +128,22 @@ describe("editor core", () => {
     expect(state.current.mode).toBe("normal");
     expect(state.current.yankBuffer).toBe("bc");
     expect(getSelectionOffsets(state.current)).toEqual({ from: 1, to: 2 });
+  });
+
+  it("changes the current selection and enters insert mode", () => {
+    const state = { current: createEditorState({ value: "abcd", selection: createSelection(1, 2) }) };
+
+    run(state, changeSelection);
+
+    expect(state.current.doc.text).toBe("ad");
+    expect(state.current.mode).toBe("insert");
+    expect(state.current.yankBuffer).toBe("bc");
+    expect(getSelectionOffsets(state.current)).toEqual({ from: 1, to: 1 });
+    expect(state.current.insertSession).toEqual({
+      restoreOffset: 1,
+      restoreAffinity: "left",
+      moved: false
+    });
   });
 
   it("restores deleted text with d followed by p", () => {

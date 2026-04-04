@@ -35,9 +35,10 @@ export interface EditorUpdate {
 export type EditorUpdateListener = (update: EditorUpdate) => void;
 
 export interface HistoryPlugin {
-  record(update: EditorUpdate): void;
+  record(update: EditorUpdate, options?: { checkpoint?: boolean }): void;
   undo(currentState: EditorState): HistoryEntry | null;
   redo(currentState: EditorState): HistoryEntry | null;
+  checkpoint(): boolean;
   clear(): void;
 }
 
@@ -125,17 +126,40 @@ function restoreEditorState(state: EditorState, entry: HistoryEntry): EditorStat
 export function createSnapshotHistory(): HistoryPlugin {
   const undoStack: HistoryEntry[] = [];
   const redoStack: HistoryEntry[] = [];
+  let pendingInsertGroup: HistoryEntry | null = null;
+
+  const flushPendingInsertGroup = (): boolean => {
+    if (!pendingInsertGroup) {
+      return false;
+    }
+
+    undoStack.push(pendingInsertGroup);
+    pendingInsertGroup = null;
+    return true;
+  };
 
   return {
-    record(update) {
+    record(update, options = {}) {
+      if (options.checkpoint) {
+        flushPendingInsertGroup();
+      }
+
       if (!update.docChanged) {
         return;
       }
 
+      if (update.nextState.mode === "insert") {
+        pendingInsertGroup ??= createHistoryEntry(update.prevState);
+        redoStack.length = 0;
+        return;
+      }
+
+      flushPendingInsertGroup();
       undoStack.push(createHistoryEntry(update.prevState));
       redoStack.length = 0;
     },
     undo(currentState) {
+      flushPendingInsertGroup();
       const previous = undoStack.pop() ?? null;
 
       if (!previous) {
@@ -146,6 +170,7 @@ export function createSnapshotHistory(): HistoryPlugin {
       return previous;
     },
     redo(currentState) {
+      flushPendingInsertGroup();
       const next = redoStack.pop() ?? null;
 
       if (!next) {
@@ -155,9 +180,13 @@ export function createSnapshotHistory(): HistoryPlugin {
       undoStack.push(createHistoryEntry(currentState));
       return next;
     },
+    checkpoint() {
+      return flushPendingInsertGroup();
+    },
     clear() {
       undoStack.length = 0;
       redoStack.length = 0;
+      pendingInsertGroup = null;
     }
   };
 }
@@ -190,8 +219,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       modeChanged: prevState.mode !== nextState.mode
     };
 
-    if (options.recordHistory !== false && update.docChanged) {
-      history?.record(update);
+    const shouldCheckpointHistory = prevState.mode === "insert" && nextState.mode !== "insert";
+
+    if (options.recordHistory !== false && (update.docChanged || shouldCheckpointHistory)) {
+      history?.record(update, { checkpoint: shouldCheckpointHistory });
     }
 
     for (const listener of listeners) {
@@ -220,7 +251,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
   const historyControls: NonNullable<CommandContext["history"]> = {
     undo: () => applyHistoryEntry(history?.undo(state) ?? null, "history.undo"),
-    redo: () => applyHistoryEntry(history?.redo(state) ?? null, "history.redo")
+    redo: () => applyHistoryEntry(history?.redo(state) ?? null, "history.redo"),
+    checkpoint: () => history?.checkpoint() ?? false
   };
 
   return {

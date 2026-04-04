@@ -1,0 +1,8 @@
+[workspace]
+members = [
+  "crates/scene-lang-core",
+  "crates/scene-lang-compiler",
+  "crates/scene-lang-worker-core",
+  "crates/scene-lang-wasm"
+]
+resolver = "2"

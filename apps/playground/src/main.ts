@@ -1,38 +1,116 @@
-import treeSitterWasmUrl from "./assets/web-tree-sitter.wasm?url";
-import typescriptWasmUrl from "./assets/tree-sitter-typescript.wasm?url";
+import sceneLangWasmUrl from "./assets/scene-lang.wasm?url";
 import { installBenchmarkHarness } from "./benchmarkHarness";
 import { phTheme } from "./phTheme";
 
-import { createTreeSitterLanguageServices, typescriptHighlightQuery } from "@wx/editor-tree-sitter";
+import { createCharacterSelection, createTextDocument } from "@wx/editor-core";
+import { createEditorController } from "@wx/editor-controller";
+import { createSceneLangWasm, renderCompiledScene, type ScenePreviewFrame } from "@wx/scene-lang-wasm";
+import { createSceneLangLanguageServices } from "@wx/scene-lang-worker";
 import { createEditor } from "@wx/editor-view-dom";
 
 import "./style.css";
 
-const sample = `import { greet } from "./hello";
+const fallbackSample = `screen
+  size fill
 
-type User = {
-  id: number;
-  name: string;
-};
+  status
+    left " NOR "
+    file "examples/editor.scene"
+    right "10:8"
 
-export function boot(user: User) {
-  const message = greet(user.name);
-  console.log(message);
-  return message;
-}
+  line 8
+    gutter number 8
+    text "status file is owned by the status block"
+    diagnostic info at 0
+      eol "The status block renders once per frame"
+
+  line 9
+    guttr number 9
+    text "const message = greet(user.name)"
+    diagnostic warning at 18
+      eol "Replace guttr with gutter"
+
+  line 10
+    gutter number 10
+    text "return message"
+    diagnostic error at 0
+      below "expected number, got string"
+
+  cursor block at line 10 col 6
 `;
 
-function findRange(source: string, needle: string): { from: number; to: number } {
-  const from = source.indexOf(needle);
+const previewStyles = new Map<number, string>([
+  [0, "scene-preview__cell--text"],
+  [1, "scene-preview__cell--status"],
+  [2, "scene-preview__cell--gutter"],
+  [3, "scene-preview__cell--warning"],
+  [4, "scene-preview__cell--error"],
+  [5, "scene-preview__cell--info"],
+  [6, "scene-preview__cell--hint"],
+  [7, "scene-preview__cell--cursor"]
+]);
 
-  if (from < 0) {
-    throw new Error(`Could not find sample segment: ${needle}`);
+function renderPreviewFrame(mount: HTMLDivElement, frame: ScenePreviewFrame): void {
+  mount.replaceChildren();
+
+  const surface = document.createElement("div");
+  surface.className = "scene-preview__surface";
+  surface.style.setProperty("--scene-preview-columns", String(frame.width));
+
+  for (const row of frame.rows) {
+    const line = document.createElement("div");
+    line.className = "scene-preview__line";
+    line.style.setProperty("--scene-preview-columns", String(frame.width));
+
+    for (const cell of row) {
+      const span = document.createElement("span");
+      span.className = `scene-preview__cell ${previewStyles.get(cell.style) ?? "scene-preview__cell--text"}`;
+      span.textContent = cell.char === " " ? "\u00a0" : cell.char;
+      line.append(span);
+    }
+    surface.append(line);
   }
 
-  return {
-    from,
-    to: from + needle.length
-  };
+  mount.append(surface);
+}
+
+function renderPreviewError(mount: HTMLDivElement, error: unknown): void {
+  mount.innerHTML = "";
+  const panel = document.createElement("div");
+  panel.className = "scene-preview__error";
+  panel.textContent = error instanceof Error ? error.message : String(error);
+  mount.append(panel);
+}
+
+async function requestJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return await response.json() as T;
+}
+
+async function loadInitialSceneSource(): Promise<string> {
+  try {
+    const response = await fetch("/__wx__/read?file=examples/editor.scene");
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    const payload = await response.json() as { text?: string };
+    return typeof payload.text === "string" ? payload.text : fallbackSample;
+  } catch {
+    return fallbackSample;
+  }
 }
 
 async function main(): Promise<void> {
@@ -47,104 +125,90 @@ async function main(): Promise<void> {
     return;
   }
 
-  const treeSitterLanguageServices = createTreeSitterLanguageServices({
-    parserWasmUrl: treeSitterWasmUrl,
-    languageWasmUrl: typescriptWasmUrl,
-    query: typescriptHighlightQuery
+  const sceneLanguageServices = createSceneLangLanguageServices({
+    wasmUrl: sceneLangWasmUrl
   });
-
-  const languageServices = {
-    ...treeSitterLanguageServices,
-    diagnostics: {
-      async diagnostics() {
-        return [
-          {
-            ...findRange(sample, "greet"),
-            severity: "info" as const,
-            source: "fake-lsp",
-            code: "info.greet",
-            message: "Fake LSP info: imported symbol resolves cleanly."
-          },
-          {
-            ...findRange(sample, "console.log"),
-            severity: "warning" as const,
-            source: "fake-lsp",
-            code: "warn.console-log",
-            message: "Fake LSP warning: avoid console.log in production code."
-          },
-          {
-            ...findRange(sample, "return message;"),
-            severity: "error" as const,
-            source: "fake-lsp",
-            code: "error.return-type",
-            message: "Fake LSP error: expected `number`, got `string`."
-          }
-        ];
-      }
-    },
-    hover: {
-      async hover(_document, offset: number) {
-        if (offset >= findRange(sample, "User").from && offset < findRange(sample, "User").to) {
-          return {
-            source: "fake-lsp",
-            content: "type User = { id: number; name: string }"
-          };
-        }
-
-        if (offset >= findRange(sample, "message").from && offset < findRange(sample, "message").to) {
-          return {
-            source: "fake-lsp",
-            content: "const message: string"
-          };
-        }
-
-        return {
-          source: "fake-lsp",
-          content: "Hover info from the fake LSP demo."
-        };
-      }
-    },
-    codeActions: {
-      async getCodeActions() {
-        return [
-          {
-            title: "Replace console.log with console.warn",
-            changes: [
-              {
-                ...findRange(sample, "console.log"),
-                insert: "console.warn"
-              }
-            ]
-          },
-          {
-            title: "Rename message to userMessage",
-            changes: [
-              {
-                ...findRange(sample, "message"),
-                insert: "userMessage"
-              }
-            ]
-          }
-        ];
-      }
-    }
-  };
+  const sceneRuntime = await createSceneLangWasm({ wasmUrl: sceneLangWasmUrl });
+  const sample = await loadInitialSceneSource();
+  const initialSelectionOffset = Math.max(0, sample.indexOf("guttr"));
+  const controller = createEditorController({
+    value: sample,
+    selection: createCharacterSelection(createTextDocument(sample), initialSelectionOffset)
+  });
 
   app.innerHTML = `
     <main class="workspace">
       <div id="mount-editor" class="workspace__editor"></div>
+      <aside class="workspace__preview">
+        <div id="mount-preview" class="scene-preview" data-scene-preview="true"></div>
+      </aside>
     </main>
   `;
 
   const mount = app.querySelector<HTMLDivElement>("#mount-editor");
+  const preview = app.querySelector<HTMLDivElement>("#mount-preview");
 
-  if (mount) {
-    createEditor(mount, {
-      filePath: "examples/chat-worker/src/worker.ts",
-      value: sample,
-      languageServices,
-      theme: phTheme
-    }).focus();
+  if (mount && preview) {
+    let renderRunId = 0;
+
+    const renderPreview = async (source: string) => {
+      const runId = ++renderRunId;
+
+      preview.dataset.scenePreviewState = "running";
+
+      try {
+        const compiled = sceneRuntime.compile(source);
+        const frame = await renderCompiledScene(compiled, {
+          width: 62,
+          height: 20
+        });
+
+        if (runId !== renderRunId) {
+          return;
+        }
+
+        preview.dataset.scenePreviewState = "ready";
+        renderPreviewFrame(preview, frame);
+      } catch (error) {
+        if (runId !== renderRunId) {
+          return;
+        }
+
+        preview.dataset.scenePreviewState = "error";
+        renderPreviewError(preview, error);
+      }
+    };
+
+    const editor = createEditor(mount, {
+      controller,
+      filePath: "examples/editor.scene",
+      languageServices: sceneLanguageServices,
+      host: {
+        async writeFile(context) {
+          await requestJson("/__wx__/write", context);
+        },
+        async didWriteFile(context) {
+          await renderPreview(context.text);
+        },
+        async getLineChanges(context) {
+          const payload = await requestJson<{ changes: Array<{ line: number; kind: "added" | "modified" }> }>(
+            "/__wx__/line-changes",
+            context
+          );
+          return payload.changes;
+        }
+      },
+      theme: phTheme,
+      softWrap: true,
+      indentGuides: {
+        render: true,
+        character: "╎",
+        skipLevels: 1
+      }
+    });
+
+    void renderPreview(controller.getState().doc.text);
+    editor.focus();
   }
 }
 

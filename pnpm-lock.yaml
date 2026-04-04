@@ -35,6 +35,9 @@ importers:
       '@wx/editor-controller':
         specifier: workspace:*
         version: link:../../packages/editor-controller
+      '@wx/editor-core':
+        specifier: workspace:*
+        version: link:../../packages/editor-core
       '@wx/editor-element':
         specifier: workspace:*
         version: link:../../packages/editor-element
@@ -47,6 +50,12 @@ importers:
       '@wx/editor-view-dom':
         specifier: workspace:*
         version: link:../../packages/editor-view-dom
+      '@wx/scene-lang-wasm':
+        specifier: workspace:*
+        version: link:../../packages/scene-lang-wasm
+      '@wx/scene-lang-worker':
+        specifier: workspace:*
+        version: link:../../packages/scene-lang-worker
       tree-sitter-typescript:
         specifier: ^0.23.2
         version: 0.23.2
@@ -115,6 +124,20 @@ importers:
       '@wx/editor-theme':
         specifier: workspace:*
         version: link:../editor-theme
+
+  packages/scene-lang-wasm: {}
+
+  packages/scene-lang-worker:
+    dependencies:
+      '@wx/editor-core':
+        specifier: workspace:*
+        version: link:../editor-core
+      '@wx/editor-language':
+        specifier: workspace:*
+        version: link:../editor-language
+      '@wx/scene-lang-wasm':
+        specifier: workspace:*
+        version: link:../scene-lang-wasm
 
 packages:
 

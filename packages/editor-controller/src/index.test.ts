@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { enterInsertMode, insertText, moveRight } from "@wx/editor-core";
+import { enterInsertMode, enterNormalMode, insertText, moveRight } from "@wx/editor-core";
 
 import { createEditorController } from "./index";
 
@@ -37,6 +37,41 @@ describe("editor controller", () => {
 
     controller.execute((_state, _dispatch, context) => context.history?.redo() ?? false);
     expect(controller.getState().doc.text).toBe("dabc");
+  });
+
+  it("groups insert mode edits into one undo step after leaving insert mode", () => {
+    const controller = createEditorController({ value: "abc" });
+
+    controller.execute(enterInsertMode);
+    controller.execute(insertText("x"));
+    controller.execute(insertText("y"));
+    controller.execute(enterNormalMode);
+
+    expect(controller.getState().doc.text).toBe("xyabc");
+
+    controller.execute((_state, _dispatch, context) => context.history?.undo() ?? false);
+    expect(controller.getState().doc.text).toBe("abc");
+
+    controller.execute((_state, _dispatch, context) => context.history?.redo() ?? false);
+    expect(controller.getState().doc.text).toBe("xyabc");
+  });
+
+  it("supports manual undo checkpoints inside insert mode", () => {
+    const controller = createEditorController({ value: "abc" });
+
+    controller.execute(enterInsertMode);
+    controller.execute(insertText("x"));
+    controller.execute((_state, _dispatch, context) => context.history?.checkpoint?.() ?? false);
+    controller.execute(insertText("y"));
+    controller.execute(enterNormalMode);
+
+    expect(controller.getState().doc.text).toBe("xyabc");
+
+    controller.execute((_state, _dispatch, context) => context.history?.undo() ?? false);
+    expect(controller.getState().doc.text).toBe("xabc");
+
+    controller.execute((_state, _dispatch, context) => context.history?.undo() ?? false);
+    expect(controller.getState().doc.text).toBe("abc");
   });
 
   it("clears history when state is replaced externally", () => {

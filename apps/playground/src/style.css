@@ -43,8 +43,9 @@ body {
 }
 
 .workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(22rem, 0.8fr);
   height: 100vh;
-  padding: 0;
   overflow: hidden;
 }
 
@@ -53,9 +54,113 @@ body {
   overflow: hidden;
 }
 
+.workspace__preview {
+  min-width: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  background: #050505;
+}
+
 .workspace__editor [data-wx-editor="root"] {
   height: 100%;
   border: 0;
   border-radius: 0;
   box-shadow: none;
+}
+
+.scene-preview {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: 1rem;
+  overflow: auto;
+}
+
+.scene-preview__surface {
+  display: grid;
+  gap: 0;
+  align-content: start;
+  padding: 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: #050505;
+  font:
+    400 15px/1.32 "Monaspace Argon App",
+    "Monaspace Argon NF",
+    "Monaspace Argon",
+    monospace;
+}
+
+.scene-preview__line {
+  display: grid;
+  grid-template-columns: repeat(var(--scene-preview-columns, 62), minmax(0, 1ch));
+}
+
+.scene-preview__cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1ch;
+  height: 1.32em;
+  box-sizing: border-box;
+  color: #f5f5f5;
+  background: transparent;
+  font-weight: 450;
+}
+
+.scene-preview__cell--text {
+  color: #f5f5f5;
+}
+
+.scene-preview__cell--status {
+  color: #080808;
+  background: #ff9000;
+}
+
+.scene-preview__cell--gutter {
+  color: #8e8e8e;
+}
+
+.scene-preview__cell--warning {
+  color: #ffd166;
+  font-weight: 650;
+}
+
+.scene-preview__cell--error {
+  color: #ff6b6b;
+  font-weight: 650;
+}
+
+.scene-preview__cell--info {
+  color: #6ecbff;
+  font-weight: 650;
+}
+
+.scene-preview__cell--hint {
+  color: #8d8d8d;
+}
+
+.scene-preview__cell--cursor {
+  color: #080808;
+  background: #ff9000;
+}
+
+.scene-preview[data-scene-preview-state="running"] .scene-preview__surface {
+  opacity: 0.88;
+}
+
+.scene-preview__error {
+  padding: 1rem;
+  color: #ff6b6b;
+  font: 600 0.95rem/1.4 "IBM Plex Sans", system-ui, sans-serif;
+}
+
+@media (max-width: 960px) {
+  .workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) 16rem;
+  }
+
+  .workspace__preview {
+    border-left: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
 }

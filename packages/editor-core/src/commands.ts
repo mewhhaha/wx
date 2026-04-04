@@ -19,6 +19,7 @@ export interface CommandContext {
   history?: {
     undo(): boolean;
     redo(): boolean;
+    checkpoint?(): boolean;
   };
   viewport?: {
     fromLine: number;
@@ -937,6 +938,29 @@ export const deleteBackward: Command = (state, dispatch) => {
   return applySingleChange(state, dispatch, changeAtCursor(state, "", 1, 0));
 };
 
+export function deleteBackwardIndentAware(indentText: string): Command {
+  const indentWidth = Math.max(1, indentText.length);
+
+  return (state, dispatch) => {
+    const cursor = getCursorOffset(state.selection);
+
+    if (cursor === 0) {
+      return true;
+    }
+
+    const position = state.doc.positionAt(cursor);
+    const line = state.doc.lineAt(position.line);
+    const linePrefix = line.text.slice(0, position.column);
+
+    if (linePrefix.length > 0 && /^[ \t]+$/.test(linePrefix)) {
+      const deleteWidth = linePrefix.length % indentWidth || indentWidth;
+      return applySingleChange(state, dispatch, changeAtCursor(state, "", deleteWidth, 0));
+    }
+
+    return applySingleChange(state, dispatch, changeAtCursor(state, "", 1, 0));
+  };
+}
+
 export const deleteForward: Command = (state, dispatch) => {
   const cursor = getCursorOffset(state.selection);
   if (cursor === state.doc.length) {
@@ -969,6 +993,36 @@ export const deleteSelection: Command = (state, dispatch) => {
     yankBuffer: deletedText,
     lastDeletedFrom: selection.from
   });
+  return true;
+};
+
+export const changeSelection: Command = (state, dispatch, context) => {
+  const selection = getSelectionOffsets(state);
+
+  if (selection.to <= selection.from) {
+    return true;
+  }
+
+  const deletedText = state.doc.slice(selection.from, selection.to);
+  const change: TextChange = {
+    from: selection.from,
+    to: selection.to,
+    insert: ""
+  };
+
+  dispatch({
+    changes: [change],
+    selection: createSelection(selection.from, selection.from),
+    mode: "insert",
+    insertSession: {
+      restoreOffset: selection.from,
+      restoreAffinity: "left",
+      moved: false
+    },
+    yankBuffer: deletedText,
+    lastDeletedFrom: selection.from
+  });
+  context.requestFocus?.();
   return true;
 };
 
