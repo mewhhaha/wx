@@ -82,6 +82,43 @@ function renderPreviewError(mount: HTMLDivElement, error: unknown): void {
   mount.append(panel);
 }
 
+function measurePreviewGrid(preview: HTMLDivElement): { width: number; height: number } {
+  const surfaceProbe = document.createElement("div");
+  const probe = document.createElement("span");
+  surfaceProbe.className = "scene-preview__surface";
+  probe.className = "scene-preview__cell scene-preview__cell--text";
+  probe.textContent = "M";
+  surfaceProbe.style.position = "absolute";
+  surfaceProbe.style.visibility = "hidden";
+  surfaceProbe.style.pointerEvents = "none";
+  surfaceProbe.style.inset = "0 auto auto 0";
+  surfaceProbe.style.width = "auto";
+  surfaceProbe.style.height = "auto";
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  probe.style.pointerEvents = "none";
+  surfaceProbe.append(probe);
+  preview.append(surfaceProbe);
+
+  const rect = probe.getBoundingClientRect();
+  surfaceProbe.remove();
+
+  const cellWidth = rect.width > 0 ? rect.width : 9;
+  const cellHeight = rect.height > 0 ? rect.height : 20;
+  const computed = window.getComputedStyle(preview);
+  const paddingLeft = Number.parseFloat(computed.paddingLeft) || 0;
+  const paddingRight = Number.parseFloat(computed.paddingRight) || 0;
+  const paddingTop = Number.parseFloat(computed.paddingTop) || 0;
+  const paddingBottom = Number.parseFloat(computed.paddingBottom) || 0;
+  const availableWidth = Math.max(cellWidth, preview.clientWidth - paddingLeft - paddingRight);
+  const availableHeight = Math.max(cellHeight, preview.clientHeight - paddingTop - paddingBottom);
+
+  return {
+    width: Math.max(1, Math.floor(availableWidth / cellWidth)),
+    height: Math.max(1, Math.floor(availableHeight / cellHeight))
+  };
+}
+
 async function requestJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
@@ -150,17 +187,21 @@ async function main(): Promise<void> {
 
   if (mount && preview) {
     let renderRunId = 0;
+    let lastRenderedSource = controller.getState().doc.text;
+    let resizeFrame = 0;
 
     const renderPreview = async (source: string) => {
       const runId = ++renderRunId;
+      lastRenderedSource = source;
 
       preview.dataset.scenePreviewState = "running";
 
       try {
+        const terminalSize = measurePreviewGrid(preview);
         const compiled = sceneRuntime.compile(source);
         const frame = await renderCompiledScene(compiled, {
-          width: 62,
-          height: 20
+          width: terminalSize.width,
+          height: terminalSize.height
         });
 
         if (runId !== renderRunId) {
@@ -178,6 +219,18 @@ async function main(): Promise<void> {
         renderPreviewError(preview, error);
       }
     };
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (resizeFrame !== 0) {
+        cancelAnimationFrame(resizeFrame);
+      }
+
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = 0;
+        void renderPreview(lastRenderedSource);
+      });
+    });
+    resizeObserver.observe(preview);
 
     const editor = createEditor(mount, {
       controller,
@@ -209,6 +262,16 @@ async function main(): Promise<void> {
 
     void renderPreview(controller.getState().doc.text);
     editor.focus();
+    window.addEventListener(
+      "beforeunload",
+      () => {
+        resizeObserver.disconnect();
+        if (resizeFrame !== 0) {
+          cancelAnimationFrame(resizeFrame);
+        }
+      },
+      { once: true }
+    );
   }
 }
 
