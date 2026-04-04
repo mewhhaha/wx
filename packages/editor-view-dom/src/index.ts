@@ -103,6 +103,7 @@ export interface EditorHandle {
 
 interface LineFragment {
   offset: number | null;
+  endOffset: number | null;
   text: string;
   role: HighlightRole;
   isSelected: boolean;
@@ -223,7 +224,21 @@ function mountStyles(styleHost: HTMLElement): void {
       color: var(--wx-color-text);
       border: 1px solid rgba(148, 163, 184, 0.18);
       border-radius: 18px;
-      font: 15px/1.6 "Monaspace Argon Var", "Iosevka Web", "SFMono-Regular", "Monaco", monospace;
+      font: 15px/1.6 "Monaspace Argon NF", "Monaspace Argon", "Iosevka Web", "SFMono-Regular", "Monaco", monospace;
+      font-variant-ligatures: contextual discretionary-ligatures;
+      font-feature-settings:
+        "calt" 1,
+        "liga" 1,
+        "ss01" 1,
+        "ss02" 1,
+        "ss03" 1,
+        "ss04" 1,
+        "ss05" 1,
+        "ss06" 1,
+        "ss07" 1,
+        "ss08" 1,
+        "ss09" 1,
+        "ss10" 1;
       box-shadow: 0 24px 80px rgba(2, 8, 23, 0.28);
     }
 
@@ -329,9 +344,10 @@ function mountStyles(styleHost: HTMLElement): void {
 
     .wx-editor__line-text {
       display: inline-flex;
-      flex: 0 1 auto;
-      min-width: 0;
+      flex: 0 0 auto;
       padding-right: 1ch;
+      line-height: inherit;
+      align-self: baseline;
       white-space: pre;
     }
 
@@ -366,13 +382,15 @@ function mountStyles(styleHost: HTMLElement): void {
 
     .wx-editor__eol-diagnostic {
       display: inline-block;
-      flex: 1 1 auto;
+      flex: 1 1 0;
       min-width: 0;
-      padding-left: 2ch;
+      padding-left: 1ch;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       font-weight: 600;
+      line-height: inherit;
+      align-self: baseline;
     }
 
     .wx-editor__inline-diagnostic {
@@ -648,7 +666,8 @@ function applyThemeVariables(root: HTMLElement, theme: ThemeSpec): void {
 function measureMetrics(styleHost: HTMLElement): { charWidth: number; lineHeight: number } {
   const probe = document.createElement("span");
   probe.textContent = "MMMMMMMMMM";
-  probe.style.font = '15px/1.6 "Monaspace Argon Var", "Iosevka Web", "SFMono-Regular", "Monaco", monospace';
+  probe.style.font =
+    '15px/1.6 "Monaspace Argon NF", "Monaspace Argon", "Iosevka Web", "SFMono-Regular", "Monaco", monospace';
   probe.style.position = "absolute";
   probe.style.visibility = "hidden";
   probe.style.whiteSpace = "pre";
@@ -889,6 +908,30 @@ function diagnosticSeverityAtOffset(entries: readonly EditorDiagnostic[], offset
   return best;
 }
 
+function resolveOffsetWithinRun(
+  target: HTMLElement,
+  startOffset: number,
+  endOffset: number | null,
+  clientX: number
+): number {
+  if (endOffset === null || endOffset <= startOffset + 1) {
+    return startOffset;
+  }
+
+  const rect = target.getBoundingClientRect();
+  const width = rect.width;
+
+  if (!Number.isFinite(width) || width <= 0) {
+    return startOffset;
+  }
+
+  const runLength = endOffset - startOffset;
+  const relativeX = Math.max(0, Math.min(width, clientX - rect.left));
+  const ratio = width > 0 ? relativeX / width : 0;
+  const index = Math.min(runLength - 1, Math.max(0, Math.floor(ratio * runLength)));
+  return startOffset + index;
+}
+
 function renderLineFragments(
   line: { start: number; text: string },
   state: EditorState,
@@ -899,12 +942,36 @@ function renderLineFragments(
   const activeOffset = getActiveCharacterOffset(state);
   const selection = getSelectionOffsets(state);
   const lineEnd = line.start + line.text.length;
+  const pushFragment = (fragment: LineFragment): void => {
+    const previous = fragments[fragments.length - 1];
+
+    if (
+      previous &&
+      previous.offset !== null &&
+      previous.endOffset !== null &&
+      fragment.offset !== null &&
+      fragment.endOffset !== null &&
+      !previous.isCursor &&
+      !fragment.isCursor &&
+      previous.role === fragment.role &&
+      previous.isSelected === fragment.isSelected &&
+      previous.diagnosticSeverity === fragment.diagnosticSeverity &&
+      previous.endOffset === fragment.offset
+    ) {
+      previous.text += fragment.text;
+      previous.endOffset = fragment.endOffset;
+      return;
+    }
+
+    fragments.push(fragment);
+  };
 
   if (state.mode === "insert") {
     if (line.text.length === 0) {
       return [
         {
           offset: line.start,
+          endOffset: line.start + 1,
           text: EMPTY_CELL_TEXT,
           role: "text",
           isSelected: false,
@@ -918,8 +985,9 @@ function renderLineFragments(
     for (let index = 0; index < line.text.length; index += 1) {
       const offset = line.start + index;
 
-      fragments.push({
+      pushFragment({
         offset,
+        endOffset: offset + 1,
         text: line.text[index] ?? EMPTY_CELL_TEXT,
         role: roleAtOffset(spans, offset),
         isSelected: false,
@@ -937,6 +1005,7 @@ function renderLineFragments(
     return [
       {
         offset: line.start,
+        endOffset: line.start + 1,
         text: EMPTY_CELL_TEXT,
         role: "text",
         isSelected: selected,
@@ -949,8 +1018,9 @@ function renderLineFragments(
 
   for (let index = 0; index < line.text.length; index += 1) {
     const offset = line.start + index;
-    fragments.push({
+    pushFragment({
       offset,
+      endOffset: offset + 1,
       text: line.text[index] ?? " ",
       role: roleAtOffset(spans, offset),
       isSelected: offset >= selection.from && offset < selection.to,
@@ -965,8 +1035,9 @@ function renderLineFragments(
   const lineEndingCursor = hasLineEnding && activeOffset === lineEnd;
 
   if (lineEndingSelected || lineEndingCursor) {
-    fragments.push({
+    pushFragment({
       offset: lineEnd,
+      endOffset: lineEnd + 1,
       text: EMPTY_CELL_TEXT,
       role: "text",
       isSelected: lineEndingSelected,
@@ -1394,6 +1465,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
       if (segment.offset !== null) {
         token.dataset.wxEditorOffset = String(segment.offset);
+        if (segment.endOffset !== null) {
+          token.dataset.wxEditorOffsetEnd = String(segment.endOffset);
+        }
       }
 
       token.textContent = segment.text;
@@ -2738,7 +2812,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     const target = sourceElement?.closest<HTMLElement>("[data-wx-editor-offset]") ?? null;
-    const offset = target?.dataset.wxEditorOffset ? Number(target.dataset.wxEditorOffset) : null;
+    const offset =
+      target && target.dataset.wxEditorOffset
+        ? resolveOffsetWithinRun(
+            target,
+            Number(target.dataset.wxEditorOffset),
+            target.dataset.wxEditorOffsetEnd ? Number(target.dataset.wxEditorOffsetEnd) : null,
+            event.clientX
+          )
+        : null;
 
     if (offset === null || Number.isNaN(offset)) {
       clearHover(true);

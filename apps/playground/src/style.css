@@ -1,9 +1,11 @@
 @font-face {
-  font-family: "Monaspace Argon Var";
-  src: url("https://raw.githubusercontent.com/githubnext/monaspace/main/fonts/webfonts/MonaspaceArgonVarVF%5Bwght%2Cwdth%2Cslnt%5D.woff2")
-    format("woff2");
-  font-weight: 100 900;
-  font-style: normal italic;
+  font-family: "Monaspace Argon App";
+  src:
+    local("Monaspace Argon NF"),
+    local("Monaspace Argon"),
+    local("Monaspace Argon Regular");
+  font-weight: 400 800;
+  font-style: normal;
   font-display: swap;
 }
 
@@ -11,7 +13,21 @@
   color-scheme: dark;
   background: #0a0b0f;
   color: #f8fafc;
-  font: 16px/1.5 "Monaspace Argon Var", "IBM Plex Sans", system-ui, sans-serif;
+  font: 16px/1.5 "Monaspace Argon App", "IBM Plex Sans", system-ui, sans-serif;
+  font-variant-ligatures: contextual discretionary-ligatures;
+  font-feature-settings:
+    "calt" 1,
+    "liga" 1,
+    "ss01" 1,
+    "ss02" 1,
+    "ss03" 1,
+    "ss04" 1,
+    "ss05" 1,
+    "ss06" 1,
+    "ss07" 1,
+    "ss08" 1,
+    "ss09" 1,
+    "ss10" 1;
 }
 
 html,
