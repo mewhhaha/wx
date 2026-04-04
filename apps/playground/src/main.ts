@@ -50,6 +50,11 @@ const previewStyles = new Map<number, string>([
   [7, "scene-preview__cell--cursor"]
 ]);
 
+function hasDevBridge(): boolean {
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
 function renderPreviewFrame(mount: HTMLDivElement, frame: ScenePreviewFrame): void {
   mount.replaceChildren();
 
@@ -136,6 +141,10 @@ async function requestJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function loadInitialSceneSource(): Promise<string> {
+  if (!hasDevBridge()) {
+    return fallbackSample;
+  }
+
   try {
     const response = await fetch("/__wx__/read?file=examples/editor.scene");
 
@@ -186,6 +195,7 @@ async function main(): Promise<void> {
   const preview = app.querySelector<HTMLDivElement>("#mount-preview");
 
   if (mount && preview) {
+    const devBridgeEnabled = hasDevBridge();
     let renderRunId = 0;
     let lastRenderedSource = controller.getState().doc.text;
     let resizeFrame = 0;
@@ -236,21 +246,23 @@ async function main(): Promise<void> {
       controller,
       filePath: "examples/editor.scene",
       languageServices: sceneLanguageServices,
-      host: {
-        async writeFile(context) {
-          await requestJson("/__wx__/write", context);
-        },
-        async didWriteFile(context) {
-          await renderPreview(context.text);
-        },
-        async getLineChanges(context) {
-          const payload = await requestJson<{ changes: Array<{ line: number; kind: "added" | "modified" }> }>(
-            "/__wx__/line-changes",
-            context
-          );
-          return payload.changes;
-        }
-      },
+      host: devBridgeEnabled
+        ? {
+            async writeFile(context) {
+              await requestJson("/__wx__/write", context);
+            },
+            async didWriteFile(context) {
+              await renderPreview(context.text);
+            },
+            async getLineChanges(context) {
+              const payload = await requestJson<{ changes: Array<{ line: number; kind: "added" | "modified" }> }>(
+                "/__wx__/line-changes",
+                context
+              );
+              return payload.changes;
+            }
+          }
+        : undefined,
       theme: phTheme,
       softWrap: true,
       indentGuides: {
