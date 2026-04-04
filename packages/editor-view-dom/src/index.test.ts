@@ -801,9 +801,18 @@ describe("createEditor", () => {
 
     expect(container.querySelector('[data-wx-editor-diagnostic-marker="error"]')).not.toBeNull();
     expect(container.querySelector('[data-wx-editor-content="1"] .wx-diagnostic-error')).not.toBeNull();
+    expect(container.querySelector('[data-wx-editor-diagnostic-note="inline"]')?.textContent).toContain("Bad keyword");
+    expect(container.querySelector('[data-wx-editor-diagnostic-hook="error"]')).not.toBeNull();
+    expect(container.querySelector('[data-wx-editor-diagnostic-note="eol"]')?.textContent).toContain("Suspicious name");
+    expect(container.querySelector('[data-wx-editor-diagnostic-note="eol"]')?.classList.contains("wx-editor__eol-diagnostic")).toBe(true);
+    expect(container.querySelector(".wx-editor__diagnostic-gutter")?.textContent).toBe(" ");
+    expect(container.querySelector('[data-wx-editor-row="1"]')?.nextElementSibling?.querySelector('[data-wx-editor-diagnostic-note="inline"]')).not.toBeNull();
     expect(container.querySelector("[data-wx-editor-status-meta='true']")?.textContent).toContain("E1");
     expect(container.querySelector("[data-wx-editor-status-meta='true']")?.textContent).toContain("W1");
-    expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("Bad keyword");
+
+    const token = container.querySelector('[data-wx-editor-offset="0"]') as HTMLElement;
+    token.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent).toContain("Bad keyword");
   });
 
   it("runs :format through the formatter service", async () => {
@@ -901,6 +910,7 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     await Promise.resolve();
 
+    expect(container.querySelector("[data-wx-editor-prefix-hint='space']")).toBeNull();
     expect(container.querySelector("[data-wx-editor-code-actions='true']")?.textContent).toContain("Replace bad");
   });
 
@@ -923,12 +933,28 @@ describe("createEditor", () => {
 
     token.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
     await Promise.resolve();
-    expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("hover:0");
+    expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent).toContain("hover:0");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    expect(container.querySelector("[data-wx-editor-prefix-hint='space']")?.textContent).toContain("<space>");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
     await Promise.resolve();
-    expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("hover:0");
+    expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent).toContain("hover:0");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(container.querySelector("[data-wx-editor-tooltip='true']")).toHaveProperty("hidden", true);
+  });
+
+  it("renders filler rows with ~ after the end of the file", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, { value: "one\ntwo" });
+    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
+    Object.defineProperty(surface, "clientHeight", { value: 240, configurable: true });
+    surface.dispatchEvent(new Event("scroll"));
+
+    expect(container.querySelector("[data-wx-editor-filler-row]")?.textContent).toContain("~");
   });
 
   it("subscribes hosts to controller-backed updates without polling", () => {

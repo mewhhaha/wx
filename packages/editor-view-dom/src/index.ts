@@ -135,6 +135,9 @@ interface HoverState {
   offset: number | null;
   content: string;
   source?: string;
+  tone: "info" | "warning" | "error";
+  left: number;
+  top: number;
 }
 
 type PendingAction =
@@ -163,9 +166,13 @@ const SURFACE_VERTICAL_PADDING = 16;
 const EMPTY_CELL_TEXT = "\u00a0";
 const HIGHLIGHT_CONTEXT_LINES = 2;
 const VIEWPORT_OVERSCAN_LINES = 6;
+const END_OF_LINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "hint";
+const CURSOR_LINE_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "warning";
+const OTHER_LINES_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "error";
 
 interface RowView {
   lineIndex: number;
+  host: HTMLDivElement;
   row: HTMLDivElement;
   gutter: HTMLDivElement;
   content: HTMLDivElement;
@@ -190,6 +197,14 @@ function diagnosticClassName(severity: DiagnosticSeverity): string {
   return `wx-diagnostic-${severity}`;
 }
 
+function toneForSeverity(severity: DiagnosticSeverity): "info" | "warning" | "error" {
+  return severity === "error" ? "error" : severity === "warning" ? "warning" : "info";
+}
+
+function meetsDiagnosticThreshold(severity: DiagnosticSeverity, minimum: DiagnosticSeverity): boolean {
+  return DIAGNOSTIC_SEVERITY_ORDER[severity] <= DIAGNOSTIC_SEVERITY_ORDER[minimum];
+}
+
 function mountStyles(styleHost: HTMLElement): void {
   if (styleHost.querySelector("style[data-wx-style='true']")) {
     return;
@@ -208,7 +223,7 @@ function mountStyles(styleHost: HTMLElement): void {
       color: var(--wx-color-text);
       border: 1px solid rgba(148, 163, 184, 0.18);
       border-radius: 18px;
-      font: 15px/1.6 "Iosevka Web", "SFMono-Regular", "Monaco", monospace;
+      font: 15px/1.6 "Monaspace Argon Var", "Iosevka Web", "SFMono-Regular", "Monaco", monospace;
       box-shadow: 0 24px 80px rgba(2, 8, 23, 0.28);
     }
 
@@ -248,14 +263,18 @@ function mountStyles(styleHost: HTMLElement): void {
       white-space: pre;
     }
 
+    .wx-editor__line-group {
+      display: block;
+    }
+
     .wx-row-active {
       background: color-mix(in srgb, var(--wx-color-current-line) 88%, transparent);
     }
 
     .wx-editor__gutter {
-      display: inline-flex;
+      display: inline-grid;
+      grid-template-columns: 1ch minmax(0, 1fr);
       align-items: center;
-      justify-content: flex-end;
       gap: 0.5ch;
       padding-right: 14px;
       text-align: right;
@@ -273,6 +292,7 @@ function mountStyles(styleHost: HTMLElement): void {
       height: 0.55ch;
       border-radius: 999px;
       flex: 0 0 auto;
+      justify-self: center;
       visibility: hidden;
     }
 
@@ -298,9 +318,21 @@ function mountStyles(styleHost: HTMLElement): void {
 
     .wx-editor__content {
       position: relative;
-      white-space: pre;
+      display: flex;
+      align-items: baseline;
+      justify-content: flex-start;
       color: var(--wx-color-text);
       min-height: var(--wx-line-height, 24px);
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .wx-editor__line-text {
+      display: inline-flex;
+      flex: 0 1 auto;
+      min-width: 0;
+      padding-right: 1ch;
+      white-space: pre;
     }
 
     .wx-role-comment { color: var(--wx-color-comment); }
@@ -330,6 +362,92 @@ function mountStyles(styleHost: HTMLElement): void {
     .wx-diagnostic-hint {
       text-decoration: underline dotted var(--wx-color-diagnostic-hint);
       text-underline-offset: 0.18em;
+    }
+
+    .wx-editor__eol-diagnostic {
+      display: inline-block;
+      flex: 1 1 auto;
+      min-width: 0;
+      padding-left: 2ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+
+    .wx-editor__inline-diagnostic {
+      display: inline-flex;
+      align-items: flex-start;
+      gap: 0.75ch;
+      margin-top: 2px;
+      white-space: pre-wrap;
+      line-height: 1.35;
+      opacity: 0.95;
+      font-weight: 600;
+      position: relative;
+    }
+
+    .wx-editor__inline-diagnostic-hook {
+      position: relative;
+      flex: 0 0 auto;
+      width: 1.2ch;
+      height: calc(var(--wx-line-height, 24px) * 0.72);
+      margin-top: 0.1em;
+    }
+
+    .wx-editor__inline-diagnostic-hook::before {
+      content: "";
+      position: absolute;
+      left: 0.4ch;
+      top: 0;
+      width: 0.8ch;
+      height: 0.72em;
+      border-left: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      border-bottom-left-radius: 6px;
+      opacity: 0.9;
+    }
+
+    .wx-editor__inline-diagnostic-text {
+      min-width: 0;
+    }
+
+    .wx-editor__diagnostic-row {
+      display: grid;
+      align-items: start;
+      min-height: calc(var(--wx-line-height, 24px) * 0.95);
+    }
+
+    .wx-editor__diagnostic-gutter {
+      color: transparent;
+      user-select: none;
+      padding-right: 14px;
+    }
+
+    .wx-editor__diagnostic-content {
+      position: relative;
+      min-height: calc(var(--wx-line-height, 24px) * 0.95);
+      white-space: pre-wrap;
+    }
+
+    .wx-editor__inline-diagnostic[data-severity="error"],
+    .wx-editor__eol-diagnostic[data-severity="error"] {
+      color: var(--wx-color-diagnostic-error);
+    }
+
+    .wx-editor__inline-diagnostic[data-severity="warning"],
+    .wx-editor__eol-diagnostic[data-severity="warning"] {
+      color: var(--wx-color-diagnostic-warning);
+    }
+
+    .wx-editor__inline-diagnostic[data-severity="info"],
+    .wx-editor__eol-diagnostic[data-severity="info"] {
+      color: var(--wx-color-diagnostic-info);
+    }
+
+    .wx-editor__inline-diagnostic[data-severity="hint"],
+    .wx-editor__eol-diagnostic[data-severity="hint"] {
+      color: var(--wx-color-diagnostic-hint);
     }
 
     .wx-is-selected {
@@ -437,6 +555,12 @@ function mountStyles(styleHost: HTMLElement): void {
       color: #dbe2f0;
     }
 
+    .wx-editor__prefix-hint {
+      color: #eef2ff;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
     .wx-editor__code-actions {
       display: flex;
       align-items: center;
@@ -459,6 +583,55 @@ function mountStyles(styleHost: HTMLElement): void {
       color: #ffffff;
       font-weight: 700;
     }
+
+    .wx-editor__tooltip {
+      position: absolute;
+      z-index: 6;
+      max-width: min(56ch, calc(100% - 32px));
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: rgba(10, 11, 15, 0.98);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      box-shadow: 0 18px 40px rgba(2, 8, 23, 0.35);
+      color: #eef2ff;
+      line-height: 1.35;
+      pointer-events: none;
+      white-space: pre-wrap;
+    }
+
+    .wx-editor__tooltip[data-tone="error"] {
+      border-color: color-mix(in srgb, var(--wx-color-diagnostic-error) 60%, rgba(148, 163, 184, 0.22));
+    }
+
+    .wx-editor__tooltip[data-tone="warning"] {
+      border-color: color-mix(in srgb, var(--wx-color-diagnostic-warning) 60%, rgba(148, 163, 184, 0.22));
+    }
+
+    .wx-editor__tooltip[data-tone="info"] {
+      border-color: color-mix(in srgb, var(--wx-color-diagnostic-info) 45%, rgba(148, 163, 184, 0.22));
+    }
+
+    .wx-editor__tooltip-source {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 0.85em;
+      opacity: 0.75;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .wx-editor__filler-row {
+      display: grid;
+      align-items: center;
+      min-height: var(--wx-line-height, 24px);
+      color: color-mix(in srgb, var(--wx-color-gutter) 80%, transparent);
+      user-select: none;
+    }
+
+    .wx-editor__filler-gutter {
+      padding-right: 14px;
+      text-align: right;
+    }
   `;
 
   styleHost.append(styleElement);
@@ -475,7 +648,7 @@ function applyThemeVariables(root: HTMLElement, theme: ThemeSpec): void {
 function measureMetrics(styleHost: HTMLElement): { charWidth: number; lineHeight: number } {
   const probe = document.createElement("span");
   probe.textContent = "MMMMMMMMMM";
-  probe.style.font = '15px/1.6 "Iosevka Web", "SFMono-Regular", "Monaco", monospace';
+  probe.style.font = '15px/1.6 "Monaspace Argon Var", "Iosevka Web", "SFMono-Regular", "Monaco", monospace';
   probe.style.position = "absolute";
   probe.style.visibility = "hidden";
   probe.style.whiteSpace = "pre";
@@ -806,6 +979,30 @@ function renderLineFragments(
   return fragments;
 }
 
+function selectDiagnostic(
+  entries: readonly EditorDiagnostic[],
+  minimum: DiagnosticSeverity,
+  excluding: EditorDiagnostic | null = null
+): EditorDiagnostic | null {
+  let best: EditorDiagnostic | null = null;
+
+  for (const entry of entries) {
+    if (excluding && entry === excluding) {
+      continue;
+    }
+
+    if (!meetsDiagnosticThreshold(entry.severity, minimum)) {
+      continue;
+    }
+
+    if (!best || DIAGNOSTIC_SEVERITY_ORDER[entry.severity] < DIAGNOSTIC_SEVERITY_ORDER[best.severity]) {
+      best = entry;
+    }
+  }
+
+  return best;
+}
+
 function normalizeViewport(viewport: { fromLine: number; toLine: number }, lineCount: number): { fromLine: number; toLine: number } {
   const maxLine = Math.max(0, lineCount - 1);
   const fromLine = Math.max(0, Math.min(maxLine, viewport.fromLine));
@@ -842,7 +1039,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     active: false,
     pinned: false,
     offset: null,
-    content: ""
+    content: "",
+    tone: "info",
+    left: 16,
+    top: 16
   };
   let diagnostics: readonly EditorDiagnostic[] = [];
   let diagnosticsByLine = new Map<number, EditorDiagnostic[]>();
@@ -864,6 +1064,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   const topSpacer = document.createElement("div");
   const viewportRows = document.createElement("div");
   const bottomSpacer = document.createElement("div");
+  const tooltip = document.createElement("div");
   const status = document.createElement("div");
   const statusMode = document.createElement("div");
   const statusFile = document.createElement("div");
@@ -894,6 +1095,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   bottomSpacer.className = "wx-editor__spacer";
   bottomSpacer.dataset.wxEditorSpacer = "bottom";
 
+  tooltip.className = "wx-editor__tooltip";
+  tooltip.dataset.wxEditorTooltip = "true";
+  tooltip.hidden = true;
+
   status.className = "wx-editor__status";
   status.dataset.wxEditor = "status";
 
@@ -918,7 +1123,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   status.append(statusMode, statusFile, statusMeta);
   rows.append(topSpacer, viewportRows, bottomSpacer);
-  surface.append(rows, textarea);
+  surface.append(rows, tooltip, textarea);
   root.append(surface, status, bottomRow);
   mountedContainer.replaceChildren(root);
 
@@ -1037,10 +1242,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function createRowView(lineIndex: number): RowView {
+    const host = document.createElement("div");
     const row = document.createElement("div");
     const gutter = document.createElement("div");
     const content = document.createElement("div");
 
+    host.className = "wx-editor__line-group";
     row.className = "wx-editor__row";
     row.dataset.wxEditorRow = String(lineIndex + 1);
 
@@ -1051,9 +1258,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     content.dataset.wxEditorContent = String(lineIndex + 1);
 
     row.append(gutter, content);
+    host.append(row);
 
     return {
       lineIndex,
+      host,
       row,
       gutter,
       content
@@ -1099,6 +1308,20 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return best;
   }
 
+  function getInlineDiagnosticForLine(lineIndex: number): EditorDiagnostic | null {
+    const entries = getLineDiagnostics(lineIndex);
+    const activeLine = getActiveLine(state);
+    return selectDiagnostic(
+      entries,
+      lineIndex === activeLine ? CURSOR_LINE_INLINE_DIAGNOSTIC_MIN : OTHER_LINES_INLINE_DIAGNOSTIC_MIN
+    );
+  }
+
+  function getEndOfLineDiagnosticForLine(lineIndex: number): EditorDiagnostic | null {
+    const entries = getLineDiagnostics(lineIndex);
+    return selectDiagnostic(entries, END_OF_LINE_DIAGNOSTIC_MIN, getInlineDiagnosticForLine(lineIndex));
+  }
+
   function getDiagnosticsSummary(): { errors: number; warnings: number } {
     let errors = 0;
     let warnings = 0;
@@ -1134,8 +1357,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const cursorPosition = state.doc.positionAt(activeOffset);
     const lineDiagnostics = getLineDiagnostics(lineIndex);
     const lineDiagnosticSeverity = getLineDiagnosticSeverity(lineIndex);
+    const inlineDiagnostic = getInlineDiagnosticForLine(lineIndex);
+    const endOfLineDiagnostic = getEndOfLineDiagnosticForLine(lineIndex);
     const gutterMarker = document.createElement("span");
     const gutterNumber = document.createElement("span");
+    const lineText = document.createElement("span");
 
     view.lineIndex = lineIndex;
     view.row.dataset.wxEditorRow = String(lineIndex + 1);
@@ -1149,6 +1375,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     view.gutter.replaceChildren(gutterMarker, gutterNumber);
     view.row.classList.toggle("wx-row-active", lineIndex === cursorPosition.line);
     view.content.replaceChildren();
+    view.host.replaceChildren(view.row);
+    lineText.className = "wx-editor__line-text";
+    view.content.append(lineText);
 
     for (const segment of renderLineFragments(line, state, getLineHighlights(lineIndex), lineDiagnostics)) {
       const token = document.createElement("span");
@@ -1168,7 +1397,46 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       }
 
       token.textContent = segment.text;
-      view.content.append(token);
+      lineText.append(token);
+    }
+
+    if (endOfLineDiagnostic) {
+      const note = document.createElement("span");
+      note.className = "wx-editor__eol-diagnostic";
+      note.dataset.severity = endOfLineDiagnostic.severity;
+      note.dataset.wxEditorDiagnosticNote = "eol";
+      note.textContent = `  ${endOfLineDiagnostic.message}`;
+      view.content.append(note);
+    }
+
+    if (inlineDiagnostic) {
+      const detailRow = document.createElement("div");
+      const detailGutter = document.createElement("div");
+      const detailContent = document.createElement("div");
+      const detail = document.createElement("div");
+      const hook = document.createElement("span");
+      const text = document.createElement("span");
+      const diagnosticStartColumn = Math.max(
+        0,
+        inlineDiagnostic.from > line.start ? state.doc.positionAt(inlineDiagnostic.from).column : 0
+      );
+      detailRow.className = "wx-editor__diagnostic-row";
+      detailGutter.className = "wx-editor__diagnostic-gutter";
+      detailContent.className = "wx-editor__diagnostic-content";
+      detailRow.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
+      detailGutter.textContent = " ";
+      detail.className = "wx-editor__inline-diagnostic";
+      detail.dataset.severity = inlineDiagnostic.severity;
+      detail.dataset.wxEditorDiagnosticNote = "inline";
+      detail.style.marginLeft = `${diagnosticStartColumn * metrics.charWidth}px`;
+      hook.className = "wx-editor__inline-diagnostic-hook";
+      hook.dataset.wxEditorDiagnosticHook = inlineDiagnostic.severity;
+      text.className = "wx-editor__inline-diagnostic-text";
+      text.textContent = inlineDiagnostic.message;
+      detail.append(hook, text);
+      detailContent.append(detail);
+      detailRow.append(detailGutter, detailContent);
+      view.host.append(detailRow);
     }
 
     if (state.mode === "insert" && lineIndex === cursorPosition.line) {
@@ -1195,6 +1463,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const toLine = Math.min(lineCount - 1, fromLine + visibleLineCount - 1);
 
     return { fromLine, toLine };
+  }
+
+  function getVisibleLineCapacity(): number {
+    const viewportHeight = Math.max(metrics.lineHeight, surface.clientHeight || metrics.lineHeight * 20);
+    return Math.max(1, Math.ceil(viewportHeight / metrics.lineHeight));
   }
 
   function expandViewport(viewport: LineViewport): LineViewport {
@@ -1242,7 +1515,25 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       view.row.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
       patchRowView(view, lineIndex);
       rowViews.push(view);
-      fragment.append(view.row);
+      fragment.append(view.host);
+    }
+
+    const fillerCount = Math.max(0, getVisibleLineCapacity() - rowViews.length);
+
+    for (let index = 0; index < fillerCount; index += 1) {
+      const fillerRow = document.createElement("div");
+      const fillerGutter = document.createElement("div");
+      const fillerContent = document.createElement("div");
+
+      fillerRow.className = "wx-editor__filler-row";
+      fillerGutter.className = "wx-editor__filler-gutter";
+      fillerContent.className = "wx-editor__content";
+      fillerRow.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
+      fillerRow.dataset.wxEditorFillerRow = String(index);
+      fillerGutter.textContent = "~";
+      fillerContent.textContent = " ";
+      fillerRow.append(fillerGutter, fillerContent);
+      fragment.append(fillerRow);
     }
 
     viewportRows.replaceChildren(fragment);
@@ -1301,9 +1592,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function patchBottomRow(): void {
-    bottomRow.dataset.active = String(
-      commandLine.active || codeActionMenu.active || !!bottomMessage || !!getCurrentDiagnostic()
-    );
+    bottomRow.dataset.active = String(commandLine.active || codeActionMenu.active || !!bottomMessage || pendingAction?.kind === "space");
     bottomRow.replaceChildren();
 
     if (commandLine.active) {
@@ -1346,8 +1635,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    const currentDiagnostic = getCurrentDiagnostic();
-
     if (bottomMessage) {
       const message = document.createElement("span");
       message.className = "wx-editor__bottom-message";
@@ -1358,29 +1645,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    if (hoverState.active) {
-      const message = document.createElement("span");
-      message.className = "wx-editor__bottom-message";
-      message.dataset.tone = "info";
-      message.dataset.wxEditorBottomMessage = "true";
-      message.textContent = hoverState.source ? `${hoverState.source}: ${hoverState.content}` : hoverState.content;
-      bottomRow.append(message);
-      return;
-    }
-
-    if (currentDiagnostic) {
-      const message = document.createElement("span");
-      const tone =
-        currentDiagnostic.severity === "error"
-          ? "error"
-          : currentDiagnostic.severity === "warning"
-            ? "warning"
-            : "info";
-      message.className = "wx-editor__bottom-message";
-      message.dataset.tone = tone;
-      message.dataset.wxEditorBottomMessage = "true";
-      message.textContent = `${currentDiagnostic.severity.toUpperCase()}: ${currentDiagnostic.message}`;
-      bottomRow.append(message);
+    if (pendingAction?.kind === "space") {
+      const prefix = document.createElement("span");
+      prefix.className = "wx-editor__prefix-hint";
+      prefix.dataset.wxEditorPrefixHint = "space";
+      prefix.textContent = "<space>";
+      bottomRow.append(prefix);
       return;
     }
 
@@ -1763,9 +2033,34 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     patchBottomRow();
   }
 
+  function patchTooltip(): void {
+    if (!hoverState.active) {
+      tooltip.hidden = true;
+      tooltip.replaceChildren();
+      return;
+    }
+
+    tooltip.hidden = false;
+    tooltip.dataset.tone = hoverState.tone;
+    tooltip.style.left = `${hoverState.left}px`;
+    tooltip.style.top = `${hoverState.top}px`;
+    tooltip.replaceChildren();
+
+    if (hoverState.source) {
+      const source = document.createElement("span");
+      source.className = "wx-editor__tooltip-source";
+      source.textContent = hoverState.source;
+      tooltip.append(source);
+    }
+
+    const body = document.createElement("div");
+    body.textContent = hoverState.content;
+    tooltip.append(body);
+  }
+
   function setHoverState(next: HoverState): void {
     hoverState = next;
-    patchBottomRow();
+    patchTooltip();
   }
 
   function clearHover(preservePinned = false): void {
@@ -1781,7 +2076,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       active: false,
       pinned: false,
       offset: null,
-      content: ""
+      content: "",
+      tone: "info",
+      left: hoverState.left,
+      top: hoverState.top
     });
   }
 
@@ -1795,11 +2093,34 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       pinned: false,
       offset: null,
       content: hover.content,
-      source: hover.source
+      source: hover.source,
+      tone: "info",
+      left: 16,
+      top: 16
     };
   }
 
-  async function requestHover(offset: number, pinned = false): Promise<boolean> {
+  function getTooltipAnchorForRect(rect: DOMRect): { left: number; top: number } {
+    const rootRect = root.getBoundingClientRect();
+    const left = Math.max(8, rect.left - rootRect.left);
+    const top = Math.max(8, rect.bottom - rootRect.top + 6);
+    return { left, top };
+  }
+
+  function showDiagnosticTooltip(diagnostic: EditorDiagnostic, anchor: DOMRect, pinned = false): void {
+    setBottomMessage(null);
+    setHoverState({
+      active: true,
+      pinned,
+      offset: diagnostic.from,
+      content: diagnostic.message,
+      source: diagnostic.source,
+      tone: toneForSeverity(diagnostic.severity),
+      ...getTooltipAnchorForRect(anchor)
+    });
+  }
+
+  async function requestHover(offset: number, anchor: DOMRect, pinned = false): Promise<boolean> {
     const hoverSource = languageServices?.hover;
 
     if (!hoverSource) {
@@ -1835,7 +2156,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     setHoverState({
       ...normalized,
       pinned,
-      offset
+      offset,
+      ...getTooltipAnchorForRect(anchor)
     });
     return true;
   }
@@ -2201,9 +2523,16 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
+    if (hoverState.active && event.key === "Escape") {
+      event.preventDefault();
+      clearHover();
+      return;
+    }
+
     if (pendingAction) {
       const nextPending = pendingAction;
       pendingAction = null;
+      patchBottomRow();
 
       if (event.key === "Escape") {
         event.preventDefault();
@@ -2267,7 +2596,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
         if (event.key === "k") {
           const hoverOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-          void requestHover(hoverOffset, true);
+          const anchorElement = root.querySelector<HTMLElement>("[data-wx-editor-cursor='true']");
+          const anchorRect = anchorElement?.getBoundingClientRect() ?? root.getBoundingClientRect();
+          const activeDiagnostic = diagnostics.find((entry) => hoverOffset >= entry.from && hoverOffset < entry.to) ?? null;
+
+          if (activeDiagnostic) {
+            showDiagnosticTooltip(activeDiagnostic, anchorRect, true);
+          } else {
+            void requestHover(hoverOffset, anchorRect, true);
+          }
           return;
         }
       }
@@ -2315,6 +2652,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     if ((state.mode === "normal" || state.mode === "visual") && event.key === " ") {
       event.preventDefault();
       pendingAction = { kind: "space" };
+      patchBottomRow();
       return;
     }
 
@@ -2385,7 +2723,21 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    const target = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-wx-editor-offset]") : null;
+    const sourceElement = event.target instanceof Element ? event.target : null;
+    const marker = sourceElement?.closest<HTMLElement>("[data-wx-editor-diagnostic-marker]");
+
+    if (marker?.dataset.wxEditorDiagnosticMarker) {
+      const row = marker.closest<HTMLElement>("[data-wx-editor-row]");
+      const lineIndex = row?.dataset.wxEditorRow ? Number(row.dataset.wxEditorRow) - 1 : null;
+      const diagnostic = lineIndex === null || Number.isNaN(lineIndex) ? null : getLineDiagnostics(lineIndex)[0] ?? null;
+
+      if (diagnostic) {
+        showDiagnosticTooltip(diagnostic, marker.getBoundingClientRect(), false);
+        return;
+      }
+    }
+
+    const target = sourceElement?.closest<HTMLElement>("[data-wx-editor-offset]") ?? null;
     const offset = target?.dataset.wxEditorOffset ? Number(target.dataset.wxEditorOffset) : null;
 
     if (offset === null || Number.isNaN(offset)) {
@@ -2397,7 +2749,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    void requestHover(offset, false);
+    const activeDiagnostic = diagnostics.find((entry) => offset >= entry.from && offset < entry.to) ?? null;
+
+    if (activeDiagnostic) {
+      showDiagnosticTooltip(activeDiagnostic, target.getBoundingClientRect(), false);
+      return;
+    }
+
+    void requestHover(offset, target.getBoundingClientRect(), false);
   }
 
   function handleMouseLeave(): void {

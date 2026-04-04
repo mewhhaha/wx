@@ -31,8 +31,9 @@ test("renders, moves, types, and highlights", async ({ page }) => {
   await expect(page.locator("[data-wx-editor-content='1']").first()).toContainText("ixmport");
 
   await page.keyboard.press("Space");
+  await expect(page.locator("[data-wx-editor-prefix-hint='space']").first()).toContainText("<space>");
   await page.keyboard.press("k");
-  await expect(page.locator("[data-wx-editor-bottom-message='true']").first()).toContainText("fake-lsp");
+  await expect(page.locator("[data-wx-editor-tooltip='true']").first()).toContainText("fake-lsp");
 
   await page.keyboard.press("Space");
   await page.keyboard.press("a");

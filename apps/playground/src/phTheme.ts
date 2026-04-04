@@ -12,7 +12,7 @@ export const phTheme: ThemeSpec = {
     diagnosticError: "#ff6b6b",
     diagnosticHint: "#7a7a7a",
     diagnosticInfo: "#6ecbff",
-    diagnosticWarning: "#ffb347",
+    diagnosticWarning: "#ffd166",
     function: "#ff9000",
     gutter: "#6f6f6f",
     keyword: "#ff6b6b",
