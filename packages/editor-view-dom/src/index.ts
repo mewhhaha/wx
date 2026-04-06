@@ -1698,14 +1698,44 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
             fromLine: 0,
             toLine: Math.max(0, getVisibleLineCapacity() - 1)
           };
+    const lineViewport = getLineViewportForVisualViewport(normalizedViewport);
+    const viewportHighlights: HighlightSpan[] = [];
+    const viewportDiagnostics = diagnostics.filter((entry) => {
+      const startLine = state.doc.positionAt(entry.from).line;
+      const endLine = state.doc.positionAt(Math.max(entry.from, entry.to - 1)).line;
+      return endLine >= lineViewport.fromLine && startLine <= lineViewport.toLine;
+    });
+    const viewportLineChanges: Array<{ line: number; kind: "added" | "modified" | "deleted" }> = [];
+
+    for (let lineIndex = lineViewport.fromLine; lineIndex <= lineViewport.toLine; lineIndex += 1) {
+      const highlights = highlightCache.get(lineIndex);
+
+      if (highlights) {
+        viewportHighlights.push(...highlights);
+      }
+
+      const lineChange = lineChangesByLine.get(lineIndex);
+
+      if (!lineChange) {
+        continue;
+      }
+
+      if (lineChange.kind) {
+        viewportLineChanges.push({ line: lineIndex, kind: lineChange.kind });
+      }
+
+      if (lineChange.deleted) {
+        viewportLineChanges.push({ line: lineIndex, kind: "deleted" });
+      }
+    }
 
     const model = buildEditorLayout({
       state,
       filePath,
       searchState: controller.getSearchState(),
-      highlights: [...highlightCache.values()].flat(),
-      diagnostics,
-      lineChanges: currentLineChanges(),
+      highlights: viewportHighlights,
+      diagnostics: viewportDiagnostics,
+      lineChanges: viewportLineChanges,
       commandLine,
       bottomMessage,
       picker: {
@@ -1771,7 +1801,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       refreshGutterWidth(true);
       updateVisibleLineCapacity(true);
       revealCursor();
+      const previousViewport = renderedViewport;
       renderVisibleRows(true);
+      if (!viewportEquals(previousViewport, renderedViewport)) {
+        void refreshHighlights(getHighlightViewport(renderedViewport), false);
+      }
     });
   }
 
@@ -3092,7 +3126,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       patchStatus();
       patchBottomRow();
       revealCursor();
+      const previousViewport = renderedViewport;
       renderVisibleRows(true);
+      if (!viewportEquals(previousViewport, renderedViewport)) {
+        void refreshHighlights(getHighlightViewport(renderedViewport), false);
+      }
       void syncLanguage(
         changes,
         changes.length === 0,
@@ -3113,6 +3151,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     revealCursor();
     const previousViewport = renderedViewport;
     renderVisibleRows();
+    if (!viewportEquals(previousViewport, renderedViewport)) {
+      void refreshHighlights(getHighlightViewport(renderedViewport), false);
+    }
 
     if (viewportEquals(previousViewport, renderedViewport)) {
       patchVisibleLines(getVisualDirtyLines(previousState, nextState));
@@ -4233,8 +4274,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return true;
     }
 
+    const previousViewport = renderedViewport;
     setAnchoredTopVisualRow(Math.max(0, anchoredTopVisualRow + rowsDelta));
     renderVisibleRows();
+    if (!viewportEquals(previousViewport, renderedViewport)) {
+      void refreshHighlights(getHighlightViewport(renderedViewport), false);
+    }
     return true;
   }
 
@@ -4250,8 +4295,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         : position === "bottom"
           ? cursorVisual.rowIndex - visibleCount + 1
           : cursorVisual.rowIndex - Math.floor(visibleCount / 2);
+    const previousViewport = renderedViewport;
     setAnchoredTopVisualRow(Math.max(0, Math.min(maxFromLine, targetFromLine)));
     renderVisibleRows();
+    if (!viewportEquals(previousViewport, renderedViewport)) {
+      void refreshHighlights(getHighlightViewport(renderedViewport), false);
+    }
     return true;
   }
 
@@ -5155,8 +5204,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       if (capacityChanged) {
         revealCursor();
       }
+      const previousViewport = renderedViewport;
       renderVisibleRows(true);
-      void refreshHighlights(getHighlightViewport(getVisibleViewport()), false);
+      if (!viewportEquals(previousViewport, renderedViewport)) {
+        void refreshHighlights(getHighlightViewport(renderedViewport), false);
+      }
     });
     resizeObserver.observe(surface);
   }

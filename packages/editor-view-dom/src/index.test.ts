@@ -715,6 +715,47 @@ describe("createEditor", () => {
     expect(latestRequest?.toLine).toBeLessThan(50);
   });
 
+  it("refreshes highlights for newly visible rows after moving the viewport", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const value = Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n");
+    const doc = createTextDocument(value);
+
+    createEditor(container, {
+      value,
+      language: {
+        async open() {},
+        async update() {},
+        async getHighlightRanges(viewport) {
+          const spans: HighlightSpan[] = [];
+
+          for (let line = viewport.fromLine; line <= viewport.toLine; line += 1) {
+            const lineInfo = doc.lineAt(line);
+            spans.push({ from: lineInfo.start, to: Math.min(lineInfo.end, lineInfo.start + 4), role: "keyword" });
+          }
+
+          return spans;
+        }
+      }
+    });
+
+    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+    Object.defineProperty(surface, "clientHeight", { value: 80, configurable: true });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    for (let index = 0; index < 11; index += 1) {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    }
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelector('[data-wx-editor-row="12"] .wx-role-keyword')).not.toBeNull();
+  });
+
   it("keeps existing highlights visible while a newline update is still in flight", async () => {
     const container = document.createElement("div");
     document.body.append(container);
