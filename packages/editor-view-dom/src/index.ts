@@ -247,6 +247,7 @@ const INSERT_TAB_TEXT = "  ";
 const DEFAULT_INDENT_GUIDE_CHARACTER = "│";
 const HIGHLIGHT_CONTEXT_LINES = 2;
 const VIEWPORT_OVERSCAN_LINES = 6;
+const VERTICAL_SCROLLOFF_ROWS = 3;
 const END_OF_LINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "hint";
 const CURSOR_LINE_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "warning";
 const OTHER_LINES_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "error";
@@ -1571,10 +1572,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let lineChangesRequestId = 0;
   let hoverRequestId = 0;
   let gutterWidth = 0;
+  let anchoredTopVisualRow = 0;
+  let visibleLineCapacity = 1;
   let destroyed = false;
   let mountedContainer: HTMLElement | null = container;
   let unsubscribeController = () => {};
   let currentLayoutModel: EditorLayoutModel | null = null;
+  let pendingMountFrame = 0;
+  let resizeObserver: ResizeObserver | null = null;
 
   const getHighlighter = () => languageServices.find((services) => services.highlighter)?.highlighter;
   const getSyntaxSelector = () => languageServices.find((services) => services.syntaxSelector)?.syntaxSelector;
@@ -1669,12 +1674,28 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return model;
   }
 
+  function schedulePostMountReveal(): void {
+    if (pendingMountFrame) {
+      cancelAnimationFrame(pendingMountFrame);
+      pendingMountFrame = 0;
+    }
+
+    pendingMountFrame = requestAnimationFrame(() => {
+      pendingMountFrame = 0;
+      if (destroyed || !mountedContainer?.isConnected) {
+        return;
+      }
+      refreshGutterWidth(true);
+      updateVisibleLineCapacity(true);
+      revealCursor();
+      renderVisibleRows(true);
+    });
+  }
+
   const root = document.createElement("div");
   const surface = document.createElement("div");
   const rows = document.createElement("div");
-  const topSpacer = document.createElement("div");
   const viewportRows = document.createElement("div");
-  const bottomSpacer = document.createElement("div");
   const tooltip = document.createElement("div");
   const status = document.createElement("div");
   const statusMode = document.createElement("div");
@@ -1697,14 +1718,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   rows.className = "wx-editor__rows";
   rows.dataset.wxEditor = "rows";
 
-  topSpacer.className = "wx-editor__spacer";
-  topSpacer.dataset.wxEditorSpacer = "top";
-
   viewportRows.className = "wx-editor__viewport";
   viewportRows.dataset.wxEditor = "viewport";
-
-  bottomSpacer.className = "wx-editor__spacer";
-  bottomSpacer.dataset.wxEditorSpacer = "bottom";
 
   tooltip.className = "wx-editor__tooltip";
   tooltip.dataset.wxEditorTooltip = "true";
@@ -1733,7 +1748,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   textarea.autocorrect = "off";
 
   status.append(statusMode, statusFile, statusMeta);
-  rows.append(topSpacer, viewportRows, bottomSpacer);
+  rows.append(viewportRows);
   surface.append(rows, tooltip, textarea);
   root.append(surface, status, bottomRow);
   mountedContainer.replaceChildren(root);
@@ -2378,28 +2393,40 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function getVisibleViewport(): LineViewport {
     rebuildVisualRows();
     const lineCount = Math.max(1, visualRows.length);
-    const startOffset = Math.max(0, surface.scrollTop - SURFACE_VERTICAL_PADDING);
-    const viewportHeight = Math.max(metrics.lineHeight, surface.clientHeight || metrics.lineHeight * 20);
-    const visibleLineCount = Math.max(1, Math.ceil(viewportHeight / metrics.lineHeight));
-    const fromLine = Math.max(0, Math.floor(startOffset / metrics.lineHeight));
-    const toLine = Math.min(lineCount - 1, fromLine + visibleLineCount - 1);
+    const fromLine = Math.max(0, Math.min(lineCount - 1, anchoredTopVisualRow));
+    const toLine = Math.min(lineCount - 1, fromLine + visibleLineCapacity - 1);
 
     return { fromLine, toLine };
   }
 
   function getVisibleLineCapacity(): number {
-    const viewportHeight = Math.max(metrics.lineHeight, surface.clientHeight || metrics.lineHeight * 20);
-    return Math.max(1, Math.ceil(viewportHeight / metrics.lineHeight));
+    return visibleLineCapacity;
   }
 
-  function expandViewport(viewport: LineViewport): LineViewport {
-    return normalizeViewport(
-      {
-        fromLine: viewport.fromLine - VIEWPORT_OVERSCAN_LINES,
-        toLine: viewport.toLine + VIEWPORT_OVERSCAN_LINES
-      },
-      Math.max(1, visualRows.length)
+  function getVerticalScrolloffRows(): number {
+    const capacity = getVisibleLineCapacity();
+    return Math.max(0, Math.min(VERTICAL_SCROLLOFF_ROWS, Math.floor((capacity - 1) / 2)));
+  }
+
+  function setAnchoredTopVisualRow(rowIndex: number): void {
+    const maxFromLine = Math.max(0, visualRows.length - getVisibleLineCapacity());
+    anchoredTopVisualRow = Math.max(0, Math.min(maxFromLine, rowIndex));
+  }
+
+  function updateVisibleLineCapacity(force = false): boolean {
+    const viewportHeight = Math.max(
+      metrics.lineHeight,
+      (surface.clientHeight || metrics.lineHeight * 20) - SURFACE_VERTICAL_PADDING * 2
     );
+    const nextCapacity = Math.max(1, Math.ceil(viewportHeight / metrics.lineHeight));
+
+    if (!force && nextCapacity === visibleLineCapacity) {
+      return false;
+    }
+
+    visibleLineCapacity = nextCapacity;
+    setAnchoredTopVisualRow(anchoredTopVisualRow);
+    return true;
   }
 
   function renderVisibleRows(force = false): void {
@@ -2408,22 +2435,17 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       force = true;
     }
     const visibleViewport = getVisibleViewport();
-    const nextViewport = expandViewport(visibleViewport);
 
     if (
       !force &&
-      renderedViewport.toLine >= renderedViewport.fromLine &&
-      visibleViewport.fromLine >= renderedViewport.fromLine &&
-      visibleViewport.toLine <= renderedViewport.toLine
+      viewportEquals(visibleViewport, renderedViewport)
     ) {
       return;
     }
 
-    renderedViewport = nextViewport;
+    renderedViewport = visibleViewport;
     rowViews = [];
     const layout = buildLayoutModelForViewport(renderedViewport);
-    topSpacer.style.height = `${renderedViewport.fromLine * metrics.lineHeight}px`;
-    bottomSpacer.style.height = `${Math.max(0, layout.document.totalVisualRows - renderedViewport.toLine - 1) * metrics.lineHeight}px`;
 
     const fragment = document.createDocumentFragment();
 
@@ -2977,11 +2999,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         refreshGutterWidth(true);
       }
 
+      updateVisibleLineCapacity();
       patchStatus();
       patchBottomRow();
       revealCursor();
       renderVisibleRows(true);
-      revealCursor();
       void syncLanguage(
         changes,
         changes.length === 0,
@@ -2996,12 +3018,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       refreshGutterWidth(true);
     }
 
+    updateVisibleLineCapacity();
     patchStatus();
     patchBottomRow();
+    revealCursor();
     const previousViewport = renderedViewport;
-    revealCursor();
     renderVisibleRows();
-    revealCursor();
 
     if (viewportEquals(previousViewport, renderedViewport)) {
       patchVisibleLines(getVisualDirtyLines(previousState, nextState));
@@ -3882,7 +3904,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return true;
     }
 
-    surface.scrollTop = Math.max(0, surface.scrollTop + rowsDelta * metrics.lineHeight);
+    setAnchoredTopVisualRow(Math.max(0, anchoredTopVisualRow + rowsDelta));
     renderVisibleRows();
     return true;
   }
@@ -3891,11 +3913,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     rebuildVisualRows();
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
     const cursorVisual = getVisualRowForOffset(activeOffset);
-    const rowTop = SURFACE_VERTICAL_PADDING + cursorVisual.rowIndex * metrics.lineHeight;
-    const available = Math.max(metrics.lineHeight, surface.clientHeight - metrics.lineHeight);
-    const targetTop =
-      position === "top" ? rowTop : position === "bottom" ? rowTop - available : rowTop - Math.floor(available / 2);
-    surface.scrollTop = Math.max(0, targetTop);
+    const visibleCount = getVisibleLineCapacity();
+    const maxFromLine = Math.max(0, visualRows.length - visibleCount);
+    const targetFromLine =
+      position === "top"
+        ? cursorVisual.rowIndex
+        : position === "bottom"
+          ? cursorVisual.rowIndex - visibleCount + 1
+          : cursorVisual.rowIndex - Math.floor(visibleCount / 2);
+    setAnchoredTopVisualRow(Math.max(0, Math.min(maxFromLine, targetFromLine)));
     renderVisibleRows();
     return true;
   }
@@ -3984,18 +4010,24 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     rebuildVisualRows();
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
     const cursorVisual = getVisualRowForOffset(activeOffset);
-    const rowTop = SURFACE_VERTICAL_PADDING + cursorVisual.rowIndex * metrics.lineHeight;
-    const rowBottom = rowTop + metrics.lineHeight;
-    const viewportTop = surface.scrollTop;
-    const viewportBottom = viewportTop + surface.clientHeight;
+    const visibleCount = getVisibleLineCapacity();
+    const scrolloff = getVerticalScrolloffRows();
+    const maxFromLine = Math.max(0, visualRows.length - visibleCount);
+    const minimumRow = anchoredTopVisualRow + scrolloff;
+    const maximumRow = anchoredTopVisualRow + visibleCount - 1 - scrolloff;
+    let targetFromLine = anchoredTopVisualRow;
 
-    if (rowTop < viewportTop) {
-      surface.scrollTop = rowTop;
-      return;
+    if (cursorVisual.rowIndex < minimumRow) {
+      targetFromLine = Math.max(0, cursorVisual.rowIndex - scrolloff);
+    } else if (cursorVisual.rowIndex > maximumRow) {
+      targetFromLine = Math.min(
+        maxFromLine,
+        Math.max(0, cursorVisual.rowIndex + scrolloff - visibleCount + 1)
+      );
     }
 
-    if (rowBottom > viewportBottom) {
-      surface.scrollTop = rowBottom - surface.clientHeight;
+    if (targetFromLine !== anchoredTopVisualRow) {
+      setAnchoredTopVisualRow(targetFromLine);
     }
   }
 
@@ -4672,14 +4704,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     runCommand(command);
   }
 
-  function handleScroll(): void {
-    if (flashState.active) {
-      clearFlash();
-    }
-    renderVisibleRows();
-    void refreshHighlights(getHighlightViewport(renderedViewport), false);
-  }
-
   function handlePaste(event: ClipboardEvent): void {
     if (state.mode !== "insert" || commandLine.active || pickerState.active) {
       return;
@@ -4760,19 +4784,34 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   textarea.addEventListener("keydown", handleKeydown);
   textarea.addEventListener("paste", handlePaste);
   surface.addEventListener("wheel", handleWheel, { passive: false });
-  surface.addEventListener("scroll", handleScroll);
   viewportRows.addEventListener("mousemove", handleMouseMove);
   viewportRows.addEventListener("mouseleave", handleMouseLeave);
   unsubscribeController = controller.subscribe(handleControllerUpdate);
 
   refreshGutterWidth(true);
+  updateVisibleLineCapacity(true);
   refreshSearchMatches();
+  revealCursor();
   renderVisibleRows(true);
   patchStatus();
   patchBottomRow();
+  schedulePostMountReveal();
   void syncLanguage([], true);
   refreshDiagnostics();
   refreshLineChanges();
+
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(() => {
+      refreshGutterWidth(true);
+      const capacityChanged = updateVisibleLineCapacity();
+      if (capacityChanged) {
+        revealCursor();
+      }
+      renderVisibleRows(true);
+      void refreshHighlights(getHighlightViewport(getVisibleViewport()), false);
+    });
+    resizeObserver.observe(surface);
+  }
 
   return {
     controller,
@@ -4780,12 +4819,21 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       mountedContainer = nextContainer;
       mountedContainer.replaceChildren(root);
       refreshGutterWidth(true);
+      updateVisibleLineCapacity(true);
+      revealCursor();
       renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
+      schedulePostMountReveal();
     },
     destroy() {
       destroyed = true;
+      resizeObserver?.disconnect();
+      resizeObserver = null;
+      if (pendingMountFrame) {
+        cancelAnimationFrame(pendingMountFrame);
+        pendingMountFrame = 0;
+      }
       unsubscribeController();
       for (const services of languageServices) {
         services.highlighter?.destroy?.();
@@ -4851,7 +4899,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       diagnostics = [];
       diagnosticsByLine = new Map();
       refreshSearchMatches();
-      surface.scrollTop = 0;
+      anchoredTopVisualRow = 0;
       controller.replaceState(createEditorState({ value, selection: createSelection(0, 0) }));
       await syncLanguage([], true);
       refreshDiagnostics();

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { getSelectionOffsets } from "@wx/editor-core";
+import { createCharacterSelection, createTextDocument, getSelectionOffsets } from "@wx/editor-core";
 import { createEditorController } from "@wx/editor-controller";
 import type { HighlightSpan, LanguageProvider } from "@wx/editor-language";
 
@@ -14,6 +14,12 @@ function createStubLanguage(highlights: HighlightSpan[] = []): LanguageProvider 
       return highlights;
     }
   };
+}
+
+function visibleRows(container: HTMLElement): number[] {
+  return [...container.querySelectorAll<HTMLElement>("[data-wx-editor-row]")]
+    .map((row) => Number(row.dataset.wxEditorRow))
+    .filter((row) => !Number.isNaN(row));
 }
 
 describe("createEditor", () => {
@@ -239,19 +245,85 @@ describe("createEditor", () => {
       value: Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n")
     });
 
-    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
-    const targetRow = container.querySelector('[data-wx-editor-row="12"]') as HTMLDivElement;
+    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
 
     Object.defineProperty(surface, "clientHeight", { value: 80, configurable: true });
-    Object.defineProperty(targetRow, "offsetTop", { value: 220, configurable: true });
-    Object.defineProperty(targetRow, "offsetHeight", { value: 24, configurable: true });
 
     for (let index = 0; index < 11; index += 1) {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
     }
 
-    expect(surface.scrollTop).toBeGreaterThan(0);
+    expect(visibleRows(container)).toContain(12);
+    expect(visibleRows(container)).not.toContain(1);
+  });
+
+  it("keeps three preview rows below the cursor when possible before scrolling", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, {
+      value: Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n")
+    });
+
+    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    Object.defineProperty(surface, "clientHeight", { value: 240, configurable: true });
+
+    for (let index = 0; index < 5; index += 1) {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    }
+
+    expect(visibleRows(container)[0]).toBe(1);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    expect(visibleRows(container)[0]).toBe(2);
+  });
+
+  it("does not keep scrolling when moving back up while the cursor is still on screen", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, {
+      value: Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n")
+    });
+
+    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    Object.defineProperty(surface, "clientHeight", { value: 240, configurable: true });
+
+    for (let index = 0; index < 8; index += 1) {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    }
+
+    const beforeMoveUp = visibleRows(container)[0];
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
+
+    expect(visibleRows(container)[0]).toBeLessThanOrEqual(beforeMoveUp);
+  });
+
+  it("reveals the initial cursor after mount when the selection starts below the fold", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const value = Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n");
+    const targetOffset = value.indexOf("line 20");
+    createEditor(container, {
+      controller: createEditorController({
+        value,
+        selection: createCharacterSelection(createTextDocument(value), Math.max(0, targetOffset))
+      })
+    });
+
+    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
+    Object.defineProperty(surface, "clientHeight", { value: 80, configurable: true });
+
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    expect(visibleRows(container)).toContain(21);
+    expect(visibleRows(container)).not.toContain(1);
   });
 
   it("scrolls to keep the cursor visible after yank then paste", () => {
@@ -269,15 +341,14 @@ describe("createEditor", () => {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
     }
 
-    expect(surface.scrollTop).toBeGreaterThan(0);
-    const beforePasteScrollTop = surface.scrollTop;
+    const beforePasteTopRow = visibleRows(container)[0];
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "y", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "p", bubbles: true }));
 
     expect(editor.getState().doc.text).toContain("lline 11");
     expect(container.querySelector('[data-wx-editor-row="12"]')).not.toBeNull();
-    expect(surface.scrollTop).toBeGreaterThanOrEqual(beforePasteScrollTop);
+    expect(visibleRows(container)[0]).toBeGreaterThanOrEqual(beforePasteTopRow);
   });
 
   it("supports insert mode typing and escape", () => {
@@ -967,10 +1038,10 @@ describe("createEditor", () => {
     expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0).column).toBe(0);
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }));
-    expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0).line).toBeGreaterThanOrEqual(3);
+    expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0).line).toBeGreaterThanOrEqual(2);
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "d", ctrlKey: true, bubbles: true }));
-    expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0).line).toBeGreaterThanOrEqual(5);
+    expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0).line).toBeGreaterThanOrEqual(3);
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
@@ -1036,7 +1107,7 @@ describe("createEditor", () => {
     expect(movementElapsed).toBeLessThan(1000);
   });
 
-  it("rerenders the viewport slice when the surface scroll position changes", () => {
+  it("rerenders the viewport slice when movement changes the anchored top row", () => {
     const container = document.createElement("div");
     document.body.append(container);
 
@@ -1044,9 +1115,13 @@ describe("createEditor", () => {
       value: Array.from({ length: 200 }, (_, index) => `line ${index}`).join("\n")
     });
 
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
     const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
-    surface.scrollTop = 24 * 100;
-    surface.dispatchEvent(new Event("scroll"));
+    Object.defineProperty(surface, "clientHeight", { value: 80, configurable: true });
+
+    for (let index = 0; index < 100; index += 1) {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    }
 
     expect(container.querySelectorAll("[data-wx-editor-row]").length).toBeLessThan(80);
     expect(container.querySelector('[data-wx-editor-row="101"]')).not.toBeNull();
