@@ -252,7 +252,11 @@ export interface EditorController {
   setRegister(name: string | null, value: string | null): void;
   selectRegister(name: string | null): void;
   getSelectedRegister(): string | null;
-  updatePresentationState(updater: (state: EditorPresentationState) => void, effectType?: string): void;
+  updatePresentationState(
+    updater: (state: EditorPresentationState) => void,
+    effectType?: string,
+    options?: { defer?: boolean }
+  ): void;
   setViewportMetrics(metrics: { visibleRowCapacity: number; wrapColumns: number; softWrap: boolean }): void;
   scrollViewportBy(rowsDelta: number): boolean;
   alignViewportToSelection(position: "top" | "center" | "bottom"): boolean;
@@ -793,6 +797,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let viewportModelSoftWrap = presentation.viewport.softWrap;
   let inFlightVisibleHighlightRequestKey: string | null = null;
   let inFlightVisibleHighlightRequest: Promise<void> | null = null;
+  let pendingDeferredPresentationUpdate = false;
+  let deferredPresentationEffectType = "presentation.update";
 
   const refreshSearchMatchCache = (targetState: EditorState = state) => {
     searchMatchCache = collectSearchMatches(targetState.doc.text, presentation.search.query);
@@ -937,6 +943,22 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
   const emitPresentationUpdate = (effectType = "presentation.update") => {
     notify(state, state, { effects: [{ type: effectType }] }, { recordHistory: false });
+  };
+
+  const schedulePresentationUpdate = (effectType = "presentation.update") => {
+    deferredPresentationEffectType = effectType;
+
+    if (pendingDeferredPresentationUpdate) {
+      return;
+    }
+
+    pendingDeferredPresentationUpdate = true;
+    queueMicrotask(() => {
+      pendingDeferredPresentationUpdate = false;
+      const nextEffectType = deferredPresentationEffectType;
+      deferredPresentationEffectType = "presentation.update";
+      emitPresentationUpdate(nextEffectType);
+    });
   };
 
   const rebuildViewportModel = () => {
@@ -1705,9 +1727,13 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getSelectedRegister() {
       return registers.selected;
     },
-    updatePresentationState(updater, effectType = "presentation.update") {
+    updatePresentationState(updater, effectType = "presentation.update", options = {}) {
       updater(presentation);
-      emitPresentationUpdate(effectType);
+      if (options.defer) {
+        schedulePresentationUpdate(effectType);
+      } else {
+        emitPresentationUpdate(effectType);
+      }
     },
     setViewportMetrics(metrics) {
       presentation.viewport.visibleRowCapacity = Math.max(1, metrics.visibleRowCapacity);

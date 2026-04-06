@@ -1169,44 +1169,6 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function compileSearchPattern(query: string): RegExp | null {
-  if (!query) {
-    return null;
-  }
-
-  try {
-    return new RegExp(query, "gu");
-  } catch {
-    return null;
-  }
-}
-
-function collectSearchMatches(text: string, query: string): Array<{ from: number; to: number }> {
-  const pattern = compileSearchPattern(query);
-
-  if (!pattern) {
-    return [];
-  }
-
-  const matches: Array<{ from: number; to: number }> = [];
-  let result = pattern.exec(text);
-
-  while (result) {
-    const matchedText = result[0] ?? "";
-    const from = result.index;
-    const to = from + Math.max(1, matchedText.length);
-    matches.push({ from, to });
-
-    if (matchedText.length === 0) {
-      pattern.lastIndex = from + 1;
-    }
-
-    result = pattern.exec(text);
-  }
-
-  return matches;
-}
-
 function keyboardPosition(letter: string): { row: number; column: number } | null {
   const normalized = letter.toLowerCase();
 
@@ -1646,7 +1608,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let pendingCount = uiState.pendingCount;
   let lastRepeatableMotion: RepeatableMotion | null = uiState.lastRepeatableMotion;
   let languageRevision = languageState.languageRevision;
-  let hoverRequestId = languageState.hoverRequestId;
+  let hoverRenderRequestId = 0;
   let gutterWidth = 0;
   let anchoredTopVisualRow = viewportState.topVisualRow;
   let visibleLineCapacity = viewportState.visibleRowCapacity;
@@ -1677,7 +1639,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     diagnosticsByLine = languageState.diagnosticsByLine;
     lineChangesByLine = languageState.lineChangesByLine as LineChangesByLine;
     languageRevision = languageState.languageRevision;
-    hoverRequestId = languageState.hoverRequestId;
   }
 
   function syncUiMirrors(): void {
@@ -1704,16 +1665,29 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   syncPresentationMirrors();
 
+  function updateControllerUiPresentation(
+    updater: (ui: typeof uiState) => void,
+    effectType = "presentation.ui"
+  ): void {
+    controller.updatePresentationState((presentation) => {
+      updater(presentation.ui);
+    }, effectType, { defer: true });
+  }
+
   function setCommandLineState(next: CommandLineState): void {
     commandLine = next;
-    uiState.commandLine = next;
     currentLayoutModel = null;
+    updateControllerUiPresentation((ui) => {
+      ui.commandLine = next;
+    }, "ui.command-line");
   }
 
   function setBottomMessageState(next: BottomMessageState | null): void {
     bottomMessage = next;
-    uiState.bottomMessage = next;
     currentLayoutModel = null;
+    updateControllerUiPresentation((ui) => {
+      ui.bottomMessage = next;
+    }, "ui.bottom-message");
   }
 
   function setHoverPresentation(next: HoverState): void {
@@ -1730,63 +1704,74 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   function setPendingActionState(next: PendingAction): void {
     pendingAction = next;
-    uiState.pendingAction = next;
     currentLayoutModel = null;
+    updateControllerUiPresentation((ui) => {
+      ui.pendingAction = next;
+    }, "ui.pending-action");
   }
 
   function setPendingCountState(next: string): void {
     pendingCount = next;
-    uiState.pendingCount = next;
     currentLayoutModel = null;
+    updateControllerUiPresentation((ui) => {
+      ui.pendingCount = next;
+    }, "ui.pending-count");
   }
 
   function setStickyViewModeState(next: boolean): void {
     stickyViewMode = next;
-    uiState.stickyViewMode = next;
     currentLayoutModel = null;
+    updateControllerUiPresentation((ui) => {
+      ui.stickyViewMode = next;
+    }, "ui.sticky-view-mode");
   }
 
   function setCommandCompletionIndexState(next: number): void {
     commandCompletionIndex = next;
-    uiState.commandCompletionIndex = next;
     currentLayoutModel = null;
+    updateControllerUiPresentation((ui) => {
+      ui.commandCompletionIndex = next;
+    }, "ui.command-completion-index");
   }
 
   function setLastRepeatableMotionState(next: RepeatableMotion | null): void {
     lastRepeatableMotion = next;
-    uiState.lastRepeatableMotion = next;
     currentLayoutModel = null;
+    updateControllerUiPresentation((ui) => {
+      ui.lastRepeatableMotion = next;
+    }, "ui.repeatable-motion");
   }
 
   function setPreviewThemeState(next: ThemeSpec | null): void {
     previewTheme = next;
-    uiState.previewTheme = next?.name ?? null;
     currentLayoutModel = null;
+    updateControllerUiPresentation((ui) => {
+      ui.previewTheme = next?.name ?? null;
+    }, "ui.preview-theme");
   }
 
   function setPickerPresentation(next: PickerState): void {
     pickerState = next;
-    uiState.picker = {
-      active: next.active,
-      loading: next.loading,
-      title: next.title,
-      items: next.items.map((item, index) => ({
-        label: item.label,
-        detail: item.detail,
-        selected: index === next.selectedIndex
-      })),
-      selectedIndex: next.selectedIndex,
-      error: next.error
-    };
     currentLayoutModel = null;
+    updateControllerUiPresentation((ui) => {
+      ui.picker = {
+        active: next.active,
+        loading: next.loading,
+        title: next.title,
+        items: next.items.map((item, index) => ({
+          label: item.label,
+          detail: item.detail,
+          selected: index === next.selectedIndex
+        })),
+        selectedIndex: next.selectedIndex,
+        error: next.error
+      };
+    }, "ui.picker");
   }
 
   const getHighlighter = () => languageServices.find((services) => services.highlighter)?.highlighter;
   const getSyntaxSelector = () => languageServices.find((services) => services.syntaxSelector)?.syntaxSelector;
-  const getHoverSource = () => languageServices.find((services) => services.hover)?.hover;
   const getDiagnosticsSource = () => languageServices.find((services) => services.diagnostics)?.diagnostics;
-  const getCodeActionSource = () => languageServices.find((services) => services.codeActions)?.codeActions;
-  const getFormatter = () => languageServices.find((services) => services.formatter)?.formatter;
   const getCommentToggler = () => languageServices.find((services) => services.comments)?.comments;
   const getSyntaxTextobjectProvider = () => languageServices.find((services) => services.syntaxTextobjects)?.syntaxTextobjects;
   const getSyntaxNavigationProvider = () => languageServices.find((services) => services.syntaxNavigation)?.syntaxNavigation;
@@ -3014,7 +2999,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   function invalidateHover(keepPosition = true): void {
     controller.dismissHover();
-    hoverRequestId = languageState.hoverRequestId;
+    hoverRenderRequestId += 1;
 
     if (!hoverState.active) {
       return;
@@ -3069,24 +3054,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   async function requestHover(offset: number, anchor: DOMRect, pinned = false): Promise<boolean> {
-    const hoverSource = getHoverSource();
-
-    if (!hoverSource) {
-      if (pinned) {
-        setBottomMessage({ tone: "warning", text: "No hover provider" });
-      }
-      return false;
-    }
-
     if (hoverState.active && hoverState.offset === offset && hoverState.pinned === pinned) {
       return true;
     }
 
-    const requestId = ++hoverRequestId;
-    languageState.hoverRequestId = hoverRequestId;
-    const nextHover = await hoverSource.hover(getSnapshot(), offset);
+    const requestId = ++hoverRenderRequestId;
+    const nextHover = await controller.requestHover(offset);
 
-    if (destroyed || requestId !== hoverRequestId) {
+    if (destroyed || requestId !== hoverRenderRequestId) {
       return false;
     }
 
@@ -3111,41 +3086,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return true;
   }
 
-  function getCodeActionContext() {
-    const selection = getSelectionOffsets(state);
-    const overlappingDiagnostics = diagnostics.filter(
-      (entry) => entry.from < selection.to && entry.to > selection.from
-    );
-    const fallbackDiagnostics =
-      overlappingDiagnostics.length > 0 ? overlappingDiagnostics : getLineDiagnostics(getActiveLine(state));
-
-    return {
-      document: getSnapshot(),
-      selection,
-      diagnostics: fallbackDiagnostics
-    };
-  }
-
-  async function resolveCodeActionChanges(action: EditorCodeAction): Promise<readonly TextChange[] | null> {
-    if (action.changes && action.changes.length > 0) {
-      return action.changes;
-    }
-
-    return (await action.apply?.(getCodeActionContext())) ?? null;
-  }
-
   async function applyCodeActionInternal(action: EditorCodeAction): Promise<boolean> {
-    const changes = await resolveCodeActionChanges(action);
+    const applied = await controller.applyCodeAction(action);
 
-    if (!changes || changes.length === 0) {
+    if (!applied) {
       setBottomMessage({ tone: "warning", text: `No edits for ${action.title}` });
       return false;
     }
-
-    controller.dispatch({
-      changes,
-      effects: [{ type: "language.code-action", value: action.title }]
-    });
     closePicker();
     setBottomMessage({ tone: "info", text: `Applied ${action.title}` });
     return true;
@@ -3157,13 +3104,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   async function loadCodeActions(): Promise<readonly EditorCodeAction[]> {
-    const codeActionSource = getCodeActionSource();
-
-    if (!codeActionSource) {
-      setBottomMessage({ tone: "warning", text: "No code actions provider" });
-      return [];
-    }
-
     setPickerState({
       active: true,
       loading: true,
@@ -3176,7 +3116,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     let actions: readonly EditorCodeAction[];
 
     try {
-      actions = await codeActionSource.getCodeActions(getCodeActionContext());
+      actions = await controller.requestCodeActions();
     } catch {
       closePicker();
       setBottomMessage({ tone: "error", text: "Code actions request failed" });
@@ -3206,62 +3146,41 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   async function formatDocument(): Promise<boolean> {
-    const formatter = getFormatter();
-
-    if (!formatter) {
-      setBottomMessage({ tone: "warning", text: "No formatter provider" });
-      return false;
-    }
-
-    let changes: readonly TextChange[];
+    let didFormat = false;
 
     try {
-      changes = await formatter.format({
-        document: getSnapshot(),
-        selection: getSelectionOffsets(state)
-      });
+      didFormat = await controller.formatDocument();
     } catch {
       setBottomMessage({ tone: "error", text: "Formatting failed" });
       return false;
     }
 
-    if (!changes || changes.length === 0) {
+    if (!didFormat) {
       setBottomMessage({ tone: "info", text: "Already formatted" });
       return false;
     }
-
-    controller.dispatch({
-      changes,
-      effects: [{ type: "language.format" }]
-    });
     setBottomMessage({ tone: "info", text: "Formatted document" });
     return true;
   }
 
   async function saveDocument(targetFilePath = filePath): Promise<boolean> {
-    const writeFile = host?.writeFile;
-
-    if (!writeFile) {
+    if (!host?.writeFile) {
       setBottomMessage({ tone: "warning", text: "No file writer available" });
       return false;
     }
 
     try {
-      await writeFile({
-        filePath: targetFilePath,
-        text: state.doc.text
-      });
-      await host?.didWriteFile?.({
-        filePath: targetFilePath,
-        text: state.doc.text
-      });
+      const didSave = await controller.saveDocument(targetFilePath);
+      if (!didSave) {
+        setBottomMessage({ tone: "error", text: `Write failed for ${targetFilePath}` });
+        return false;
+      }
     } catch {
       setBottomMessage({ tone: "error", text: `Write failed for ${targetFilePath}` });
       return false;
     }
 
     filePath = targetFilePath;
-    controller.setFilePath(targetFilePath);
     patchStatus();
     setBottomMessage({ tone: "info", text: `Wrote ${targetFilePath}` });
     return true;
@@ -3285,13 +3204,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function runSearch(query: string, direction: "forward" | "backward", reverse = false, startOffset?: number): boolean {
-    const nextMatches = collectSearchMatches(state.doc.text, query);
-
     controller.setSearchState({
       query,
       direction,
       lastMatch: null
     });
+    const nextMatches = controller.getPresentationState().search.matches;
 
     if (nextMatches.length === 0) {
       setBottomMessage({ tone: "warning", text: `No matches for ${query}` });

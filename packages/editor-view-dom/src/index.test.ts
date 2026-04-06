@@ -6,6 +6,18 @@ import type { HighlightSpan, LanguageProvider } from "@wx/editor-language";
 
 import { createEditor } from "./index";
 
+async function flushAsyncWork(times = 4): Promise<void> {
+  for (let index = 0; index < times; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+function keywordText(container: HTMLElement): string {
+  return [...container.querySelectorAll(".wx-role-keyword")]
+    .map((node) => node.textContent ?? "")
+    .join("");
+}
+
 function createStubLanguage(highlights: HighlightSpan[] = []): LanguageProvider {
   return {
     async open() {},
@@ -842,6 +854,90 @@ describe("createEditor", () => {
     await Promise.resolve();
   });
 
+  it("updates visible syntax highlight classes after an async edit refresh", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    let currentText = "const value = 1;";
+    createEditor(container, {
+      value: currentText,
+      language: {
+        async open(document) {
+          currentText = document.doc.text;
+        },
+        async update(document) {
+          currentText = document.doc.text;
+        },
+        async getHighlightRanges() {
+          const match = /\bconst\b/.exec(currentText);
+          return match
+            ? [{ from: match.index, to: match.index + match[0].length, role: "keyword" as const }]
+            : [];
+        }
+      }
+    });
+
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    await flushAsyncWork();
+    expect(keywordText(container)).toContain("const");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    await flushAsyncWork();
+
+    expect(keywordText(container)).not.toContain("const");
+    expect(container.querySelector('[data-wx-editor-content="1"]')?.textContent).toContain("xconst");
+  });
+
+  it("replaces remapped visible highlights after an async language update resolves", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    let currentText = "const value = 1;";
+    let resolveUpdate: (() => void) | null = null;
+    createEditor(container, {
+      value: currentText,
+      language: {
+        async open(document) {
+          currentText = document.doc.text;
+        },
+        async update(document) {
+          currentText = document.doc.text;
+          await new Promise<void>((resolve) => {
+            resolveUpdate = resolve;
+          });
+        },
+        async getHighlightRanges() {
+          const match = /\bconst\b/.exec(currentText);
+          return match
+            ? [{ from: match.index, to: match.index + match[0].length, role: "keyword" as const }]
+            : [];
+        }
+      }
+    });
+
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    await flushAsyncWork();
+    expect(keywordText(container)).toContain("const");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    await Promise.resolve();
+
+    expect(keywordText(container)).toContain("const");
+
+    resolveUpdate?.();
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushAsyncWork();
+
+    expect(keywordText(container)).not.toContain("const");
+    expect(container.querySelector('[data-wx-editor-content="1"]')?.textContent).toContain("xconst");
+  });
+
   it("keeps using a viewport slice after a newline inserted at the top", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -1447,7 +1543,7 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await Promise.resolve();
+    await flushAsyncWork();
 
     expect(editor.getState().doc.text).toBe("let x = 1;");
     expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("Formatted");
@@ -1477,8 +1573,7 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "w", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncWork();
 
     expect(writes).toEqual([{ filePath: "examples/editor.scene", text: "screen\n  size fill\n" }]);
     expect(didWrites).toEqual([{ filePath: "examples/editor.scene", text: "screen\n  size fill\n" }]);
@@ -1611,12 +1706,12 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await Promise.resolve();
+    await flushAsyncWork();
 
     expect(container.querySelector("[data-wx-editor-code-actions='true']")?.textContent).toContain("Rename to good");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await Promise.resolve();
+    await flushAsyncWork();
 
     expect(editor.getState().doc.text).toBe("const good = value;");
     expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("Applied Rename to good");
@@ -1640,7 +1735,7 @@ describe("createEditor", () => {
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
-    await Promise.resolve();
+    await flushAsyncWork();
 
     expect(container.querySelector("[data-wx-editor-prefix-hint='space']")).toBeNull();
     expect(container.querySelector("[data-wx-editor-code-actions='true']")?.textContent).toContain("Replace bad");
@@ -1664,13 +1759,13 @@ describe("createEditor", () => {
     const token = container.querySelector('[data-wx-editor-offset="0"]') as HTMLElement;
 
     token.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
-    await Promise.resolve();
+    await flushAsyncWork();
     expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent).toContain("hover:0");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
     expect(container.querySelector("[data-wx-editor-prefix-hint='space']")?.textContent).toContain("<space>");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
-    await Promise.resolve();
+    await flushAsyncWork();
     expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent).toContain("hover:0");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
