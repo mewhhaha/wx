@@ -1581,6 +1581,41 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("Wrote examples/editor.scene");
   });
 
+  it("does not wait for didWriteFile hooks before reporting save success", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const writes: Array<{ filePath: string; text: string }> = [];
+    let resolveDidWrite: (() => void) | null = null;
+
+    createEditor(container, {
+      value: "screen\n  size fill\n",
+      filePath: "examples/editor.scene",
+      host: {
+        async writeFile(context) {
+          writes.push(context);
+        },
+        async didWriteFile() {
+          await new Promise<void>((resolve) => {
+            resolveDidWrite = resolve;
+          });
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "w", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushAsyncWork();
+
+    expect(writes).toEqual([{ filePath: "examples/editor.scene", text: "screen\n  size fill\n" }]);
+    expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("Wrote examples/editor.scene");
+
+    resolveDidWrite?.();
+    await flushAsyncWork();
+  });
+
   it("writes to an explicit output path with :w <path>", async () => {
     const container = document.createElement("div");
     document.body.append(container);

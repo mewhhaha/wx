@@ -191,6 +191,11 @@ export interface EditorLayoutInput {
   };
 }
 
+interface EditorLayoutRowBuildContext {
+  activeOffset: number;
+  activeRow: ReturnType<typeof getVisualRowForOffset>;
+}
+
 const EMPTY_CELL_TEXT = "\u00a0";
 const END_OF_LINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "hint";
 const CURSOR_LINE_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "warning";
@@ -784,6 +789,167 @@ function splitPanelRows(token: "tooltip" | "tooltip-source", text: string, part:
   ]);
 }
 
+export function buildEditorLayoutRow(
+  input: EditorLayoutInput,
+  visualRow: EditorVisualRow,
+  context?: EditorLayoutRowBuildContext
+): EditorLayoutRow {
+  const visualRows = input.presentation.viewport.visualRows;
+  const lineVisualRanges = input.presentation.viewport.lineVisualRanges;
+  const highlightCache = input.presentation.language.visibleHighlightsByLine;
+  const diagnosticsByLine = input.presentation.language.diagnosticsByLine;
+  const lineChangesByLine = input.presentation.language.lineChangesByLine;
+  const searchMatchesByLine = input.presentation.search.visibleMatchesByLine;
+  const activeOffset = context?.activeOffset ?? getActiveOffset(input.state);
+  const activeRow =
+    context?.activeRow ??
+    getVisualRowForOffset(
+      input.state,
+      visualRows,
+      lineVisualRanges,
+      activeOffset,
+      input.presentation.viewport.softWrap,
+      input.presentation.viewport.softWrap ? Math.max(1, input.presentation.viewport.wrapColumns) : Number.MAX_SAFE_INTEGER
+    );
+  const visualRowIndex = visualRow.visualRowIndex;
+  const lineIndex = visualRow.docLine;
+  const lineDiagnostics = diagnosticsByLine.get(lineIndex) ?? [];
+  const lineSearchMatches = searchMatchesByLine.get(lineIndex) ?? [];
+  const lineDiagnosticSeverity = visualRow.isContinuation ? null : getLineDiagnosticSeverity(lineDiagnostics);
+  const lineChangeState = visualRow.isContinuation
+    ? { kind: null, deleted: false }
+    : (lineChangesByLine.get(lineIndex) ?? { kind: null, deleted: false });
+  const inlineDiagnostic = selectDiagnostic(
+    lineDiagnostics,
+    lineIndex === input.state.doc.positionAt(activeOffset).line
+      ? CURSOR_LINE_INLINE_DIAGNOSTIC_MIN
+      : OTHER_LINES_INLINE_DIAGNOSTIC_MIN
+  );
+  const inlineDiagnosticInRow =
+    inlineDiagnostic &&
+    inlineDiagnostic.from >= visualRow.segmentStart &&
+    inlineDiagnostic.from <= visualRow.segmentEnd
+      ? inlineDiagnostic
+      : null;
+  const endOfLineDiagnostic = visualRow.isLastSegment
+    ? selectDiagnostic(lineDiagnostics, END_OF_LINE_DIAGNOSTIC_MIN, inlineDiagnostic)
+    : null;
+  const flashHints = input.presentation.ui.flash.active
+    ? input.presentation.ui.flash.hints.filter(
+        (hint) => hint.offset >= visualRow.segmentStart && hint.offset < visualRow.segmentEnd
+      )
+    : [];
+  const flashOffsets = new Set(flashHints.map((hint) => hint.offset));
+  const contentRuns = renderLineRuns({
+    state: input.state,
+    spans: highlightCache.get(lineIndex) ?? [],
+    lineDiagnostics,
+    lineSearchMatches,
+    currentSearchMatch: input.presentation.search.lastMatch,
+    flashOffsets,
+    segmentStart: visualRow.segmentStart,
+    segmentEnd: visualRow.segmentEnd,
+    includeLineEndingCell: visualRow.isLastSegment,
+    indentGuideOptions: input.indentGuides
+  });
+  const overlays: EditorLayoutOverlay[] = [];
+
+  if (inlineDiagnosticInRow) {
+    const diagnosticStartColumn = Math.max(
+      0,
+      inlineDiagnosticInRow.from > visualRow.segmentStart
+        ? input.state.doc.positionAt(inlineDiagnosticInRow.from).column - visualRow.startColumn
+        : 0
+    );
+    overlays.push({
+      kind: "inline-diagnostic",
+      row: 1,
+      col: diagnosticStartColumn,
+      text: inlineDiagnosticInRow.message,
+      token: tokenForDiagnosticSeverity(inlineDiagnosticInRow.severity),
+      severity: inlineDiagnosticInRow.severity,
+      sourceRange: { from: inlineDiagnosticInRow.from, to: inlineDiagnosticInRow.to }
+    });
+  }
+
+  if (endOfLineDiagnostic) {
+    const eolCol = contentRuns.reduce((max, run) => Math.max(max, run.col + run.text.length), 0) + 2;
+    overlays.push({
+      kind: "inline-diagnostic",
+      row: 0,
+      col: eolCol,
+      text: endOfLineDiagnostic.message,
+      token: tokenForDiagnosticSeverity(endOfLineDiagnostic.severity),
+      severity: endOfLineDiagnostic.severity,
+      sourceRange: { from: endOfLineDiagnostic.from, to: endOfLineDiagnostic.to }
+    });
+  }
+
+  if (input.state.mode === "insert" && visualRowIndex === activeRow.rowIndex) {
+    overlays.push({
+      kind: "cursor-line",
+      row: 0,
+      col: activeRow.column,
+      height: 1,
+      token: "cursor",
+      sourceRange: { from: activeOffset, to: activeOffset }
+    });
+  }
+
+  for (const hint of flashHints) {
+    const column = input.state.doc.positionAt(hint.offset).column - visualRow.startColumn;
+    overlays.push({
+      kind: "flash-hint",
+      row: 0,
+      col: Math.max(0, column),
+      text: hint.label,
+      token: "flash-target",
+      sourceRange: { from: hint.offset, to: hint.offset + 1 }
+    });
+  }
+
+  const gutterRuns: EditorLayoutRun[] = [
+    {
+      col: 0,
+      text: " ",
+      token: lineDiagnosticSeverity ? tokenForDiagnosticSeverity(lineDiagnosticSeverity) : "gutter",
+      part: "gutter-marker",
+      severity: lineDiagnosticSeverity ?? undefined
+    },
+    {
+      col: 1,
+      text: visualRow.isContinuation ? "↪" : String(lineIndex + 1),
+      token: "gutter",
+      part: "gutter-number"
+    },
+    {
+      col: 5,
+      text: " ",
+      token: "gutter",
+      part: "gutter-change",
+      lineChangeKind: lineChangeState.kind ?? undefined,
+      deleted: lineChangeState.deleted
+    }
+  ];
+
+  return {
+    docLine: lineIndex,
+    visualRowIndex,
+    isContinuation: visualRow.isContinuation,
+    isActive: visualRowIndex === activeRow.rowIndex,
+    gutterRuns,
+    contentRuns,
+    overlays,
+    segmentStart: visualRow.segmentStart,
+    segmentEnd: visualRow.segmentEnd,
+    startColumn: visualRow.startColumn,
+    isLastSegment: visualRow.isLastSegment,
+    diagnosticSeverity: lineDiagnosticSeverity,
+    lineChangeKind: lineChangeState.kind,
+    deletedLineChange: lineChangeState.deleted
+  };
+}
+
 export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
   const visualRows = input.presentation.viewport.visualRows;
   const visibleVisualRows = input.presentation.viewport.visibleVisualRows;
@@ -804,144 +970,7 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
   const rows: EditorLayoutRow[] = [];
 
   for (const visualRow of visibleVisualRows) {
-    const visualRowIndex = visualRow.visualRowIndex;
-
-    const lineIndex = visualRow.docLine;
-    const lineDiagnostics = diagnosticsByLine.get(lineIndex) ?? [];
-    const lineSearchMatches = searchMatchesByLine.get(lineIndex) ?? [];
-    const lineDiagnosticSeverity = visualRow.isContinuation ? null : getLineDiagnosticSeverity(lineDiagnostics);
-    const lineChangeState = visualRow.isContinuation
-      ? { kind: null, deleted: false }
-      : (lineChangesByLine.get(lineIndex) ?? { kind: null, deleted: false });
-    const inlineDiagnostic = selectDiagnostic(
-      lineDiagnostics,
-      lineIndex === input.state.doc.positionAt(activeOffset).line
-        ? CURSOR_LINE_INLINE_DIAGNOSTIC_MIN
-        : OTHER_LINES_INLINE_DIAGNOSTIC_MIN
-    );
-    const inlineDiagnosticInRow =
-      inlineDiagnostic &&
-      inlineDiagnostic.from >= visualRow.segmentStart &&
-      inlineDiagnostic.from <= visualRow.segmentEnd
-        ? inlineDiagnostic
-        : null;
-    const endOfLineDiagnostic = visualRow.isLastSegment
-      ? selectDiagnostic(lineDiagnostics, END_OF_LINE_DIAGNOSTIC_MIN, inlineDiagnostic)
-      : null;
-    const flashHints = input.presentation.ui.flash.active
-      ? input.presentation.ui.flash.hints.filter(
-          (hint) => hint.offset >= visualRow.segmentStart && hint.offset < visualRow.segmentEnd
-        )
-      : [];
-    const flashOffsets = new Set(flashHints.map((hint) => hint.offset));
-    const contentRuns = renderLineRuns({
-      state: input.state,
-      spans: highlightCache.get(lineIndex) ?? [],
-      lineDiagnostics,
-      lineSearchMatches,
-      currentSearchMatch: input.presentation.search.lastMatch,
-      flashOffsets,
-      segmentStart: visualRow.segmentStart,
-      segmentEnd: visualRow.segmentEnd,
-      includeLineEndingCell: visualRow.isLastSegment,
-      indentGuideOptions: input.indentGuides
-    });
-    const overlays: EditorLayoutOverlay[] = [];
-
-    if (inlineDiagnosticInRow) {
-      const diagnosticStartColumn = Math.max(
-        0,
-        inlineDiagnosticInRow.from > visualRow.segmentStart
-          ? input.state.doc.positionAt(inlineDiagnosticInRow.from).column - visualRow.startColumn
-          : 0
-      );
-      overlays.push({
-        kind: "inline-diagnostic",
-        row: 1,
-        col: diagnosticStartColumn,
-        text: inlineDiagnosticInRow.message,
-        token: tokenForDiagnosticSeverity(inlineDiagnosticInRow.severity),
-        severity: inlineDiagnosticInRow.severity,
-        sourceRange: { from: inlineDiagnosticInRow.from, to: inlineDiagnosticInRow.to }
-      });
-    }
-
-    if (endOfLineDiagnostic) {
-      const eolCol = contentRuns.reduce((max, run) => Math.max(max, run.col + run.text.length), 0) + 2;
-      overlays.push({
-        kind: "inline-diagnostic",
-        row: 0,
-        col: eolCol,
-        text: endOfLineDiagnostic.message,
-        token: tokenForDiagnosticSeverity(endOfLineDiagnostic.severity),
-        severity: endOfLineDiagnostic.severity,
-        sourceRange: { from: endOfLineDiagnostic.from, to: endOfLineDiagnostic.to }
-      });
-    }
-
-    if (input.state.mode === "insert" && visualRowIndex === activeRow.rowIndex) {
-      overlays.push({
-        kind: "cursor-line",
-        row: 0,
-        col: activeRow.column,
-        height: 1,
-        token: "cursor",
-        sourceRange: { from: activeOffset, to: activeOffset }
-      });
-    }
-
-    for (const hint of flashHints) {
-      const column = input.state.doc.positionAt(hint.offset).column - visualRow.startColumn;
-      overlays.push({
-        kind: "flash-hint",
-        row: 0,
-        col: Math.max(0, column),
-        text: hint.label,
-        token: "flash-target",
-        sourceRange: { from: hint.offset, to: hint.offset + 1 }
-      });
-    }
-
-    const gutterRuns: EditorLayoutRun[] = [
-      {
-        col: 0,
-        text: " ",
-        token: lineDiagnosticSeverity ? tokenForDiagnosticSeverity(lineDiagnosticSeverity) : "gutter",
-        part: "gutter-marker",
-        severity: lineDiagnosticSeverity ?? undefined
-      },
-      {
-        col: 1,
-        text: visualRow.isContinuation ? "↪" : String(lineIndex + 1),
-        token: "gutter",
-        part: "gutter-number"
-      },
-      {
-        col: 5,
-        text: " ",
-        token: "gutter",
-        part: "gutter-change",
-        lineChangeKind: lineChangeState.kind ?? undefined,
-        deleted: lineChangeState.deleted
-      }
-    ];
-
-    rows.push({
-      docLine: lineIndex,
-      visualRowIndex,
-      isContinuation: visualRow.isContinuation,
-      isActive: visualRowIndex === activeRow.rowIndex,
-      gutterRuns,
-      contentRuns,
-      overlays,
-      segmentStart: visualRow.segmentStart,
-      segmentEnd: visualRow.segmentEnd,
-      startColumn: visualRow.startColumn,
-      isLastSegment: visualRow.isLastSegment,
-      diagnosticSeverity: lineDiagnosticSeverity,
-      lineChangeKind: lineChangeState.kind,
-      deletedLineChange: lineChangeState.deleted
-    });
+    rows.push(buildEditorLayoutRow(input, visualRow, { activeOffset, activeRow }));
   }
 
   const cursorPosition = input.state.doc.positionAt(activeOffset);

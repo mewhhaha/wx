@@ -1969,20 +1969,23 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         return Promise.resolve(false);
       }
 
+      const savedText = state.doc.text;
       return writeFile({
         filePath: targetPath,
-        text: state.doc.text
+        text: savedText
       })
-        .then(() =>
-          presentation.language.host?.didWriteFile?.({
-            filePath: targetPath,
-            text: state.doc.text
-          })
-        )
         .then(() => {
           presentation.filePath = targetPath;
           emitPresentationUpdate("presentation.file-path");
           void refreshLineChanges();
+          queueMicrotask(() => {
+            void Promise.resolve(
+              presentation.language.host?.didWriteFile?.({
+                filePath: targetPath,
+                text: savedText
+              })
+            ).catch(() => undefined);
+          });
           return true;
         })
         .catch(() => false);

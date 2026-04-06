@@ -216,6 +216,8 @@ class ShaderPreview {
   private currentCompile: ShaderCompileResult | null = null;
   private animationFrame = 0;
   private startedAt = 0;
+  private scheduledRenderFrame = 0;
+  private pendingSource: string | null = null;
 
   constructor(mount: HTMLDivElement, runtime: SceneLangWasm) {
     this.mount = mount;
@@ -303,8 +305,30 @@ class ShaderPreview {
     }
   }
 
+  scheduleRenderSource(source: string): void {
+    this.pendingSource = source;
+
+    if (this.scheduledRenderFrame !== 0) {
+      return;
+    }
+
+    this.scheduledRenderFrame = window.requestAnimationFrame(() => {
+      this.scheduledRenderFrame = 0;
+      const nextSource = this.pendingSource;
+      this.pendingSource = null;
+
+      if (typeof nextSource === "string") {
+        void this.renderSource(nextSource);
+      }
+    });
+  }
+
   destroy(): void {
     this.stopAnimation();
+    if (this.scheduledRenderFrame !== 0) {
+      cancelAnimationFrame(this.scheduledRenderFrame);
+      this.scheduledRenderFrame = 0;
+    }
     this.resizeObserver.disconnect();
   }
 
@@ -552,8 +576,8 @@ async function main(): Promise<void> {
             async writeFile(context) {
               await requestJson("/__wx__/write", context);
             },
-            async didWriteFile(context) {
-              await preview.renderSource(context.text);
+            didWriteFile(context) {
+              preview.scheduleRenderSource(context.text);
             },
             async getLineChanges(context) {
               const payload = await requestJson<{ changes: Array<{ line: number; kind: "added" | "modified" | "deleted" }> }>(
@@ -567,8 +591,8 @@ async function main(): Promise<void> {
             async writeFile(context) {
               memoryFiles.set(context.filePath, context.text);
             },
-            async didWriteFile(context) {
-              await preview.renderSource(context.text);
+            didWriteFile(context) {
+              preview.scheduleRenderSource(context.text);
             },
             async getLineChanges(context) {
               return computeLineChanges(memoryFiles.get(context.filePath) ?? "", context.text);
@@ -584,7 +608,7 @@ async function main(): Promise<void> {
       }
     });
 
-    void preview.renderSource(controller.getState().doc.text);
+    preview.scheduleRenderSource(controller.getState().doc.text);
     editor.focus();
     window.addEventListener(
       "beforeunload",

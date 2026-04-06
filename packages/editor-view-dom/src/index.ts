@@ -68,6 +68,7 @@ import {
 } from "@wx/editor-controller";
 import {
   buildEditorLayout,
+  buildEditorLayoutRow,
   type EditorLayoutModel,
   type EditorLayoutPanel,
   type EditorLayoutRow,
@@ -2549,28 +2550,49 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return false;
     }
 
-    const layout = buildLayoutModelForViewport(renderedViewport);
-    const nextRows = layout.document.rows;
+    const nextRows = viewportState.visibleVisualRows;
     const nextFillerCount = Math.max(0, getVisibleLineCapacity() - nextRows.length);
 
     if (rowViews.length !== nextRows.length || viewportRows.children.length !== nextRows.length + nextFillerCount) {
       return false;
     }
 
+    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+    const activeRow = getVisualRowForOffset(
+      state,
+      visualRows,
+      lineVisualRanges,
+      activeOffset,
+      softWrap,
+      softWrap ? Math.max(1, wrapColumns) : Number.MAX_SAFE_INTEGER
+    );
     let patchedAnyRow = false;
 
     for (let index = 0; index < nextRows.length; index += 1) {
       const view = rowViews[index];
-      const layoutRow = nextRows[index];
+      const visualRow = nextRows[index];
 
-      if (!view || !layoutRow) {
+      if (!view || !visualRow) {
         return false;
       }
 
-      if (!dirtyLines.has(layoutRow.docLine)) {
+      if (!dirtyLines.has(visualRow.docLine)) {
         continue;
       }
 
+      const layoutRow = buildEditorLayoutRow(
+        {
+          state,
+          presentation,
+          hoverAnchor: {
+            col: Math.max(0, Math.floor(hoverState.left / Math.max(metrics.charWidth, 1))),
+            row: Math.max(0, Math.floor(hoverState.top / Math.max(metrics.lineHeight, 1)))
+          },
+          indentGuides
+        },
+        visualRow,
+        { activeOffset, activeRow }
+      );
       patchRowView(view, layoutRow);
       patchedAnyRow = true;
     }
@@ -2579,10 +2601,20 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function patchStatus(): void {
-    const layout = getRenderedLayout();
-    statusMode.textContent = layout.statusBar.find((run) => run.part === "status-mode")?.text ?? "";
-    statusFile.textContent = layout.statusBar.find((run) => run.part === "status-file")?.text ?? "";
-    statusMeta.textContent = layout.statusBar.find((run) => run.part === "status-meta")?.text ?? "";
+    const cursorOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+    const cursorPosition = state.doc.positionAt(cursorOffset);
+    const { errors, warnings } = getDiagnosticsSummary();
+
+    statusMode.textContent = state.mode === "insert" ? "INS" : state.mode === "visual" ? "VIS" : "NOR";
+    statusFile.textContent = filePath;
+    statusMeta.textContent = [
+      "1 sel",
+      errors > 0 ? `E${errors}` : "",
+      warnings > 0 ? `W${warnings}` : "",
+      `${cursorPosition.line + 1}:${cursorPosition.column + 1}`
+    ]
+      .filter(Boolean)
+      .join("   ");
   }
 
   function getViewportContext() {
