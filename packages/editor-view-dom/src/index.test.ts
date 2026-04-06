@@ -1244,7 +1244,7 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-status-file='true']")?.textContent).toBe("memory/demo.scene");
   });
 
-  it("renders added and modified gutter bars after the line number", async () => {
+  it("renders added, modified, and deleted gutter markers after the line number", async () => {
     const container = document.createElement("div");
     document.body.append(container);
 
@@ -1254,7 +1254,8 @@ describe("createEditor", () => {
         async getLineChanges() {
           return [
             { line: 0, kind: "added" as const },
-            { line: 1, kind: "modified" as const }
+            { line: 1, kind: "modified" as const },
+            { line: 1, kind: "deleted" as const }
           ];
         }
       }
@@ -1265,6 +1266,7 @@ describe("createEditor", () => {
 
     expect(container.querySelector('[data-wx-editor-gutter="1"] [data-wx-editor-line-change="added"]')).not.toBeNull();
     expect(container.querySelector('[data-wx-editor-gutter="2"] [data-wx-editor-line-change="modified"]')).not.toBeNull();
+    expect(container.querySelector('[data-wx-editor-gutter="2"] .wx-editor__gutter-change[data-deleted="true"]')).not.toBeNull();
   });
 
   it("runs :format through the first formatter in a service list", async () => {

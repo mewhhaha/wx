@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, type Plugin } from "vite";
 
-type LineChangeKind = "added" | "modified";
+type LineChangeKind = "added" | "modified" | "deleted";
 
 interface LineChange {
   line: number;
@@ -71,6 +71,11 @@ function computeLineChanges(baseText: string, currentText: string): LineChange[]
     const [nextBase, nextCurrent] = anchors[index + 1]!;
     const baseCount = nextBase - baseAnchor - 1;
     const currentCount = nextCurrent - currentAnchor - 1;
+
+    if (baseCount > currentCount) {
+      const deletionLine = Math.max(0, currentAnchor);
+      changes.push({ line: deletionLine, kind: "deleted" });
+    }
 
     if (currentCount <= 0) {
       continue;

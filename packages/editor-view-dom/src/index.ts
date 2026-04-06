@@ -102,7 +102,7 @@ export interface CreateEditorOptions {
   };
 }
 
-export type EditorLineChangeKind = "added" | "modified";
+export type EditorLineChangeKind = "added" | "modified" | "deleted";
 
 export interface EditorLineChange {
   line: number;
@@ -196,7 +196,12 @@ interface FlashState {
   hints: readonly FlashHint[];
 }
 
-type LineChangesByLine = Map<number, EditorLineChangeKind>;
+interface LineChangeState {
+  kind: Exclude<EditorLineChangeKind, "deleted"> | null;
+  deleted: boolean;
+}
+
+type LineChangesByLine = Map<number, LineChangeState>;
 
 type PendingAction =
   | null
@@ -355,6 +360,12 @@ function mountStyles(styleHost: HTMLElement): void {
       z-index: 1;
     }
 
+    .wx-editor__viewport {
+      display: grid;
+      grid-template-columns: 1ch max-content 2ch minmax(0, 1fr);
+      column-gap: 0;
+    }
+
     .wx-editor__spacer {
       height: 0;
       pointer-events: none;
@@ -362,13 +373,17 @@ function mountStyles(styleHost: HTMLElement): void {
 
     .wx-editor__row {
       display: grid;
+      grid-template-columns: subgrid;
+      grid-column: 1 / -1;
       align-items: center;
       min-height: var(--wx-line-height, 24px);
       white-space: pre;
     }
 
     .wx-editor__line-group {
-      display: block;
+      display: grid;
+      grid-template-columns: subgrid;
+      grid-column: 1 / -1;
     }
 
     .wx-row-active {
@@ -376,11 +391,11 @@ function mountStyles(styleHost: HTMLElement): void {
     }
 
     .wx-editor__gutter {
-      display: inline-grid;
-      grid-template-columns: 1ch minmax(calc(var(--wx-gutter-digits, 2) * 1ch), 1fr) 0.6ch;
+      display: grid;
+      grid-template-columns: subgrid;
+      grid-column: 1 / 4;
       align-items: stretch;
-      gap: 0.5ch;
-      padding-right: 14px;
+      justify-items: stretch;
       color: var(--wx-color-gutter);
       user-select: none;
     }
@@ -390,16 +405,19 @@ function mountStyles(styleHost: HTMLElement): void {
       min-width: 0;
       width: 100%;
       text-align: right;
-      justify-self: end;
+      justify-self: stretch;
+      grid-column: 2;
     }
 
     .wx-editor__gutter-change {
+      position: relative;
       width: 0.45ch;
       min-height: var(--wx-line-height, 24px);
       height: 100%;
-      justify-self: end;
+      justify-self: center;
       align-self: stretch;
       visibility: hidden;
+      grid-column: 3;
     }
 
     .wx-editor__gutter-change[data-change="added"] {
@@ -412,13 +430,25 @@ function mountStyles(styleHost: HTMLElement): void {
       background: #f59e0b;
     }
 
+    .wx-editor__gutter-change[data-deleted="true"]::after {
+      content: "";
+      position: absolute;
+      left: -0.1ch;
+      right: -0.1ch;
+      bottom: 0;
+      height: 2px;
+      background: #ef4444;
+    }
+
     .wx-editor__gutter-marker {
       width: 0.55ch;
       height: 0.55ch;
       border-radius: 999px;
       flex: 0 0 auto;
       justify-self: center;
+      align-self: center;
       visibility: hidden;
+      grid-column: 1;
     }
 
     .wx-editor__gutter-marker[data-severity="error"] {
@@ -450,6 +480,7 @@ function mountStyles(styleHost: HTMLElement): void {
       min-height: var(--wx-line-height, 24px);
       min-width: 0;
       overflow: hidden;
+      grid-column: 4;
     }
 
     .wx-editor__line-text {
@@ -546,20 +577,23 @@ function mountStyles(styleHost: HTMLElement): void {
 
     .wx-editor__diagnostic-row {
       display: grid;
+      grid-template-columns: subgrid;
+      grid-column: 1 / -1;
       align-items: start;
       min-height: calc(var(--wx-line-height, 24px) * 0.95);
     }
 
     .wx-editor__diagnostic-gutter {
+      grid-column: 1 / 4;
       color: transparent;
       user-select: none;
-      padding-right: 14px;
     }
 
     .wx-editor__diagnostic-content {
       position: relative;
       min-height: calc(var(--wx-line-height, 24px) * 0.95);
       white-space: pre-wrap;
+      grid-column: 4;
     }
 
     .wx-editor__inline-diagnostic[data-severity="error"],
@@ -795,6 +829,8 @@ function mountStyles(styleHost: HTMLElement): void {
 
     .wx-editor__filler-row {
       display: grid;
+      grid-template-columns: subgrid;
+      grid-column: 1 / -1;
       align-items: center;
       min-height: var(--wx-line-height, 24px);
       color: color-mix(in srgb, var(--wx-color-gutter) 80%, transparent);
@@ -802,11 +838,10 @@ function mountStyles(styleHost: HTMLElement): void {
     }
 
     .wx-editor__filler-gutter {
-      display: inline-grid;
-      grid-template-columns: 1ch minmax(calc(var(--wx-gutter-digits, 2) * 1ch), 1fr) 0.6ch;
+      display: grid;
+      grid-template-columns: subgrid;
+      grid-column: 1 / 4;
       align-items: center;
-      gap: 0.5ch;
-      padding-right: 14px;
     }
   `;
 
@@ -1529,8 +1564,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   root.dataset.wxEditor = "root";
   root.tabIndex = 0;
   root.style.setProperty("--wx-line-height", `${metrics.lineHeight}px`);
-  root.style.setProperty("--wx-gutter-digits", String(Math.max(2, String(Math.max(1, state.doc.lineCount)).length)));
-
   surface.className = "wx-editor__surface";
   surface.dataset.wxEditor = "surface";
 
@@ -1540,6 +1573,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   topSpacer.className = "wx-editor__spacer";
   topSpacer.dataset.wxEditorSpacer = "top";
 
+  viewportRows.className = "wx-editor__viewport";
   viewportRows.dataset.wxEditor = "viewport";
 
   bottomSpacer.className = "wx-editor__spacer";
@@ -1863,19 +1897,34 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function refreshGutterWidth(force = false): void {
-    const digitCount = Math.max(2, String(Math.max(1, state.doc.lineCount)).length);
-    const nextWidth = (1 + digitCount + 0.6 + 1) * metrics.charWidth + 20;
+    const nextWidth = Math.max(metrics.charWidth * 6, measureGutterWidth());
 
     if (!force && nextWidth === gutterWidth) {
       return;
     }
 
     gutterWidth = nextWidth;
-    root.style.setProperty("--wx-gutter-digits", String(digitCount));
+  }
 
-    for (const view of rowViews) {
-      view.row.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
-    }
+  function measureGutterWidth(): number {
+    const sample = document.createElement("div");
+    const marker = document.createElement("span");
+    const number = document.createElement("span");
+    const change = document.createElement("span");
+
+    sample.className = "wx-editor__gutter";
+    marker.className = "wx-editor__gutter-marker";
+    number.className = "wx-editor__gutter-number";
+    change.className = "wx-editor__gutter-change";
+    number.textContent = String(Math.max(1, state.doc.lineCount));
+    sample.append(marker, number, change);
+    sample.style.position = "absolute";
+    sample.style.visibility = "hidden";
+    sample.style.pointerEvents = "none";
+    root.append(sample);
+    const width = Math.ceil(sample.getBoundingClientRect().width);
+    sample.remove();
+    return width;
   }
 
   function getLineHighlights(lineIndex: number): HighlightSpan[] {
@@ -1899,8 +1948,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return best;
   }
 
-  function getLineChangeKind(lineIndex: number): EditorLineChangeKind | null {
-    return lineChangesByLine.get(lineIndex) ?? null;
+  function getLineChangeState(lineIndex: number): LineChangeState {
+    return lineChangesByLine.get(lineIndex) ?? { kind: null, deleted: false };
   }
 
   function getInlineDiagnosticForLine(lineIndex: number): EditorDiagnostic | null {
@@ -2097,7 +2146,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const lineSearchMatches = getLineSearchMatches(lineIndex);
     const currentSearchMatch = controller.getSearchState().lastMatch;
     const lineDiagnosticSeverity = visualRow.isContinuation ? null : getLineDiagnosticSeverity(lineIndex);
-    const lineChangeKind = visualRow.isContinuation ? null : getLineChangeKind(lineIndex);
+    const lineChangeState = visualRow.isContinuation ? { kind: null, deleted: false } : getLineChangeState(lineIndex);
     const inlineDiagnostic = getInlineDiagnosticForLine(lineIndex);
     const flashHints = getFlashHintsForVisualRow(visualRow);
     const flashOffsets = getFlashOffsetsForVisualRow(visualRow);
@@ -2122,8 +2171,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     gutterNumber.className = "wx-editor__gutter-number";
     gutterNumber.textContent = visualRow.isContinuation ? "↪" : String(lineIndex + 1);
     gutterChange.className = "wx-editor__gutter-change";
-    gutterChange.dataset.change = lineChangeKind ?? "";
-    gutterChange.dataset.wxEditorLineChange = lineChangeKind ?? "";
+    gutterChange.dataset.change = lineChangeState.kind ?? "";
+    gutterChange.dataset.deleted = String(lineChangeState.deleted);
+    gutterChange.dataset.wxEditorLineChange = lineChangeState.kind ?? (lineChangeState.deleted ? "deleted" : "");
     view.gutter.replaceChildren(gutterMarker, gutterNumber, gutterChange);
     view.row.classList.toggle("wx-row-active", visualRowIndex === cursorVisual.rowIndex);
     view.content.replaceChildren();
@@ -2215,7 +2265,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       detailRow.className = "wx-editor__diagnostic-row";
       detailGutter.className = "wx-editor__diagnostic-gutter";
       detailContent.className = "wx-editor__diagnostic-content";
-      detailRow.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
       detailGutter.textContent = " ";
       detail.className = "wx-editor__inline-diagnostic";
       detail.dataset.severity = inlineDiagnosticInRow.severity;
@@ -2299,7 +2348,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     for (let visualRowIndex = renderedViewport.fromLine; visualRowIndex <= renderedViewport.toLine; visualRowIndex += 1) {
       const view = createRowView(visualRowIndex);
-      view.row.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
       patchRowView(view, visualRowIndex);
       rowViews.push(view);
       fragment.append(view.host);
@@ -2321,7 +2369,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       fillerNumber.className = "wx-editor__gutter-number";
       fillerChange.className = "wx-editor__gutter-change";
       fillerContent.className = "wx-editor__content";
-      fillerRow.style.gridTemplateColumns = `${gutterWidth}px 1fr`;
+      fillerChange.dataset.deleted = "false";
       fillerRow.dataset.wxEditorFillerRow = String(index);
       fillerNumber.textContent = index === 0 ? "~" : " ";
       fillerContent.textContent = " ";
@@ -2665,14 +2713,24 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function buildLineChangesMap(changes: readonly EditorLineChange[]): LineChangesByLine {
-    const next = new Map<number, EditorLineChangeKind>();
+    const next: LineChangesByLine = new Map();
 
     for (const change of changes) {
       if (change.line < 0 || !Number.isFinite(change.line)) {
         continue;
       }
 
-      next.set(change.line, change.kind);
+      if (change.kind === "deleted") {
+        const previous = next.get(change.line) ?? { kind: null, deleted: false };
+        next.set(change.line, { ...previous, deleted: true });
+        continue;
+      }
+
+      const previous = next.get(change.line) ?? { kind: null, deleted: false };
+      next.set(change.line, {
+        kind: change.kind === "modified" || previous.kind === "modified" ? "modified" : change.kind,
+        deleted: previous.deleted
+      });
     }
 
     return next;
