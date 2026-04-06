@@ -5,6 +5,7 @@ import {
   createCharacterSelection,
   createEditorState,
   getCursorOffset,
+  getSelectionOffsets,
   normalizeSelection,
   type Command,
   type CommandContext,
@@ -32,6 +33,24 @@ export interface EditorUpdate {
   modeChanged: boolean;
 }
 
+export interface EditorSearchState {
+  query: string;
+  direction: "forward" | "backward";
+  lastMatch: { from: number; to: number } | null;
+}
+
+export interface EditorJumpEntry {
+  selection: SelectionSet;
+  mode: EditorState["mode"];
+}
+
+export interface EditorRegisterState {
+  unnamed: string | null;
+  search: string | null;
+  named: Record<string, string>;
+  selected: string | null;
+}
+
 export type EditorUpdateListener = (update: EditorUpdate) => void;
 
 export interface HistoryPlugin {
@@ -48,6 +67,17 @@ export interface EditorController {
   replaceState(nextState: EditorState, transaction?: Transaction): void;
   execute(command: Command, context?: Omit<CommandContext, "history">): boolean;
   subscribe(listener: EditorUpdateListener): () => void;
+  getSearchState(): EditorSearchState;
+  setSearchState(next: Partial<EditorSearchState>): void;
+  clearSearchState(): void;
+  pushJump(): boolean;
+  jumpBackward(): EditorJumpEntry | null;
+  jumpForward(): EditorJumpEntry | null;
+  getJumpList(): readonly EditorJumpEntry[];
+  getRegister(name?: string | null): string | null;
+  setRegister(name: string | null, value: string | null): void;
+  selectRegister(name: string | null): void;
+  getSelectedRegister(): string | null;
 }
 
 export interface CreateEditorControllerOptions {
@@ -85,6 +115,25 @@ function selectionEquals(left: SelectionSet, right: SelectionSet): boolean {
       range.preferredColumn === other.preferredColumn
     );
   });
+}
+
+function jumpEntryEquals(left: EditorJumpEntry, right: EditorJumpEntry): boolean {
+  return left.mode === right.mode && selectionEquals(left.selection, right.selection);
+}
+
+function createJumpEntry(state: EditorState): EditorJumpEntry {
+  return {
+    selection: state.selection,
+    mode: state.mode
+  };
+}
+
+function normalizeRegisterName(name: string | null | undefined): string | null {
+  if (!name) {
+    return null;
+  }
+
+  return name.toLowerCase();
 }
 
 function normalizeHistoryRestoreEntry(entry: HistoryEntry): HistoryEntry {
@@ -203,6 +252,19 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     });
   const listeners = new Set<EditorUpdateListener>();
   const history = options.history === false ? null : options.history ?? createSnapshotHistory();
+  let searchState: EditorSearchState = {
+    query: "",
+    direction: "forward",
+    lastMatch: null
+  };
+  const jumpList: EditorJumpEntry[] = [];
+  let jumpCursor = 0;
+  const registers: EditorRegisterState = {
+    unnamed: null,
+    search: null,
+    named: {},
+    selected: null
+  };
 
   const notify = (
     prevState: EditorState,
@@ -223,6 +285,19 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
     if (options.recordHistory !== false && (update.docChanged || shouldCheckpointHistory)) {
       history?.record(update, { checkpoint: shouldCheckpointHistory });
+    }
+
+    if (update.nextState.yankBuffer !== update.prevState.yankBuffer) {
+      registers.unnamed = update.nextState.yankBuffer;
+      const selected = normalizeRegisterName(registers.selected);
+
+      if (selected && selected !== "/") {
+        if (registers.unnamed === null) {
+          delete registers.named[selected];
+        } else {
+          registers.named[selected] = registers.unnamed;
+        }
+      }
     }
 
     for (const listener of listeners) {
@@ -255,6 +330,29 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     checkpoint: () => history?.checkpoint() ?? false
   };
 
+  const trimJumpTail = () => {
+    if (jumpCursor < jumpList.length) {
+      jumpList.splice(jumpCursor);
+    }
+  };
+
+  const pushJumpEntry = (entry: EditorJumpEntry): boolean => {
+    trimJumpTail();
+    const previous = jumpList[jumpList.length - 1];
+
+    if (previous && jumpEntryEquals(previous, entry)) {
+      jumpCursor = jumpList.length;
+      return false;
+    }
+
+    jumpList.push(entry);
+    if (jumpList.length > 100) {
+      jumpList.shift();
+    }
+    jumpCursor = jumpList.length;
+    return true;
+  };
+
   return {
     getState() {
       return state;
@@ -280,6 +378,94 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       return () => {
         listeners.delete(listener);
       };
+    },
+    getSearchState() {
+      return searchState;
+    },
+    setSearchState(next) {
+      searchState = {
+        ...searchState,
+        ...next
+      };
+      if (typeof next.query === "string") {
+        registers.search = next.query;
+      }
+    },
+    clearSearchState() {
+      searchState = {
+        query: "",
+        direction: "forward",
+        lastMatch: null
+      };
+    },
+    pushJump() {
+      return pushJumpEntry(createJumpEntry(state));
+    },
+    jumpBackward() {
+      if (jumpList.length === 0) {
+        return null;
+      }
+
+      if (jumpCursor === jumpList.length) {
+        pushJumpEntry(createJumpEntry(state));
+      }
+
+      if (jumpCursor <= 1) {
+        return null;
+      }
+
+      jumpCursor -= 2;
+      const target = jumpList[jumpCursor] ?? null;
+      jumpCursor += 1;
+      return target;
+    },
+    jumpForward() {
+      if (jumpCursor >= jumpList.length) {
+        return null;
+      }
+
+      const target = jumpList[jumpCursor] ?? null;
+      if (!target) {
+        return null;
+      }
+
+      jumpCursor += 1;
+      return target;
+    },
+    getJumpList() {
+      return [...jumpList];
+    },
+    getRegister(name = null) {
+      const normalized = normalizeRegisterName(name ?? registers.selected);
+      if (!normalized || normalized === "\"") {
+        return registers.unnamed;
+      }
+      if (normalized === "/") {
+        return registers.search;
+      }
+      return registers.named[normalized] ?? null;
+    },
+    setRegister(name, value) {
+      const normalized = normalizeRegisterName(name);
+      if (!normalized || normalized === "\"") {
+        registers.unnamed = value;
+        return;
+      }
+      if (normalized === "/") {
+        registers.search = value;
+        return;
+      }
+      if (value === null) {
+        delete registers.named[normalized];
+      } else {
+        registers.named[normalized] = value;
+      }
+    },
+    selectRegister(name) {
+      registers.selected = normalizeRegisterName(name);
+    },
+    getSelectedRegister() {
+      return registers.selected;
     }
   };
 }

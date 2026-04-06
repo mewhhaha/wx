@@ -85,4 +85,18 @@ describe("editor controller", () => {
 
     expect(controller.getState().doc.text).toBe("xyz");
   });
+
+  it("stores search state, registers, and jump snapshots outside editor state", () => {
+    const controller = createEditorController({ value: "alpha\nbeta" });
+
+    controller.setSearchState({ query: "beta", direction: "forward", lastMatch: { from: 6, to: 10 } });
+    controller.setRegister("a", "alpha");
+    controller.pushJump();
+    controller.execute(moveRight);
+
+    expect(controller.getSearchState().query).toBe("beta");
+    expect(controller.getRegister("a")).toBe("alpha");
+    expect(controller.getJumpList()).toHaveLength(1);
+    expect(controller.jumpBackward()?.selection.ranges[0]?.head).toBe(0);
+  });
 });

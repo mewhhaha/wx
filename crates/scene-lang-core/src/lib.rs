@@ -176,7 +176,7 @@ struct CommandSpec {
     allowed_children: &'static [&'static str],
 }
 
-const ROOT_CHILDREN: &[&str] = &["screen"];
+const ROOT_CHILDREN: &[&str] = &["screen", "source"];
 const SCREEN_CHILDREN: &[&str] = &[
     "size",
     "status",
@@ -189,6 +189,7 @@ const SCREEN_CHILDREN: &[&str] = &[
     "when",
     "for",
 ];
+const SOURCE_CHILDREN: &[&str] = &[];
 const STATUS_CHILDREN: &[&str] = &["left", "file", "right"];
 const LINE_CHILDREN: &[&str] = &["gutter", "text", "diagnostic"];
 const DIAGNOSTIC_CHILDREN: &[&str] = &["eol", "below"];
@@ -210,6 +211,11 @@ const COMMAND_SPECS: &[CommandSpec] = &[
         name: "screen",
         docs: "Root scene node for a terminal or editor frame.",
         allowed_children: SCREEN_CHILDREN,
+    },
+    CommandSpec {
+        name: "source",
+        docs: "Declare a named editor data source that can be projected later.",
+        allowed_children: SOURCE_CHILDREN,
     },
     CommandSpec {
         name: "size",
@@ -315,6 +321,7 @@ fn allowed_children(parent: Option<&str>) -> &'static [&'static str] {
     match parent {
         None => ROOT_CHILDREN,
         Some("screen") => SCREEN_CHILDREN,
+        Some("source") => SOURCE_CHILDREN,
         Some("status") => STATUS_CHILDREN,
         Some("line") => LINE_CHILDREN,
         Some("diagnostic") => DIAGNOSTIC_CHILDREN,
@@ -567,6 +574,36 @@ fn validate_line(node: &Node, parent: Option<&str>, diagnostics: &mut Vec<SceneD
     let allowed = allowed_children(parent);
     push_specific_diagnostics(node, diagnostics);
 
+    if is_compact_source_line(node) {
+        if parent != Some("source") && parent != Some("screen") {
+            diagnostics.push(SceneDiagnostic {
+                from: node.line.command_span.start,
+                to: node.line.end,
+                severity: Severity::Error,
+                message: "Compact row syntax is only allowed inside `source` or `screen`.".to_string(),
+                source: "scene-lang",
+                code: "line.compact-parent",
+                replacement: None,
+            });
+        }
+        return;
+    }
+
+    if is_compact_diagnostic(node) {
+        if !matches!(parent, Some("line") | Some("source-row")) {
+            diagnostics.push(SceneDiagnostic {
+                from: node.line.command_span.start,
+                to: node.line.end,
+                severity: Severity::Error,
+                message: "Compact diagnostics only attach to rendered rows.".to_string(),
+                source: "scene-lang",
+                code: "diagnostic.compact-parent",
+                replacement: None,
+            });
+        }
+        return;
+    }
+
     if command_spec(command).is_none() {
         diagnostics.push(SceneDiagnostic {
             from: node.line.command_span.start,
@@ -603,7 +640,59 @@ fn token_text<'a>(tokens: &'a [Token], index: usize) -> Option<&'a str> {
 fn push_specific_diagnostics(node: &Node, diagnostics: &mut Vec<SceneDiagnostic>) {
     let tokens = &node.line.tokens;
     let command = node.line.command.as_str();
+
+    if is_compact_source_line(node) {
+        return;
+    }
+
+    if is_compact_diagnostic(node) {
+        let okay = tokens.len() >= 4
+            && matches!(tokens.get(1).map(|token| &token.kind), Some(TokenKind::Number))
+            && matches!(token_text(tokens, 2), Some("eol" | "below"))
+            && matches!(tokens.get(3).map(|token| &token.kind), Some(TokenKind::String));
+
+        if !okay {
+            diagnostics.push(SceneDiagnostic {
+                from: node.line.command_span.start,
+                to: node.line.end,
+                severity: Severity::Error,
+                message: "Use `<severity> <column> <eol|below> \"message\"`.".to_string(),
+                source: "scene-lang",
+                code: "diagnostic.compact-shape",
+                replacement: Some("warn 0 eol \"message\"".to_string()),
+            });
+        }
+        return;
+    }
+
     match command {
+        "screen" => {
+            if tokens.len() > 1 && token_text(tokens, 1) != Some("fill") {
+                diagnostics.push(SceneDiagnostic {
+                    from: node.line.command_span.start,
+                    to: node.line.end,
+                    severity: Severity::Warning,
+                    message: "Use `screen fill` or a child `size fill`.".to_string(),
+                    source: "scene-lang",
+                    code: "screen.fill",
+                    replacement: Some("screen fill".to_string()),
+                });
+            }
+        }
+        "source" => {
+            let okay = token_text(tokens, 1) == Some("lines") && tokens.len() >= 3;
+            if !okay {
+                diagnostics.push(SceneDiagnostic {
+                    from: node.line.command_span.start,
+                    to: node.line.end,
+                    severity: Severity::Error,
+                    message: "Use `source lines <name>`.".to_string(),
+                    source: "scene-lang",
+                    code: "source.shape",
+                    replacement: Some("source lines preview".to_string()),
+                });
+            }
+        }
         "size" => {
             if token_text(tokens, 1) != Some("fill") {
                 diagnostics.push(SceneDiagnostic {
@@ -676,19 +765,22 @@ fn push_specific_diagnostics(node: &Node, diagnostics: &mut Vec<SceneDiagnostic>
             }
         }
         "cursor" => {
-            let okay = matches!(token_text(tokens, 1), Some("block" | "line"))
+            let legacy = matches!(token_text(tokens, 1), Some("block" | "line"))
                 && token_text(tokens, 2) == Some("at")
                 && token_text(tokens, 3) == Some("line")
-                && token_text(tokens, 5) == Some("col");
-            if !okay || tokens.len() < 7 {
+                && token_text(tokens, 5) == Some("col")
+                && tokens.len() >= 7;
+            let compact = matches!(token_text(tokens, 1), Some("block" | "line"))
+                && parse_line_col_token(tokens.get(2)).is_some();
+            if !legacy && !compact {
                 diagnostics.push(SceneDiagnostic {
                     from: node.line.command_span.start,
                     to: node.line.end,
                     severity: Severity::Error,
-                    message: "Use `cursor <block|line> at line <n> col <n>`.".to_string(),
+                    message: "Use `cursor <block|line> <line>:<col>` or `cursor <block|line> at line <n> col <n>`.".to_string(),
                     source: "scene-lang",
                     code: "cursor.shape",
-                    replacement: Some("cursor block at line 1 col 0".to_string()),
+                    replacement: Some("cursor block 1:0".to_string()),
                 });
             }
         }
@@ -726,13 +818,15 @@ fn push_specific_diagnostics(node: &Node, diagnostics: &mut Vec<SceneDiagnostic>
         "for" => {
             let okay = token_text(tokens, 1) == Some("line")
                 && token_text(tokens, 2) == Some("in")
-                && token_text(tokens, 3) == Some("visible-lines");
+                && token_text(tokens, 3)
+                    .map(|reference| reference == "visible-lines" || reference.ends_with(".lines"))
+                    .unwrap_or(false);
             if !okay {
                 diagnostics.push(SceneDiagnostic {
                     from: node.line.command_span.start,
                     to: node.line.end,
                     severity: Severity::Error,
-                    message: "Use `for line in visible-lines`.".to_string(),
+                    message: "Use `for line in visible-lines` or `for line in <source>.lines`.".to_string(),
                     source: "scene-lang",
                     code: "for.shape",
                     replacement: Some("for line in visible-lines".to_string()),
@@ -751,13 +845,13 @@ fn walk(
 ) {
     validate_line(node, parent, diagnostics);
     push_highlights_from_line(&node.line, highlights);
+    let child_parent = if is_compact_source_line(node) {
+        Some("source-row")
+    } else {
+        Some(node.line.command.as_str())
+    };
     for child in &node.children {
-        walk(
-            child,
-            Some(node.line.command.as_str()),
-            diagnostics,
-            highlights,
-        );
+        walk(child, child_parent, diagnostics, highlights);
     }
 }
 
@@ -823,6 +917,12 @@ pub fn format_scene(source: &str) -> String {
 fn token_at<'a>(nodes: &'a [Node], offset: usize) -> Option<(&'a Token, &'static str)> {
     for node in nodes {
         if node.line.command_span.start <= offset && offset < node.line.command_span.end {
+            if is_compact_source_line(node) {
+                return Some((&node.line.tokens[0], "Compact editor row. The line number and text define one rendered buffer row."));
+            }
+            if is_compact_diagnostic(node) {
+                return Some((&node.line.tokens[0], "Compact diagnostic attached to the current row."));
+            }
             if let Some(spec) = command_spec(node.line.command.as_str()) {
                 return Some((&node.line.tokens[0], spec.docs));
             }
@@ -830,14 +930,16 @@ fn token_at<'a>(nodes: &'a [Node], offset: usize) -> Option<(&'a Token, &'static
         for token in node.line.tokens.iter().skip(1) {
             if token.span.start <= offset && offset < token.span.end {
                 let docs = match token.text.as_str() {
+                    "lines" => "A named collection of editor rows that can be rendered later.",
                     "left" => "Left status segment.",
                     "file" => "File status segment.",
                     "right" => "Right status segment.",
                     "number" => "Number the line gutter with this value.",
-                    "warning" | "error" | "info" | "hint" => "Diagnostic severity.",
+                    "warning" | "warn" | "error" | "info" | "hint" => "Diagnostic severity.",
                     "block" | "line" => "Cursor presentation mode.",
                     "visible-lines" => "The currently visible logical lines in the host editor.",
                     "fill" => "Fill the current scene to the viewport bounds.",
+                    _ if token.text.ends_with(".lines") => "Project the named line source into rendered rows.",
                     _ if token.kind == TokenKind::String => "String literal rendered by the scene.",
                     _ if token.kind == TokenKind::Number || token.kind == TokenKind::Range => {
                         "Numeric literal used in layout."
@@ -908,14 +1010,40 @@ fn parse_string_token(token: Option<&Token>) -> Option<String> {
 fn parse_severity(token: Option<&Token>) -> Option<Severity> {
     match token.map(|token| token.text.as_str()) {
         Some("error") => Some(Severity::Error),
-        Some("warning") => Some(Severity::Warning),
+        Some("warning" | "warn") => Some(Severity::Warning),
         Some("info") => Some(Severity::Info),
         Some("hint") => Some(Severity::Hint),
         _ => None,
     }
 }
 
-fn build_line_model(node: &Node) -> Option<SceneTextLine> {
+fn is_compact_source_line(node: &Node) -> bool {
+    matches!(
+        (node.line.tokens.first(), node.line.tokens.get(1)),
+        (
+            Some(Token {
+                kind: TokenKind::Number,
+                ..
+            }),
+            Some(Token {
+                kind: TokenKind::String,
+                ..
+            })
+        )
+    )
+}
+
+fn is_compact_diagnostic(node: &Node) -> bool {
+    matches!(node.line.command.as_str(), "error" | "warning" | "warn" | "info" | "hint")
+}
+
+fn parse_line_col_token(token: Option<&Token>) -> Option<(i32, i32)> {
+    let text = token?.text.as_str();
+    let (line, col) = text.split_once(':')?;
+    Some((line.parse().ok()?, col.parse().ok()?))
+}
+
+fn build_explicit_line_model(node: &Node) -> Option<SceneTextLine> {
     let number = parse_int_token(node.line.tokens.get(1))?;
     let mut model = SceneTextLine {
         number,
@@ -959,14 +1087,79 @@ fn build_line_model(node: &Node) -> Option<SceneTextLine> {
     Some(model)
 }
 
+fn build_compact_line_model(node: &Node) -> Option<SceneTextLine> {
+    let number = parse_int_token(node.line.tokens.first())?;
+    let mut model = SceneTextLine {
+        number,
+        gutter: Some(number),
+        text: parse_string_token(node.line.tokens.get(1)).unwrap_or_default(),
+        eol_diagnostic: None,
+        below_diagnostic: None,
+    };
+
+    for child in &node.children {
+        if !is_compact_diagnostic(child) {
+            continue;
+        }
+
+        let severity = parse_severity(child.line.tokens.first());
+        let at = parse_int_token(child.line.tokens.get(1)).unwrap_or_default();
+        let placement = token_text(&child.line.tokens, 2);
+        let message = parse_string_token(child.line.tokens.get(3));
+
+        if let (Some(severity), Some(message)) = (severity, message) {
+            match placement {
+                Some("eol") => model.eol_diagnostic = Some((severity, message, at)),
+                Some("below") => model.below_diagnostic = Some((severity, message, at)),
+                _ => {}
+            }
+        }
+    }
+
+    Some(model)
+}
+
+fn parse_source_name(node: &Node) -> Option<&str> {
+    if node.line.command != "source" || token_text(&node.line.tokens, 1) != Some("lines") {
+        return None;
+    }
+
+    token_text(&node.line.tokens, 2)
+}
+
 pub fn build_render_model(source: &str) -> SceneRenderModel {
     let parsed = parse_scene(source);
     let mut model = SceneRenderModel::default();
+    let mut sources = std::collections::BTreeMap::<String, Vec<SceneTextLine>>::new();
+
+    for node in &parsed.nodes {
+        let Some(source_name) = parse_source_name(node) else {
+            continue;
+        };
+
+        let mut lines = Vec::new();
+        for child in &node.children {
+            if child.line.command == "line" {
+                if let Some(line) = build_explicit_line_model(child) {
+                    lines.push(line);
+                }
+            } else if is_compact_source_line(child) {
+                if let Some(line) = build_compact_line_model(child) {
+                    lines.push(line);
+                }
+            }
+        }
+        lines.sort_by_key(|line| line.number);
+        sources.insert(source_name.to_string(), lines);
+    }
 
     for node in parsed.nodes {
         if node.line.command != "screen" {
             continue;
         }
+
+        model.fill_screen = token_text(&node.line.tokens, 1) == Some("fill");
+
         for child in node.children {
             match child.line.command.as_str() {
                 "size" => {
@@ -989,17 +1182,45 @@ pub fn build_render_model(source: &str) -> SceneRenderModel {
                     }
                 }
                 "line" => {
-                    if let Some(line) = build_line_model(&child) {
+                    if let Some(line) = build_explicit_line_model(&child) {
                         model.lines.push(line);
                     }
                 }
+                _ if is_compact_source_line(&child) => {
+                    if let Some(line) = build_compact_line_model(&child) {
+                        model.lines.push(line);
+                    }
+                }
+                "for" => {
+                    let Some(reference) = token_text(&child.line.tokens, 3) else {
+                        continue;
+                    };
+                    let Some(source_name) = reference.strip_suffix(".lines") else {
+                        continue;
+                    };
+                    let renders_rows = child.children.iter().any(|entry| {
+                        entry.line.command == "row" && token_text(&entry.line.tokens, 1) == Some("line")
+                    });
+                    if !renders_rows {
+                        continue;
+                    }
+                    if let Some(lines) = sources.get(source_name) {
+                        model.lines.extend(lines.iter().cloned());
+                    }
+                }
                 "cursor" => {
+                    let (line, col) = parse_line_col_token(child.line.tokens.get(2)).unwrap_or_else(|| {
+                        (
+                            parse_int_token(child.line.tokens.get(4)).unwrap_or(1),
+                            parse_int_token(child.line.tokens.get(6)).unwrap_or_default(),
+                        )
+                    });
                     model.cursor = Some(SceneCursor {
                         kind: token_text(&child.line.tokens, 1)
                             .unwrap_or("block")
                             .to_string(),
-                        line: parse_int_token(child.line.tokens.get(4)).unwrap_or(1),
-                        col: parse_int_token(child.line.tokens.get(6)).unwrap_or_default(),
+                        line,
+                        col,
                     });
                 }
                 _ => {}
@@ -1030,13 +1251,13 @@ pub fn highlights_for_lines(source: &str, from_line: usize, to_line: usize) -> V
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = "screen\n  size fill\n  status\n    left \" NOR \"\n    file \"demo.scene\"\n  line 10\n    gutter number 10\n    text \"return message\"\n    diagnostic error at 0\n      below \"expected number, got string\"\n";
+    const SAMPLE: &str = "source lines preview\n  9 \"const message = greet(user.name)\"\n    warn 18 eol \"Replace gutter with gutter\"\n  10 \"return message\"\n    error 0 below \"expected number, got string\"\nscreen fill\n  status\n    left \" NOR \"\n    file \"demo.scene\"\n  for line in preview.lines\n    row line\n  cursor block 10:6\n";
 
     #[test]
     fn parses_and_formats() {
         let parsed = parse_scene(SAMPLE);
         assert!(parsed.diagnostics.is_empty());
-        assert_eq!(parsed.nodes.len(), 1);
+        assert_eq!(parsed.nodes.len(), 2);
         assert_eq!(format_scene(SAMPLE), SAMPLE);
     }
 
@@ -1055,7 +1276,14 @@ mod tests {
     fn builds_render_model() {
         let model = build_render_model(SAMPLE);
         assert!(model.fill_screen);
-        assert_eq!(model.lines.len(), 1);
-        assert_eq!(model.lines[0].text, "return message");
+        assert_eq!(model.lines.len(), 2);
+        assert_eq!(model.lines[0].text, "const message = greet(user.name)");
+        assert_eq!(model.lines[1].gutter, Some(10));
+    }
+
+    #[test]
+    fn keeps_compact_syntax_stable_in_formatter() {
+        let formatted = format_scene(SAMPLE);
+        assert_eq!(formatted, SAMPLE);
     }
 }

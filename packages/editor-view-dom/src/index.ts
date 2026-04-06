@@ -1,9 +1,11 @@
 import {
+  addSurround,
   appendInsertMode,
   changeSelection,
   createEditorState,
   createCharacterSelection,
   createSelection,
+  deleteSurround,
   deleteSelection,
   deleteBackwardIndentAware,
   deleteForward,
@@ -47,6 +49,7 @@ import {
   openAbove,
   openBelow,
   pasteAfter,
+  replaceSurround,
   redo,
   selectAll,
   selectLineBelow,
@@ -60,10 +63,12 @@ import {
 } from "@wx/editor-core";
 import {
   createEditorController,
+  type EditorJumpEntry,
   type EditorController,
   type EditorUpdate
 } from "@wx/editor-controller";
 import type {
+  CommentToggler,
   DiagnosticSeverity,
   EditorCodeAction,
   EditorDiagnostic,
@@ -73,7 +78,10 @@ import type {
   EditorLineRange,
   HighlightRole,
   HighlightSpan,
-  LanguageProvider
+  LanguageProvider,
+  SyntaxNavigationProvider,
+  SyntaxTextobjectMode,
+  SyntaxTextobjectProvider
 } from "@wx/editor-language";
 import { languageProviderToServices } from "@wx/editor-language";
 import { defaultTheme, createThemeVariables, type ThemeSpec } from "@wx/editor-theme";
@@ -134,11 +142,15 @@ interface LineFragment {
   isCursor: boolean;
   cursorKind: "block" | null;
   diagnosticSeverity: DiagnosticSeverity | null;
+  isSearchMatch: boolean;
+  isCurrentSearchMatch: boolean;
+  isFlashTarget: boolean;
 }
 
 interface CommandLineState {
   active: boolean;
   value: string;
+  prompt: ":" | "/" | "?";
 }
 
 interface BottomMessageState {
@@ -146,10 +158,17 @@ interface BottomMessageState {
   text: string;
 }
 
-interface CodeActionMenuState {
+interface PickerItem {
+  label: string;
+  detail?: string;
+  run(): void | Promise<void>;
+}
+
+interface PickerState {
   active: boolean;
   loading: boolean;
-  actions: readonly EditorCodeAction[];
+  title: string;
+  items: readonly PickerItem[];
   selectedIndex: number;
   error: string | null;
 }
@@ -165,6 +184,18 @@ interface HoverState {
   top: number;
 }
 
+interface FlashHint {
+  offset: number;
+  label: string;
+}
+
+interface FlashState {
+  active: boolean;
+  target: string;
+  input: string;
+  hints: readonly FlashHint[];
+}
+
 type LineChangesByLine = Map<number, EditorLineChangeKind>;
 
 type PendingAction =
@@ -173,14 +204,22 @@ type PendingAction =
   | { kind: "[" | "]" }
   | { kind: "m" }
   | { kind: "space" }
+  | { kind: "flash-target" }
+  | { kind: "z"; sticky: boolean }
   | { kind: "find"; variant: "f" | "F" | "t" | "T" }
-  | { kind: "textobject"; mode: "around" | "inside" };
+  | { kind: "textobject"; mode: "around" | "inside" }
+  | { kind: "surround-add" }
+  | { kind: "surround-delete" }
+  | { kind: "surround-replace-from" }
+  | { kind: "surround-replace-to"; fromObject: string }
+  | { kind: "register-select"; insert: boolean };
 
 type RepeatableMotion =
   | { kind: "find"; variant: "f" | "F" | "t" | "T"; target: string }
   | { kind: "matching-bracket" }
   | { kind: "paragraph"; direction: "next" | "prev" }
-  | { kind: "textobject"; mode: "around" | "inside"; object: string };
+  | { kind: "textobject"; mode: "around" | "inside"; object: string }
+  | { kind: "search"; reverse: boolean };
 
 const DIAGNOSTIC_SEVERITY_ORDER: Record<DiagnosticSeverity, number> = {
   error: 0,
@@ -198,6 +237,9 @@ const VIEWPORT_OVERSCAN_LINES = 6;
 const END_OF_LINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "hint";
 const CURSOR_LINE_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "warning";
 const OTHER_LINES_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "error";
+const FLASH_HOME_BIAS_LETTERS = [..."fjdkslagheruiwovncmptyqbzx"];
+const FLASH_ALL_LETTERS = [..."qwertyuiopasdfghjklzxcvbnm"];
+const KEYBOARD_ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 
 interface RowView {
   visualRowIndex: number;
@@ -336,7 +378,7 @@ function mountStyles(styleHost: HTMLElement): void {
     .wx-editor__gutter {
       display: inline-grid;
       grid-template-columns: 1ch minmax(calc(var(--wx-gutter-digits, 2) * 1ch), 1fr) 0.6ch;
-      align-items: center;
+      align-items: stretch;
       gap: 0.5ch;
       padding-right: 14px;
       color: var(--wx-color-gutter);
@@ -353,8 +395,10 @@ function mountStyles(styleHost: HTMLElement): void {
 
     .wx-editor__gutter-change {
       width: 0.45ch;
-      min-height: calc(var(--wx-line-height, 24px) * 0.92);
+      min-height: var(--wx-line-height, 24px);
+      height: 100%;
       justify-self: end;
+      align-self: stretch;
       visibility: hidden;
     }
 
@@ -540,6 +584,44 @@ function mountStyles(styleHost: HTMLElement): void {
 
     .wx-is-selected {
       background: var(--wx-color-selection);
+    }
+
+    .wx-search-match {
+      background: color-mix(in srgb, #facc15 24%, transparent);
+    }
+
+    .wx-search-current {
+      background: color-mix(in srgb, #f59e0b 42%, transparent);
+    }
+
+    .wx-flash-target {
+      background: #fb7185;
+      color: transparent;
+      text-decoration-color: transparent;
+    }
+
+    .wx-editor__flash-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 3;
+    }
+
+    .wx-editor__flash-hint {
+      position: absolute;
+      top: 0;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      height: var(--wx-line-height, 24px);
+      min-width: 1ch;
+      padding: 0;
+      background: transparent;
+      color: #fff7ed;
+      font-weight: 700;
+      line-height: var(--wx-line-height, 24px);
+      box-shadow: none;
+      white-space: pre;
     }
 
     .wx-cursor-block {
@@ -930,6 +1012,114 @@ function movementCommandForDelta(deltaY: number): Command | null {
   return null;
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function compileSearchPattern(query: string): RegExp | null {
+  if (!query) {
+    return null;
+  }
+
+  try {
+    return new RegExp(query, "gu");
+  } catch {
+    return null;
+  }
+}
+
+function collectSearchMatches(text: string, query: string): Array<{ from: number; to: number }> {
+  const pattern = compileSearchPattern(query);
+
+  if (!pattern) {
+    return [];
+  }
+
+  const matches: Array<{ from: number; to: number }> = [];
+  let result = pattern.exec(text);
+
+  while (result) {
+    const matchedText = result[0] ?? "";
+    const from = result.index;
+    const to = from + Math.max(1, matchedText.length);
+    matches.push({ from, to });
+
+    if (matchedText.length === 0) {
+      pattern.lastIndex = from + 1;
+    }
+
+    result = pattern.exec(text);
+  }
+
+  return matches;
+}
+
+function keyboardPosition(letter: string): { row: number; column: number } | null {
+  const normalized = letter.toLowerCase();
+
+  for (let row = 0; row < KEYBOARD_ROWS.length; row += 1) {
+    const column = KEYBOARD_ROWS[row]?.indexOf(normalized) ?? -1;
+    if (column >= 0) {
+      return { row, column };
+    }
+  }
+
+  return null;
+}
+
+function keyboardDistance(from: string, to: string): number {
+  const left = keyboardPosition(from);
+  const right = keyboardPosition(to);
+
+  if (!left || !right) {
+    return FLASH_ALL_LETTERS.length;
+  }
+
+  return Math.abs(left.row - right.row) * 3 + Math.abs(left.column - right.column);
+}
+
+function flashAlphabet(target: string): string[] {
+  const normalizedTarget = target.toLowerCase();
+  const unique = new Set<string>([normalizedTarget, ...FLASH_ALL_LETTERS]);
+  return [...unique].sort((left, right) => {
+    if (left === normalizedTarget) {
+      return -1;
+    }
+
+    if (right === normalizedTarget) {
+      return 1;
+    }
+
+    const distanceDelta = keyboardDistance(normalizedTarget, left) - keyboardDistance(normalizedTarget, right);
+    if (distanceDelta !== 0) {
+      return distanceDelta;
+    }
+
+    return FLASH_HOME_BIAS_LETTERS.indexOf(left) - FLASH_HOME_BIAS_LETTERS.indexOf(right);
+  });
+}
+
+function buildFlashLabels(target: string, count: number): string[] {
+  const alphabet = flashAlphabet(target);
+  const labels: string[] = [];
+
+  for (let index = 0; index < count; index += 1) {
+    labels.push(alphabet[index % alphabet.length] ?? alphabet[0] ?? target.toLowerCase());
+  }
+
+  return labels;
+}
+
+function searchFlagsAtOffset(
+  matches: readonly { from: number; to: number }[],
+  current: { from: number; to: number } | null,
+  offset: number
+): { isSearchMatch: boolean; isCurrentSearchMatch: boolean } {
+  const isSearchMatch = matches.some((entry) => offset >= entry.from && offset < entry.to);
+  const isCurrentSearchMatch = !!current && offset >= current.from && offset < current.to;
+  return { isSearchMatch, isCurrentSearchMatch };
+}
+
 function roleAtOffset(spans: HighlightSpan[], offset: number): HighlightRole {
   const span = spans.find((entry) => offset >= entry.from && offset < entry.to);
   return span?.role ?? "text";
@@ -1053,6 +1243,9 @@ function renderLineFragments(
   state: EditorState,
   spans: HighlightSpan[],
   lineDiagnostics: readonly EditorDiagnostic[],
+  lineSearchMatches: readonly { from: number; to: number }[],
+  currentSearchMatch: { from: number; to: number } | null,
+  flashOffsets: ReadonlySet<number>,
   segmentStart: number,
   segmentEnd: number,
   includeLineEndingCell: boolean,
@@ -1079,6 +1272,9 @@ function renderLineFragments(
       previous.role === fragment.role &&
       previous.isIndentGuide === fragment.isIndentGuide &&
       previous.isSelected === fragment.isSelected &&
+      previous.isSearchMatch === fragment.isSearchMatch &&
+      previous.isCurrentSearchMatch === fragment.isCurrentSearchMatch &&
+      previous.isFlashTarget === fragment.isFlashTarget &&
       previous.diagnosticSeverity === fragment.diagnosticSeverity &&
       previous.endOffset === fragment.offset
     ) {
@@ -1102,7 +1298,10 @@ function renderLineFragments(
           isSelected: false,
           isCursor: false,
           cursorKind: null,
-          diagnosticSeverity: null
+          diagnosticSeverity: null,
+          isSearchMatch: false,
+          isCurrentSearchMatch: false,
+          isFlashTarget: false
         }
       ];
     }
@@ -1110,6 +1309,7 @@ function renderLineFragments(
     for (let index = segmentStartIndex; index < segmentEndIndex; index += 1) {
       const offset = line.start + index;
 
+      const searchFlags = searchFlagsAtOffset(lineSearchMatches, currentSearchMatch, offset);
       pushFragment({
         offset,
         endOffset: offset + 1,
@@ -1119,7 +1319,10 @@ function renderLineFragments(
         isSelected: false,
         isCursor: false,
         cursorKind: null,
-        diagnosticSeverity: diagnosticSeverityAtOffset(lineDiagnostics, offset)
+        diagnosticSeverity: diagnosticSeverityAtOffset(lineDiagnostics, offset),
+        isSearchMatch: searchFlags.isSearchMatch,
+        isCurrentSearchMatch: searchFlags.isCurrentSearchMatch,
+        isFlashTarget: flashOffsets.has(offset)
       });
     }
 
@@ -1138,13 +1341,17 @@ function renderLineFragments(
         isSelected: selected,
         isCursor: activeOffset === line.start,
         cursorKind: activeOffset === line.start ? "block" : null,
-        diagnosticSeverity: null
+        diagnosticSeverity: null,
+        isSearchMatch: false,
+        isCurrentSearchMatch: false,
+        isFlashTarget: false
       }
     ];
   }
 
   for (let index = segmentStartIndex; index < segmentEndIndex; index += 1) {
     const offset = line.start + index;
+    const searchFlags = searchFlagsAtOffset(lineSearchMatches, currentSearchMatch, offset);
     pushFragment({
       offset,
       endOffset: offset + 1,
@@ -1154,7 +1361,10 @@ function renderLineFragments(
       isSelected: offset >= selection.from && offset < selection.to,
       isCursor: offset === activeOffset,
       cursorKind: offset === activeOffset ? "block" : null,
-      diagnosticSeverity: diagnosticSeverityAtOffset(lineDiagnostics, offset)
+      diagnosticSeverity: diagnosticSeverityAtOffset(lineDiagnostics, offset),
+      isSearchMatch: searchFlags.isSearchMatch,
+      isCurrentSearchMatch: searchFlags.isCurrentSearchMatch,
+      isFlashTarget: flashOffsets.has(offset)
     });
   }
 
@@ -1172,7 +1382,10 @@ function renderLineFragments(
       isSelected: lineEndingSelected,
       isCursor: lineEndingCursor,
       cursorKind: lineEndingCursor ? "block" : null,
-      diagnosticSeverity: null
+      diagnosticSeverity: null,
+      isSearchMatch: false,
+      isCurrentSearchMatch: false,
+      isFlashTarget: false
     });
   }
 
@@ -1240,15 +1453,17 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let lineVisualRanges: Array<{ from: number; to: number }> = [];
   let wrapColumns = -1;
   let wrapRevision = -1;
-  let commandLine: CommandLineState = { active: false, value: "" };
+  let commandLine: CommandLineState = { active: false, value: "", prompt: ":" };
   let bottomMessage: BottomMessageState | null = null;
-  let codeActionMenu: CodeActionMenuState = {
+  let pickerState: PickerState = {
     active: false,
     loading: false,
-    actions: [],
+    title: "",
+    items: [],
     selectedIndex: 0,
     error: null
   };
+  let stickyViewMode = false;
   let hoverState: HoverState = {
     active: false,
     pinned: false,
@@ -1261,6 +1476,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let diagnostics: readonly EditorDiagnostic[] = [];
   let diagnosticsByLine = new Map<number, EditorDiagnostic[]>();
   let lineChangesByLine: LineChangesByLine = new Map();
+  let searchMatches: Array<{ from: number; to: number }> = [];
+  let flashState: FlashState = {
+    active: false,
+    target: "",
+    input: "",
+    hints: []
+  };
   let pendingAction: PendingAction = null;
   let pendingCount = "";
   let lastRepeatableMotion: RepeatableMotion | null = null;
@@ -1281,6 +1503,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   const getDiagnosticsSource = () => languageServices.find((services) => services.diagnostics)?.diagnostics;
   const getCodeActionSource = () => languageServices.find((services) => services.codeActions)?.codeActions;
   const getFormatter = () => languageServices.find((services) => services.formatter)?.formatter;
+  const getCommentToggler = () => languageServices.find((services) => services.comments)?.comments;
+  const getSyntaxTextobjectProvider = () => languageServices.find((services) => services.syntaxTextobjects)?.syntaxTextobjects;
+  const getSyntaxNavigationProvider = () => languageServices.find((services) => services.syntaxNavigation)?.syntaxNavigation;
 
   const root = document.createElement("div");
   const surface = document.createElement("div");
@@ -1692,6 +1917,147 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return selectDiagnostic(entries, END_OF_LINE_DIAGNOSTIC_MIN, getInlineDiagnosticForLine(lineIndex));
   }
 
+  function getLineSearchMatches(lineIndex: number): Array<{ from: number; to: number }> {
+    const line = state.doc.lineAt(lineIndex);
+    const lineEnd = line.start + line.text.length;
+    return searchMatches.filter((entry) => entry.from < lineEnd && entry.to > line.start);
+  }
+
+  function isFlashJumpOffset(offset: number, target: string): boolean {
+    const character = state.doc.text[offset] ?? "";
+
+    if (!character || character !== target) {
+      return false;
+    }
+
+    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+    return offset !== activeOffset;
+  }
+
+  function getActiveFlashHints(): readonly FlashHint[] {
+    if (!flashState.active) {
+      return [];
+    }
+    return flashState.hints;
+  }
+
+  function getFlashHintsForVisualRow(visualRow: VisualRow): readonly FlashHint[] {
+    const hints = getActiveFlashHints();
+    return hints.filter((hint) => hint.offset >= visualRow.segmentStart && hint.offset < visualRow.segmentEnd);
+  }
+
+  function getFlashOffsetsForVisualRow(visualRow: VisualRow): ReadonlySet<number> {
+    return new Set(getFlashHintsForVisualRow(visualRow).map((hint) => hint.offset));
+  }
+
+  function collectVisibleFlashHints(target: string): readonly FlashHint[] {
+    rebuildVisualRows();
+    const viewport = getVisibleViewport();
+    const offsets: number[] = [];
+
+    for (let visualRowIndex = viewport.fromLine; visualRowIndex <= viewport.toLine; visualRowIndex += 1) {
+      const visualRow = getVisualRow(visualRowIndex);
+
+      for (let offset = visualRow.segmentStart; offset < visualRow.segmentEnd; offset += 1) {
+        if (isFlashJumpOffset(offset, target)) {
+          offsets.push(offset);
+        }
+      }
+    }
+
+    const labels = buildFlashLabels(target, offsets.length);
+    return offsets.map((offset, index) => ({
+      offset,
+      label: labels[index] ?? ""
+    }));
+  }
+
+  function setFlashState(next: FlashState): void {
+    flashState = next;
+    patchBottomRow();
+    renderVisibleRows(true);
+  }
+
+  function clearFlash(): void {
+    if (!flashState.active) {
+      return;
+    }
+
+    setFlashState({
+      active: false,
+      target: "",
+      input: "",
+      hints: []
+    });
+  }
+
+  function startFlashJump(target: string): void {
+    const hints = collectVisibleFlashHints(target);
+
+    if (hints.length === 0) {
+      setBottomMessage({ tone: "warning", text: `No visible '${target}' targets` });
+      return;
+    }
+
+    setBottomMessage(null);
+    setFlashState({
+      active: true,
+      target,
+      input: "",
+      hints
+    });
+  }
+
+  function applyFlashJump(targetOffset: number): void {
+    clearFlash();
+    const targetPosition = state.doc.positionAt(targetOffset);
+    dispatchOffsetSelection(targetOffset, targetPosition.column);
+  }
+
+  function handleFlashInput(key: string): boolean {
+    if (!flashState.active) {
+      return false;
+    }
+
+    if (key === "Escape") {
+      clearFlash();
+      return true;
+    }
+
+    if (key === "Backspace") {
+      clearFlash();
+      return true;
+    }
+
+    if (!/^[a-z]$/i.test(key)) {
+      clearFlash();
+      return false;
+    }
+
+    const nextInput = `${flashState.input}${key.toLowerCase()}`;
+    const matchingHints = flashState.hints.filter((hint) => hint.label === key.toLowerCase());
+
+    if (matchingHints.length === 0) {
+      return true;
+    }
+
+    if (matchingHints.length === 1) {
+      applyFlashJump(matchingHints[0].offset);
+      return true;
+    }
+
+    const narrowedLabels = buildFlashLabels(key.toLowerCase(), matchingHints.length);
+    setFlashState({
+      ...flashState,
+      input: nextInput,
+      hints: matchingHints.map((hint, index) => ({
+        offset: hint.offset,
+        label: narrowedLabels[index] ?? narrowedLabels[0] ?? flashState.target
+      }))
+    });
+    return true;
+  }
+
   function getDiagnosticsSummary(): { errors: number; warnings: number } {
     let errors = 0;
     let warnings = 0;
@@ -1728,9 +2094,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
     const cursorVisual = getVisualRowForOffset(activeOffset);
     const lineDiagnostics = getLineDiagnostics(lineIndex);
+    const lineSearchMatches = getLineSearchMatches(lineIndex);
+    const currentSearchMatch = controller.getSearchState().lastMatch;
     const lineDiagnosticSeverity = visualRow.isContinuation ? null : getLineDiagnosticSeverity(lineIndex);
     const lineChangeKind = visualRow.isContinuation ? null : getLineChangeKind(lineIndex);
     const inlineDiagnostic = getInlineDiagnosticForLine(lineIndex);
+    const flashHints = getFlashHintsForVisualRow(visualRow);
+    const flashOffsets = getFlashOffsetsForVisualRow(visualRow);
     const inlineDiagnosticInRow =
       inlineDiagnostic && inlineDiagnostic.from >= visualRow.segmentStart && inlineDiagnostic.from <= visualRow.segmentEnd
         ? inlineDiagnostic
@@ -1766,6 +2136,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       state,
       getLineHighlights(lineIndex),
       lineDiagnostics,
+      lineSearchMatches,
+      currentSearchMatch,
+      flashOffsets,
       visualRow.segmentStart,
       visualRow.segmentEnd,
       visualRow.isLastSegment,
@@ -1776,6 +2149,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       token.classList.add(roleClassName(segment.role));
       addClassName(token, "wx-indent-guide", segment.isIndentGuide);
       addClassName(token, "wx-is-selected", segment.isSelected);
+      addClassName(token, "wx-search-match", segment.isSearchMatch);
+      addClassName(token, "wx-search-current", segment.isCurrentSearchMatch);
+      addClassName(token, "wx-flash-target", segment.isFlashTarget);
       addClassName(token, diagnosticClassName(segment.diagnosticSeverity), !!segment.diagnosticSeverity);
 
       if (segment.isCursor) {
@@ -1793,6 +2169,25 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
       token.textContent = segment.text;
       lineText.append(token);
+    }
+
+    if (flashHints.length > 0) {
+      const flashLayer = document.createElement("div");
+      flashLayer.className = "wx-editor__flash-layer";
+
+      for (const hint of flashHints) {
+        const label = hint.label;
+        const column = state.doc.positionAt(hint.offset).column - visualRow.startColumn;
+        const marker = document.createElement("span");
+        marker.className = "wx-editor__flash-hint";
+        marker.dataset.wxEditorFlashHint = hint.label;
+        marker.style.left = `${Math.max(0, column) * metrics.charWidth}px`;
+        marker.style.width = `${Math.max(1, label.length) * metrics.charWidth}px`;
+        marker.textContent = label;
+        flashLayer.append(marker);
+      }
+
+      view.content.append(flashLayer);
     }
 
     if (endOfLineDiagnostic) {
@@ -1987,7 +2382,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function patchBottomRow(): void {
-    bottomRow.dataset.active = String(commandLine.active || codeActionMenu.active || !!bottomMessage || pendingAction?.kind === "space");
+    bottomRow.dataset.active = String(commandLine.active || pickerState.active || !!bottomMessage || !!pendingAction);
     bottomRow.replaceChildren();
 
     if (commandLine.active) {
@@ -1996,7 +2391,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
       prompt.className = "wx-editor__command-prompt";
       prompt.dataset.wxEditorCommandPrompt = "true";
-      prompt.textContent = ":";
+      prompt.textContent = commandLine.prompt;
 
       value.className = "wx-editor__command-text";
       value.dataset.wxEditorCommandText = "true";
@@ -2006,23 +2401,24 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    if (codeActionMenu.active) {
+    if (pickerState.active) {
       const actions = document.createElement("div");
       actions.className = "wx-editor__code-actions";
       actions.dataset.wxEditorCodeActions = "true";
+      actions.dataset.wxEditorPicker = "true";
 
-      if (codeActionMenu.loading) {
-        actions.textContent = "Loading code actions...";
-      } else if (codeActionMenu.error) {
-        actions.textContent = codeActionMenu.error;
+      if (pickerState.loading) {
+        actions.textContent = `Loading ${pickerState.title}...`;
+      } else if (pickerState.error) {
+        actions.textContent = pickerState.error;
       } else {
-        codeActionMenu.actions.slice(0, 9).forEach((action, index) => {
-          const item = document.createElement("span");
-          item.className = "wx-editor__code-action";
-          item.dataset.selected = String(index === codeActionMenu.selectedIndex);
-          item.dataset.wxEditorCodeAction = String(index + 1);
-          item.textContent = `${index + 1}:${action.title}`;
-          actions.append(item);
+        pickerState.items.slice(0, 9).forEach((entry, index) => {
+          const pickerItem = document.createElement("span");
+          pickerItem.className = "wx-editor__code-action";
+          pickerItem.dataset.selected = String(index === pickerState.selectedIndex);
+          pickerItem.dataset.wxEditorCodeAction = String(index + 1);
+          pickerItem.textContent = `${index + 1}:${entry.label}`;
+          actions.append(pickerItem);
         });
       }
 
@@ -2040,11 +2436,58 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
+    if (flashState.active) {
+      const prefix = document.createElement("span");
+      prefix.className = "wx-editor__prefix-hint";
+      prefix.dataset.wxEditorPrefixHint = "flash";
+      prefix.textContent = flashState.input
+        ? `,${flashState.target} ${flashState.input}`
+        : `,${flashState.target}`;
+      bottomRow.append(prefix);
+      return;
+    }
+
+    if (pendingAction?.kind === "flash-target") {
+      const prefix = document.createElement("span");
+      prefix.className = "wx-editor__prefix-hint";
+      prefix.dataset.wxEditorPrefixHint = "flash-target";
+      prefix.textContent = ",";
+      bottomRow.append(prefix);
+      return;
+    }
+
     if (pendingAction?.kind === "space") {
       const prefix = document.createElement("span");
       prefix.className = "wx-editor__prefix-hint";
       prefix.dataset.wxEditorPrefixHint = "space";
       prefix.textContent = "<space>";
+      bottomRow.append(prefix);
+      return;
+    }
+
+    if (pendingAction?.kind === "g" || pendingAction?.kind === "[" || pendingAction?.kind === "]" || pendingAction?.kind === "m") {
+      const prefix = document.createElement("span");
+      prefix.className = "wx-editor__prefix-hint";
+      prefix.dataset.wxEditorPrefixHint = pendingAction.kind;
+      prefix.textContent = pendingAction.kind;
+      bottomRow.append(prefix);
+      return;
+    }
+
+    if (pendingAction?.kind === "z") {
+      const prefix = document.createElement("span");
+      prefix.className = "wx-editor__prefix-hint";
+      prefix.dataset.wxEditorPrefixHint = pendingAction.sticky ? "Z" : "z";
+      prefix.textContent = pendingAction.sticky ? "Z" : "z";
+      bottomRow.append(prefix);
+      return;
+    }
+
+    if (pendingCount) {
+      const prefix = document.createElement("span");
+      prefix.className = "wx-editor__prefix-hint";
+      prefix.dataset.wxEditorPrefixHint = "count";
+      prefix.textContent = pendingCount;
       bottomRow.append(prefix);
       return;
     }
@@ -2435,6 +2878,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     state = nextState;
 
     if (hasDocumentChanges) {
+      if (flashState.active) {
+        flashState = { active: false, target: "", input: "", hints: [] };
+      }
+      refreshSearchMatches();
       invalidateHover();
       lastHighlightedRevision = -1;
       if (changes.length > 0) {
@@ -2484,23 +2931,25 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
   }
 
-  function openCommandLine(): void {
+  function openCommandLine(prompt: ":" | "/" | "?" = ":"): void {
     pendingAction = null;
+    clearFlash();
     clearHover();
-    commandLine = { active: true, value: "" };
+    commandLine = { active: true, value: "", prompt };
     patchBottomRow();
   }
 
   function closeCommandLine(): void {
-    commandLine = { active: false, value: "" };
+    commandLine = { active: false, value: "", prompt: ":" };
     patchBottomRow();
   }
 
-  function closeCodeActionMenu(): void {
-    codeActionMenu = {
+  function closePicker(): void {
+    pickerState = {
       active: false,
       loading: false,
-      actions: [],
+      title: "",
+      items: [],
       selectedIndex: 0,
       error: null
     };
@@ -2694,9 +3143,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       changes,
       effects: [{ type: "language.code-action", value: action.title }]
     });
-    closeCodeActionMenu();
+    closePicker();
     setBottomMessage({ tone: "info", text: `Applied ${action.title}` });
     return true;
+  }
+
+  function setPickerState(next: PickerState): void {
+    pickerState = next;
+    patchBottomRow();
   }
 
   async function loadCodeActions(): Promise<readonly EditorCodeAction[]> {
@@ -2707,36 +3161,41 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return [];
     }
 
-    codeActionMenu = {
+    setPickerState({
       active: true,
       loading: true,
-      actions: [],
+      title: "code actions",
+      items: [],
       selectedIndex: 0,
       error: null
-    };
-    patchBottomRow();
+    });
 
     let actions: readonly EditorCodeAction[];
 
     try {
       actions = await codeActionSource.getCodeActions(getCodeActionContext());
     } catch {
-      closeCodeActionMenu();
+      closePicker();
       setBottomMessage({ tone: "error", text: "Code actions request failed" });
       return [];
     }
 
-    codeActionMenu = {
+    setPickerState({
       active: true,
       loading: false,
-      actions,
+      title: "code actions",
+      items: actions.map((action) => ({
+        label: action.title,
+        run: () => {
+          void applyCodeActionInternal(action);
+        }
+      })),
       selectedIndex: 0,
       error: actions.length === 0 ? "No code actions" : null
-    };
-    patchBottomRow();
+    });
 
     if (actions.length === 0) {
-      closeCodeActionMenu();
+      closePicker();
       setBottomMessage({ tone: "warning", text: "No code actions available" });
     }
 
@@ -2805,13 +3264,237 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return true;
   }
 
+  function refreshSearchMatches(): void {
+    searchMatches = collectSearchMatches(state.doc.text, controller.getSearchState().query);
+  }
+
+  function applySelectionRange(from: number, to: number): boolean {
+    if (state.mode === "visual") {
+      const anchor = state.selection.ranges[state.selection.primaryIndex]?.anchor ?? from;
+      controller.dispatch({
+        selection: createSelection(anchor, Math.max(from, to - 1)),
+        mode: "visual"
+      });
+      return true;
+    }
+
+    controller.dispatch({
+      selection: createSelection(from, Math.max(from, to - 1)),
+      mode: "normal"
+    });
+    return true;
+  }
+
+  function runSearch(query: string, direction: "forward" | "backward", reverse = false, startOffset?: number): boolean {
+    const nextMatches = collectSearchMatches(state.doc.text, query);
+
+    controller.setSearchState({
+      query,
+      direction,
+      lastMatch: null
+    });
+    refreshSearchMatches();
+
+    if (nextMatches.length === 0) {
+      setBottomMessage({ tone: "warning", text: `No matches for ${query}` });
+      renderVisibleRows(true);
+      return false;
+    }
+
+    const offset = startOffset ?? (state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state));
+    const forward = reverse ? direction === "backward" : direction === "forward";
+    const match =
+      forward
+        ? nextMatches.find((entry) => entry.from > offset || (entry.from <= offset && offset < entry.to)) ?? nextMatches[0]
+        : [...nextMatches].reverse().find((entry) => entry.to - 1 < offset || (entry.from <= offset && offset < entry.to)) ??
+          nextMatches[nextMatches.length - 1];
+
+    if (!match) {
+      return false;
+    }
+
+    controller.setSearchState({
+      query,
+      direction,
+      lastMatch: match
+    });
+    controller.setRegister("/", query);
+    applySelectionRange(match.from, match.to);
+    revealCursor();
+    renderVisibleRows(true);
+    lastRepeatableMotion = { kind: "search", reverse };
+    return true;
+  }
+
+  function repeatSearch(reverseAgainstDirection = false): boolean {
+    const search = controller.getSearchState();
+
+    if (!search.query) {
+      setBottomMessage({ tone: "warning", text: "No active search" });
+      return false;
+    }
+
+    const baseOffset =
+      search.lastMatch
+        ? reverseAgainstDirection
+          ? search.lastMatch.from - 1
+          : search.lastMatch.to
+        : undefined;
+    const didRun = runSearch(search.query, search.direction, reverseAgainstDirection, baseOffset);
+
+    if (didRun) {
+      lastRepeatableMotion = { kind: "search", reverse: reverseAgainstDirection };
+    }
+
+    return didRun;
+  }
+
+  function searchFromSelection(reverse = false): boolean {
+    const selection = getSelectionOffsets(state);
+    const query = escapeRegex(state.doc.slice(selection.from, selection.to));
+
+    if (!query) {
+      return false;
+    }
+
+    return runSearch(query, reverse ? "backward" : "forward");
+  }
+
+  function selectRegisterForNext(name: string | null): void {
+    controller.selectRegister(name);
+    setBottomMessage(name ? { tone: "info", text: `Register "${name}" selected` } : null);
+  }
+
+  function consumeSelectedRegister(): string | null {
+    const selected = controller.getSelectedRegister();
+    controller.selectRegister(null);
+    return selected;
+  }
+
+  function primeRegisterForPaste(): void {
+    const selected = consumeSelectedRegister();
+
+    if (!selected) {
+      return;
+    }
+
+    const value = controller.getRegister(selected);
+    controller.dispatch({
+      yankBuffer: value
+    });
+  }
+
+  async function insertRegisterValue(name: string): Promise<boolean> {
+    const value = controller.getRegister(name);
+    controller.selectRegister(null);
+
+    if (!value) {
+      setBottomMessage({ tone: "warning", text: `Register ${name} is empty` });
+      return false;
+    }
+
+    return runCommand(insertText(value));
+  }
+
+  function pushCurrentJump(): boolean {
+    return controller.pushJump();
+  }
+
+  function restoreJump(entry: EditorJumpEntry | null): boolean {
+    if (!entry) {
+      return false;
+    }
+
+    controller.dispatch({
+      selection: entry.selection,
+      mode: entry.mode
+    });
+    revealCursor();
+    renderVisibleRows(true);
+    return true;
+  }
+
+  function jumpBackward(): boolean {
+    return restoreJump(controller.jumpBackward());
+  }
+
+  function jumpForward(): boolean {
+    return restoreJump(controller.jumpForward());
+  }
+
+  function openDiagnosticsPicker(): void {
+    const items = diagnostics.map((entry) => {
+      const position = state.doc.positionAt(entry.from);
+      const lineText = state.doc.lineAt(position.line).text.trim();
+      return {
+        label: `${position.line + 1}:${position.column + 1} ${entry.message}`,
+        detail: lineText,
+        run: () => {
+          pushCurrentJump();
+          applySelectionRange(entry.from, entry.to);
+          closePicker();
+        }
+      };
+    });
+
+    if (items.length === 0) {
+      setBottomMessage({ tone: "warning", text: "No diagnostics" });
+      return;
+    }
+
+    setPickerState({
+      active: true,
+      loading: false,
+      title: "diagnostics",
+      items,
+      selectedIndex: 0,
+      error: null
+    });
+  }
+
+  function openJumpListPicker(): void {
+    const items = controller.getJumpList().map((entry, index) => {
+      const offset = state.mode === "insert" ? getCursorOffset(entry.selection) : getCursorOffset(entry.selection);
+      const position = state.doc.positionAt(offset);
+      const lineText = state.doc.lineAt(position.line).text.trim();
+      return {
+        label: `${index + 1}:${position.line + 1}:${position.column + 1}`,
+        detail: lineText,
+        run: () => {
+          restoreJump(entry);
+          closePicker();
+        }
+      };
+    });
+
+    if (items.length === 0) {
+      setBottomMessage({ tone: "warning", text: "Jump list is empty" });
+      return;
+    }
+
+    setPickerState({
+      active: true,
+      loading: false,
+      title: "jumps",
+      items,
+      selectedIndex: Math.max(0, items.length - 1),
+      error: null
+    });
+  }
+
   function runCommandLineCommand(rawValue: string): void {
+    const prompt = commandLine.prompt;
     const trimmed = rawValue.trim();
     const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
     const value = commandName.toLowerCase();
     const commandArgument = argumentParts.join(" ").trim();
 
     closeCommandLine();
+
+    if (prompt === "/" || prompt === "?") {
+      void runSearch(trimmed, prompt === "/" ? "forward" : "backward");
+      return;
+    }
 
     if (!value) {
       return;
@@ -2924,8 +3607,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   function runCommand(command: Command): boolean {
     setBottomMessage(null);
+    clearFlash();
     clearHover();
-    closeCodeActionMenu();
+    closePicker();
+    const selectedRegister = controller.getSelectedRegister();
+
+    if (command === pasteAfter) {
+      primeRegisterForPaste();
+    }
 
     if (softWrap) {
       if (command === moveUp) {
@@ -2965,12 +3654,21 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       }
     }
 
-    return controller.execute(command, {
+    const didRun = controller.execute(command, {
       requestFocus() {
         textarea.focus();
       },
       viewport: getViewportContext()
     });
+
+    if (didRun && [yankSelection, deleteSelection, changeSelection].includes(command)) {
+      if (selectedRegister) {
+        controller.setRegister(selectedRegister, controller.getState().yankBuffer);
+      }
+      controller.selectRegister(null);
+    }
+
+    return didRun;
   }
 
   function runRepeatableMotion(motion: RepeatableMotion): boolean {
@@ -2992,6 +3690,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         return runCommand(motion.direction === "next" ? gotoNextParagraph : gotoPrevParagraph);
       case "textobject":
         return runCommand(selectTextobject(motion.mode, motion.object));
+      case "search":
+        return repeatSearch(motion.reverse);
     }
 
     return false;
@@ -3001,6 +3701,142 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     if (didChange) {
       lastRepeatableMotion = candidate;
     }
+  }
+
+  async function toggleComments(): Promise<boolean> {
+    const toggler = getCommentToggler();
+
+    if (!toggler) {
+      setBottomMessage({ tone: "warning", text: "No comment provider" });
+      return false;
+    }
+
+    let changes: readonly TextChange[];
+
+    try {
+      changes = await toggler.toggleLineComments({
+        document: getSnapshot(),
+        selection: getSelectionOffsets(state)
+      });
+    } catch {
+      setBottomMessage({ tone: "error", text: "Comment toggle failed" });
+      return false;
+    }
+
+    if (!changes.length) {
+      setBottomMessage({ tone: "info", text: "Nothing to comment" });
+      return false;
+    }
+
+    controller.dispatch({
+      changes,
+      effects: [{ type: "language.comment-toggle" }]
+    });
+    setBottomMessage({ tone: "info", text: "Toggled comments" });
+    return true;
+  }
+
+  function scrollViewportBy(rowsDelta: number): boolean {
+    if (rowsDelta === 0) {
+      return true;
+    }
+
+    surface.scrollTop = Math.max(0, surface.scrollTop + rowsDelta * metrics.lineHeight);
+    renderVisibleRows();
+    return true;
+  }
+
+  function alignViewportToCursor(position: "top" | "center" | "bottom"): boolean {
+    rebuildVisualRows();
+    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+    const cursorVisual = getVisualRowForOffset(activeOffset);
+    const rowTop = SURFACE_VERTICAL_PADDING + cursorVisual.rowIndex * metrics.lineHeight;
+    const available = Math.max(metrics.lineHeight, surface.clientHeight - metrics.lineHeight);
+    const targetTop =
+      position === "top" ? rowTop : position === "bottom" ? rowTop - available : rowTop - Math.floor(available / 2);
+    surface.scrollTop = Math.max(0, targetTop);
+    renderVisibleRows();
+    return true;
+  }
+
+  function navigateDiagnostic(direction: "next" | "prev", extreme = false): boolean {
+    if (diagnostics.length === 0) {
+      setBottomMessage({ tone: "warning", text: "No diagnostics" });
+      return false;
+    }
+
+    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+    const ordered = [...diagnostics].sort((left, right) => left.from - right.from);
+    const target =
+      direction === "next"
+        ? extreme
+          ? ordered[ordered.length - 1]
+          : ordered.find((entry) => entry.from > activeOffset) ?? ordered[0]
+        : extreme
+          ? ordered[0]
+          : [...ordered].reverse().find((entry) => entry.to - 1 < activeOffset) ?? ordered[ordered.length - 1];
+
+    if (!target) {
+      return false;
+    }
+
+    pushCurrentJump();
+    applySelectionRange(target.from, target.to);
+    revealCursor();
+    return true;
+  }
+
+  async function selectTextobjectWithFallback(mode: SyntaxTextobjectMode, object: string): Promise<boolean> {
+    if (["w", "W", "p", "'", "\"", "`", "(", ")", "[", "]", "{", "}", "<", ">"].includes(object)) {
+      return runCommand(selectTextobject(mode, object));
+    }
+
+    const provider = getSyntaxTextobjectProvider();
+
+    if (!provider) {
+      return false;
+    }
+
+    const selection = getSelectionOffsets(state);
+    const activeOffset = getActiveCharacterOffset(state);
+    const next = await provider.selectTextobject({
+      document: getSnapshot(),
+      selection,
+      activeOffset,
+      object,
+      mode
+    });
+
+    if (!next) {
+      return false;
+    }
+
+    applySelectionRange(next.from, next.to);
+    return true;
+  }
+
+  async function navigateSyntax(direction: "next" | "prev", kind: string): Promise<boolean> {
+    const provider = getSyntaxNavigationProvider();
+    const navigate = direction === "next" ? provider?.gotoNext : provider?.gotoPrev;
+
+    if (!navigate) {
+      return false;
+    }
+
+    const next = await navigate({
+      document: getSnapshot(),
+      activeOffset: getActiveCharacterOffset(state),
+      kind
+    });
+
+    if (!next) {
+      return false;
+    }
+
+    pushCurrentJump();
+    applySelectionRange(next.from, next.to);
+    revealCursor();
+    return true;
   }
 
   function revealCursor(): void {
@@ -3023,6 +3859,32 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function handleKeydown(event: KeyboardEvent): void {
+    if (flashState.active) {
+      const handled = handleFlashInput(event.key);
+
+      if (handled) {
+        event.preventDefault();
+        textarea.value = "";
+        return;
+      }
+    }
+
+    if (!commandLine.active && (state.mode === "normal" || state.mode === "visual") && event.key === "/") {
+      event.preventDefault();
+      textarea.value = "";
+      clearPendingCount();
+      openCommandLine("/");
+      return;
+    }
+
+    if (!commandLine.active && (state.mode === "normal" || state.mode === "visual") && event.key === "?") {
+      event.preventDefault();
+      textarea.value = "";
+      clearPendingCount();
+      openCommandLine("?");
+      return;
+    }
+
     if (
       event.altKey &&
       !event.metaKey &&
@@ -3073,6 +3935,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
+    if (event.altKey && !event.metaKey && !event.ctrlKey && state.mode !== "insert" && event.key === "*") {
+      event.preventDefault();
+      textarea.value = "";
+      searchFromSelection(true);
+      return;
+    }
+
     if (
       event.ctrlKey &&
       !event.metaKey &&
@@ -3090,9 +3959,73 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       event.ctrlKey &&
       !event.metaKey &&
       !event.altKey &&
+      state.mode === "insert" &&
+      event.key === "r"
+    ) {
+      event.preventDefault();
+      pendingAction = { kind: "register-select", insert: true };
+      patchBottomRow();
+      return;
+    }
+
+    if (
+      event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
       state.mode !== "insert" &&
+      event.key === "s"
+    ) {
+      event.preventDefault();
+      pushCurrentJump();
+      setBottomMessage({ tone: "info", text: "Saved jump" });
+      return;
+    }
+
+    if (
+      event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      state.mode !== "insert" &&
+      event.key === "o"
+    ) {
+      event.preventDefault();
+      jumpBackward();
+      return;
+    }
+
+    if (
+      event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      state.mode !== "insert" &&
+      event.key === "i"
+    ) {
+      event.preventDefault();
+      jumpForward();
+      return;
+    }
+
+    if (
+      event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      (state.mode !== "insert" || stickyViewMode) &&
       ["b", "d", "f", "u"].includes(event.key)
     ) {
+      if (stickyViewMode) {
+        event.preventDefault();
+        const delta =
+          event.key === "b"
+            ? -(Math.max(1, getVisibleLineCountForViewport(getVisibleViewport()) - 1))
+            : event.key === "f"
+              ? Math.max(1, getVisibleLineCountForViewport(getVisibleViewport()) - 1)
+              : event.key === "u"
+                ? -Math.max(1, Math.floor(getVisibleLineCountForViewport(getVisibleViewport()) / 2))
+                : Math.max(1, Math.floor(getVisibleLineCountForViewport(getVisibleViewport()) / 2));
+        scrollViewportBy(delta);
+        return;
+      }
+
       const command =
         event.key === "b" ? pageUp : event.key === "f" ? pageDown : event.key === "u" ? halfPageUp : halfPageDown;
 
@@ -3106,53 +4039,51 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    if (codeActionMenu.active) {
+    if (pickerState.active) {
       if (event.key === "Escape") {
         event.preventDefault();
-        closeCodeActionMenu();
+        closePicker();
         return;
       }
 
       if (event.key === "ArrowLeft" || event.key === "h" || event.key === "ArrowUp" || event.key === "k") {
         event.preventDefault();
-        if (codeActionMenu.actions.length > 0) {
-          codeActionMenu = {
-            ...codeActionMenu,
-            selectedIndex: Math.max(0, codeActionMenu.selectedIndex - 1)
-          };
-          patchBottomRow();
+        if (pickerState.items.length > 0) {
+          setPickerState({
+            ...pickerState,
+            selectedIndex: Math.max(0, pickerState.selectedIndex - 1)
+          });
         }
         return;
       }
 
       if (event.key === "ArrowRight" || event.key === "l" || event.key === "ArrowDown" || event.key === "j") {
         event.preventDefault();
-        if (codeActionMenu.actions.length > 0) {
-          codeActionMenu = {
-            ...codeActionMenu,
-            selectedIndex: Math.min(codeActionMenu.actions.length - 1, codeActionMenu.selectedIndex + 1)
-          };
-          patchBottomRow();
+        if (pickerState.items.length > 0) {
+          setPickerState({
+            ...pickerState,
+            selectedIndex: Math.min(pickerState.items.length - 1, pickerState.selectedIndex + 1)
+          });
         }
         return;
       }
 
       if (event.key === "Enter") {
         event.preventDefault();
-        const action = codeActionMenu.actions[codeActionMenu.selectedIndex];
-        if (action) {
-          void applyCodeActionInternal(action);
+        const item = pickerState.items[pickerState.selectedIndex];
+        if (item) {
+          void item.run();
         } else {
-          closeCodeActionMenu();
+          closePicker();
         }
         return;
       }
 
       if (/^[1-9]$/.test(event.key)) {
         event.preventDefault();
-        const action = codeActionMenu.actions[Number(event.key) - 1];
-        if (action) {
-          void applyCodeActionInternal(action);
+        const item = pickerState.items[Number(event.key) - 1];
+        if (item) {
+          void item.run();
         }
         return;
       }
@@ -3204,6 +4135,27 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
+    if (stickyViewMode && (state.mode === "normal" || state.mode === "visual")) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        stickyViewMode = false;
+        patchBottomRow();
+        return;
+      }
+
+      if (event.key === "j" || event.key === "ArrowDown") {
+        event.preventDefault();
+        scrollViewportBy(1);
+        return;
+      }
+
+      if (event.key === "k" || event.key === "ArrowUp") {
+        event.preventDefault();
+        scrollViewportBy(-1);
+        return;
+      }
+    }
+
     if (pendingAction) {
       const nextPending = pendingAction;
       pendingAction = null;
@@ -3216,6 +4168,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       }
 
       if (nextPending.kind === "g") {
+        if (event.key === "c") {
+          event.preventDefault();
+          void toggleComments();
+          return;
+        }
         const chordCommand = commandForGotoPrefix(event.key);
 
         if (chordCommand) {
@@ -3227,6 +4184,18 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       }
 
       if (nextPending.kind === "[" || nextPending.kind === "]") {
+        if (event.key === "d" || event.key === "D") {
+          event.preventDefault();
+          navigateDiagnostic(nextPending.kind === "]" ? "next" : "prev", event.key === "D");
+          return;
+        }
+
+        if (["f", "t", "a", "c", "T", "g", "x"].includes(event.key)) {
+          event.preventDefault();
+          void navigateSyntax(nextPending.kind === "]" ? "next" : "prev", event.key);
+          return;
+        }
+
         const chordCommand = commandForBracketPrefix(nextPending.kind, event.key);
 
         if (chordCommand) {
@@ -3260,13 +4229,43 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
           };
           return;
         }
+
+        if (event.key === "s") {
+          event.preventDefault();
+          pendingAction = { kind: "surround-add" };
+          patchBottomRow();
+          return;
+        }
+
+        if (event.key === "d") {
+          event.preventDefault();
+          pendingAction = { kind: "surround-delete" };
+          patchBottomRow();
+          return;
+        }
+
+        if (event.key === "r") {
+          event.preventDefault();
+          pendingAction = { kind: "surround-replace-from" };
+          patchBottomRow();
+          return;
+        }
       }
 
       if (nextPending.kind === "space") {
         event.preventDefault();
-
         if (event.key === "a") {
           void loadCodeActions();
+          return;
+        }
+
+        if (event.key === "d") {
+          openDiagnosticsPicker();
+          return;
+        }
+
+        if (event.key === "j") {
+          openJumpListPicker();
           return;
         }
 
@@ -3281,6 +4280,20 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
           } else {
             void requestHover(hoverOffset, anchorRect, true);
           }
+          return;
+        }
+      }
+
+      if (nextPending.kind === "flash-target") {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          patchBottomRow();
+          return;
+        }
+
+        if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          event.preventDefault();
+          startFlashJump(event.key);
           return;
         }
       }
@@ -3309,11 +4322,75 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         event.preventDefault();
         textarea.value = "";
         const previousRevision = state.revision;
-        runCommandWithCount(selectTextobject(nextPending.mode, event.key));
-        recordRepeatableMotion(
-          { kind: "textobject", mode: nextPending.mode, object: event.key },
-          state.revision !== previousRevision
-        );
+        void selectTextobjectWithFallback(nextPending.mode, event.key).then((didRun) => {
+          recordRepeatableMotion(
+            { kind: "textobject", mode: nextPending.mode, object: event.key },
+            didRun || state.revision !== previousRevision
+          );
+        });
+        return;
+      }
+
+      if (nextPending.kind === "surround-add") {
+        event.preventDefault();
+        textarea.value = "";
+        runCommand(addSurround(event.key));
+        return;
+      }
+
+      if (nextPending.kind === "surround-delete") {
+        event.preventDefault();
+        textarea.value = "";
+        runCommand(deleteSurround(event.key));
+        return;
+      }
+
+      if (nextPending.kind === "surround-replace-from") {
+        event.preventDefault();
+        pendingAction = { kind: "surround-replace-to", fromObject: event.key };
+        patchBottomRow();
+        return;
+      }
+
+      if (nextPending.kind === "surround-replace-to") {
+        event.preventDefault();
+        textarea.value = "";
+        runCommand(replaceSurround(nextPending.fromObject, event.key));
+        return;
+      }
+
+      if (nextPending.kind === "register-select") {
+        event.preventDefault();
+        if (nextPending.insert && state.mode === "insert") {
+          void insertRegisterValue(event.key);
+        } else {
+          selectRegisterForNext(event.key);
+        }
+        return;
+      }
+
+      if (nextPending.kind === "z") {
+        event.preventDefault();
+        if (event.key === "Escape") {
+          stickyViewMode = false;
+          return;
+        }
+
+        if (event.key === "z" || event.key === "c" || event.key === "m") {
+          alignViewportToCursor("center");
+        } else if (event.key === "t") {
+          alignViewportToCursor("top");
+        } else if (event.key === "b") {
+          alignViewportToCursor("bottom");
+        } else if (event.key === "j") {
+          scrollViewportBy(1);
+        } else if (event.key === "k") {
+          scrollViewportBy(-1);
+        }
+
+        if (!nextPending.sticky) {
+          stickyViewMode = false;
+        }
         return;
       }
     }
@@ -3323,6 +4400,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       textarea.value = "";
       clearPendingCount();
       openCommandLine();
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === "\"") {
+      event.preventDefault();
+      pendingAction = { kind: "register-select", insert: false };
+      patchBottomRow();
       return;
     }
 
@@ -3343,21 +4427,68 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === ",") {
+      event.preventDefault();
+      pendingAction = { kind: "flash-target" };
+      patchBottomRow();
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === "z") {
+      event.preventDefault();
+      stickyViewMode = false;
+      pendingAction = { kind: "z", sticky: false };
+      patchBottomRow();
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === "Z") {
+      event.preventDefault();
+      stickyViewMode = true;
+      pendingAction = { kind: "z", sticky: true };
+      patchBottomRow();
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === "n") {
+      event.preventDefault();
+      textarea.value = "";
+      repeatSearch(false);
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === "N") {
+      event.preventDefault();
+      textarea.value = "";
+      repeatSearch(true);
+      return;
+    }
+
+    if ((state.mode === "normal" || state.mode === "visual") && event.key === "*") {
+      event.preventDefault();
+      textarea.value = "";
+      searchFromSelection(false);
+      return;
+    }
+
     if ((state.mode === "normal" || state.mode === "visual") && event.key === "g") {
       event.preventDefault();
       pendingAction = { kind: "g" };
+      patchBottomRow();
       return;
     }
 
     if ((state.mode === "normal" || state.mode === "visual") && (event.key === "[" || event.key === "]")) {
       event.preventDefault();
       pendingAction = { kind: event.key };
+      patchBottomRow();
       return;
     }
 
     if ((state.mode === "normal" || state.mode === "visual") && event.key === "m") {
       event.preventDefault();
       pendingAction = { kind: "m" };
+      patchBottomRow();
       return;
     }
 
@@ -3401,12 +4532,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function handleScroll(): void {
+    if (flashState.active) {
+      clearFlash();
+    }
     renderVisibleRows();
     void refreshHighlights(getHighlightViewport(renderedViewport), false);
   }
 
   function handleMouseMove(event: MouseEvent): void {
-    if (commandLine.active || codeActionMenu.active) {
+    if (commandLine.active || pickerState.active) {
       return;
     }
 
@@ -3474,6 +4608,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   unsubscribeController = controller.subscribe(handleControllerUpdate);
 
   refreshGutterWidth(true);
+  refreshSearchMatches();
   renderVisibleRows(true);
   patchStatus();
   patchBottomRow();
@@ -3533,6 +4668,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       highlightCoverage.clear();
       diagnostics = [];
       diagnosticsByLine = new Map();
+      refreshSearchMatches();
       renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
@@ -3556,6 +4692,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       lastHighlightedRevision = -1;
       diagnostics = [];
       diagnosticsByLine = new Map();
+      refreshSearchMatches();
       surface.scrollTop = 0;
       controller.replaceState(createEditorState({ value, selection: createSelection(0, 0) }));
       await syncLanguage([], true);

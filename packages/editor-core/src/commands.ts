@@ -31,7 +31,7 @@ export interface CommandContext {
 export type EditorDispatch = (transaction: Transaction) => void;
 export type Command = (state: EditorState, dispatch: EditorDispatch, context: CommandContext) => boolean;
 
-type TextobjectMode = "around" | "inside";
+export type TextobjectMode = "around" | "inside";
 type CharacterKind = "word" | "whitespace" | "punctuation" | null;
 type CharacterClassifier = (character: string | undefined) => CharacterKind;
 
@@ -524,6 +524,24 @@ function paragraphStartAtOrBefore(doc: EditorState["doc"], lineIndex: number): n
 
   while (line > 0 && doc.lineAt(line - 1).text.trim().length > 0) {
     line -= 1;
+  }
+
+  return line;
+}
+
+function paragraphEndAtOrAfter(doc: EditorState["doc"], lineIndex: number): number | null {
+  let line = Math.max(0, Math.min(lineIndex, doc.lineCount - 1));
+
+  while (line < doc.lineCount && doc.lineAt(line).text.trim().length === 0) {
+    line += 1;
+  }
+
+  if (line >= doc.lineCount) {
+    return null;
+  }
+
+  while (line + 1 < doc.lineCount && doc.lineAt(line + 1).text.trim().length > 0) {
+    line += 1;
   }
 
   return line;
@@ -1169,6 +1187,62 @@ function findSurroundTextobject(text: string, range: { from: number; to: number 
   }
 }
 
+function findWordTextobject(text: string, range: { from: number; to: number }, classify: CharacterClassifier) {
+  if (text.length === 0) {
+    return null;
+  }
+
+  const active = Math.max(0, Math.min(text.length - 1, range.from));
+  const kind = classify(text[active]);
+
+  if (!kind || kind === "whitespace") {
+    return null;
+  }
+
+  return {
+    from: findSegmentStartWithClassifier(text, active, classify),
+    to: findSegmentEndWithClassifier(text, active, classify)
+  };
+}
+
+function findParagraphTextobject(doc: EditorState["doc"], range: { from: number; to: number }) {
+  const activeLine = doc.positionAt(range.from).line;
+  const startLine = paragraphStartAtOrBefore(doc, activeLine);
+  const endLine = paragraphEndAtOrAfter(doc, activeLine);
+
+  if (startLine === null || endLine === null) {
+    return null;
+  }
+
+  return {
+    from: doc.lineAt(startLine).start,
+    to: lineSelectionEndExclusive(doc, endLine)
+  };
+}
+
+function surroundPair(object: string): { open: string; close: string } | null {
+  switch (object) {
+    case "'":
+    case "\"":
+    case "`":
+      return { open: object, close: object };
+    case "(":
+    case ")":
+      return { open: "(", close: ")" };
+    case "[":
+    case "]":
+      return { open: "[", close: "]" };
+    case "{":
+    case "}":
+      return { open: "{", close: "}" };
+    case "<":
+    case ">":
+      return { open: "<", close: ">" };
+    default:
+      return null;
+  }
+}
+
 export function selectTextobject(mode: TextobjectMode, object: string): Command {
   return (state, dispatch) => {
     if (state.doc.length === 0) {
@@ -1176,7 +1250,14 @@ export function selectTextobject(mode: TextobjectMode, object: string): Command 
     }
 
     const current = getSelectionOffsets(state);
-    const objectRange = findSurroundTextobject(state.doc.text, current, object);
+    const objectRange =
+      object === "w"
+        ? findWordTextobject(state.doc.text, current, classifyCharacter)
+        : object === "W"
+          ? findWordTextobject(state.doc.text, current, classifyLongCharacter)
+          : object === "p"
+            ? findParagraphTextobject(state.doc, current)
+            : findSurroundTextobject(state.doc.text, current, object);
 
     if (!objectRange) {
       return true;
@@ -1197,6 +1278,79 @@ export function selectTextobject(mode: TextobjectMode, object: string): Command 
     dispatch({
       selection: createSelection(nextRange.from, nextRange.to - 1),
       mode: state.mode === "insert" ? "normal" : state.mode
+    });
+    return true;
+  };
+}
+
+export function addSurround(object: string): Command {
+  return (state, dispatch) => {
+    const pair = surroundPair(object);
+    const selection = getSelectionOffsets(state);
+
+    if (!pair || selection.to < selection.from) {
+      return true;
+    }
+
+    const changes: TextChange[] = [
+      { from: selection.to, to: selection.to, insert: pair.close },
+      { from: selection.from, to: selection.from, insert: pair.open }
+    ];
+    const nextDoc = state.doc.applyChanges(changes);
+    dispatch({
+      changes,
+      selection: createSelection(selection.from, selection.to + pair.open.length + pair.close.length - 1),
+      mode: "normal"
+    });
+    return nextDoc.length >= 0;
+  };
+}
+
+export function deleteSurround(object: string): Command {
+  return (state, dispatch) => {
+    if (state.doc.length === 0) {
+      return true;
+    }
+
+    const current = getSelectionOffsets(state);
+    const objectRange = findSurroundTextobject(state.doc.text, current, object);
+
+    if (!objectRange || objectRange.to - objectRange.from < 2) {
+      return true;
+    }
+
+    const changes: TextChange[] = [
+      { from: objectRange.to - 1, to: objectRange.to, insert: "" },
+      { from: objectRange.from, to: objectRange.from + 1, insert: "" }
+    ];
+    const nextDoc = state.doc.applyChanges(changes);
+    dispatch({
+      changes,
+      selection: createSelection(objectRange.from, Math.max(objectRange.from, objectRange.to - 3)),
+      mode: "normal"
+    });
+    return nextDoc.length >= 0;
+  };
+}
+
+export function replaceSurround(fromObject: string, toObject: string): Command {
+  return (state, dispatch) => {
+    const nextPair = surroundPair(toObject);
+    const current = getSelectionOffsets(state);
+    const objectRange = findSurroundTextobject(state.doc.text, current, fromObject);
+
+    if (!nextPair || !objectRange || objectRange.to - objectRange.from < 2) {
+      return true;
+    }
+
+    const changes: TextChange[] = [
+      { from: objectRange.to - 1, to: objectRange.to, insert: nextPair.close },
+      { from: objectRange.from, to: objectRange.from + 1, insert: nextPair.open }
+    ];
+    dispatch({
+      changes,
+      selection: createSelection(objectRange.from, objectRange.to - 1),
+      mode: "normal"
     });
     return true;
   };

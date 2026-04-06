@@ -10,33 +10,27 @@ import { createEditor } from "@wx/editor-view-dom";
 
 import "./style.css";
 
-const fallbackSample = `screen
-  size fill
+const fallbackSample = `source lines editor
+  8 "status file is owned by the status block"
+    info 0 eol "The status block renders once per frame"
 
+  9 "const message = greet(user.name)"
+    guttr 9
+    warn 18 eol "Replace guttr with gutter"
+
+  10 "return message"
+    error 0 below "expected number, got string"
+
+screen fill
   status
     left " NOR "
     file "examples/editor.scene"
     right "10:8"
 
-  line 8
-    gutter number 8
-    text "status file is owned by the status block"
-    diagnostic info at 0
-      eol "The status block renders once per frame"
+  for line in editor.lines
+    row line
 
-  line 9
-    guttr number 9
-    text "const message = greet(user.name)"
-    diagnostic warning at 18
-      eol "Replace guttr with gutter"
-
-  line 10
-    gutter number 10
-    text "return message"
-    diagnostic error at 0
-      below "expected number, got string"
-
-  cursor block at line 10 col 6
+  cursor block 10:6
 `;
 
 const previewStyles = new Map<number, string>([

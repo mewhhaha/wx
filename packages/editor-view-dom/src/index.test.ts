@@ -75,6 +75,75 @@ describe("createEditor", () => {
     });
   });
 
+  it("opens jump target mode on comma and labels matching visible cells after a target character", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "alpha beta\ngamma delta" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", bubbles: true }));
+
+    expect(container.querySelector("[data-wx-editor-flash-hint]")).toBeNull();
+    expect(container.querySelector("[data-wx-editor-prefix-hint='flash-target']")?.textContent).toBe(",");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
+
+    expect(container.querySelectorAll("[data-wx-editor-flash-hint]")).toHaveLength(1);
+    expect(container.querySelector("[data-wx-editor-prefix-hint='flash']")?.textContent).toBe(",b");
+    expect(container.querySelector("[data-wx-editor-cursor='true']")).not.toBeNull();
+    expect(container.querySelector(".wx-flash-target")).not.toBeNull();
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
+
+    expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0)).toEqual({
+      line: 0,
+      column: 6
+    });
+    expect(container.querySelector("[data-wx-editor-flash-hint]")).toBeNull();
+  });
+
+  it("closes visible jump labels on escape", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, { value: "alpha beta\ngamma delta" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(container.querySelector("[data-wx-editor-flash-hint]")).not.toBeNull();
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(container.querySelector("[data-wx-editor-flash-hint]")).toBeNull();
+  });
+
+  it("refines duplicate jump labels by remapping only the matching subgroup", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(
+      container,
+      { value: Array.from({ length: 30 }, () => "a").join(" ") }
+    );
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+
+    expect(container.querySelector("[data-wx-editor-prefix-hint='flash']")?.textContent).toBe(",a a");
+    expect(container.querySelectorAll("[data-wx-editor-flash-hint]")).toHaveLength(2);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+
+    expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0)).toEqual({
+      line: 0,
+      column: 2
+    });
+    expect(container.querySelector("[data-wx-editor-flash-hint]")).toBeNull();
+  });
+
   it("renders only a viewport slice for large files", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -1452,5 +1521,140 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true }));
     await Promise.resolve();
     expect(getSelectionOffsets(editor.getState())).toEqual({ from: 14, to: 15 });
+  });
+
+  it("supports / search and n/N repeat", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "alpha beta alpha" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    for (const key of "alpha") {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 5 });
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 11, to: 16 });
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "N", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 5 });
+    expect(container.querySelector(".wx-search-current")).not.toBeNull();
+  });
+
+  it("navigates diagnostics and opens the diagnostics picker", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, {
+      value: "alpha\nbeta\ngamma",
+      languageServices: {
+        diagnostics: {
+          async diagnostics() {
+            return [
+              { from: 0, to: 5, severity: "warning", message: "first" },
+              { from: 11, to: 16, severity: "error", message: "second" }
+            ];
+          }
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+    await Promise.resolve();
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 11, to: 16 });
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
+    expect(container.querySelector("[data-wx-editor-picker='true']")?.textContent).toContain("second");
+  });
+
+  it("stores jumps and navigates them with Ctrl-o/Ctrl-i", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "one\ntwo\nthree" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true }));
+    expect(editor.getState().selection.ranges[0]?.head).toBe(1);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, bubbles: true }));
+    expect(editor.getState().selection.ranges[0]?.head).toBe(5);
+  });
+
+  it("supports surrounds and named registers", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "abc" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "m", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "(", bubbles: true }));
+    expect(editor.getState().doc.text).toBe("(a)bc");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "\"", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "y", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "\"", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "p", bubbles: true }));
+    expect(editor.getState().doc.text).toBe("(a)b(a)c");
+  });
+
+  it("uses comment and syntax providers when available", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, {
+      value: "const value = test();",
+      languageServices: {
+        comments: {
+          async toggleLineComments() {
+            return [{ from: 0, to: 0, insert: "// " }];
+          }
+        },
+        syntaxNavigation: {
+          async gotoNext(context) {
+            return context.kind === "f" ? { from: 14, to: 18 } : null;
+          }
+        },
+        syntaxTextobjects: {
+          async selectTextobject(_context) {
+            return { from: 14, to: 18 };
+          }
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true }));
+    await Promise.resolve();
+    expect(editor.getState().doc.text.startsWith("// ")).toBe(true);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 14, to: 18 });
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "m", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 14, to: 18 });
   });
 });

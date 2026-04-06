@@ -110,6 +110,27 @@ export interface Formatter {
   format(context: { document: LanguageDocumentSnapshot; selection: SyntaxSelectionRange }): Promise<readonly TextChange[]>;
 }
 
+export interface CommentToggler {
+  toggleLineComments(context: { document: LanguageDocumentSnapshot; selection: SyntaxSelectionRange }): Promise<readonly TextChange[]>;
+}
+
+export type SyntaxTextobjectMode = "around" | "inside";
+
+export interface SyntaxTextobjectProvider {
+  selectTextobject(context: {
+    document: LanguageDocumentSnapshot;
+    selection: SyntaxSelectionRange;
+    activeOffset: number;
+    object: string;
+    mode: SyntaxTextobjectMode;
+  }): Promise<SyntaxSelectionRange | null>;
+}
+
+export interface SyntaxNavigationProvider {
+  gotoNext?(context: { document: LanguageDocumentSnapshot; activeOffset: number; kind: string }): Promise<SyntaxSelectionRange | null>;
+  gotoPrev?(context: { document: LanguageDocumentSnapshot; activeOffset: number; kind: string }): Promise<SyntaxSelectionRange | null>;
+}
+
 export interface EditorLanguageServices {
   highlighter?: Highlighter;
   syntaxSelector?: SyntaxSelector;
@@ -118,6 +139,9 @@ export interface EditorLanguageServices {
   diagnostics?: DiagnosticsSource;
   codeActions?: CodeActionSource;
   formatter?: Formatter;
+  comments?: CommentToggler;
+  syntaxTextobjects?: SyntaxTextobjectProvider;
+  syntaxNavigation?: SyntaxNavigationProvider;
 }
 
 export type EditorLanguageServiceInput = EditorLanguageServices | readonly EditorLanguageServices[];
