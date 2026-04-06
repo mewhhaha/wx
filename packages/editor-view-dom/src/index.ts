@@ -102,6 +102,7 @@ export interface CreateEditorOptions {
   language?: LanguageProvider | null;
   languageServices?: EditorLanguageServiceInput | null;
   theme?: ThemeSpec;
+  commandThemes?: readonly ThemeSpec[];
   softWrap?: boolean;
   indentGuides?: {
     render?: boolean;
@@ -159,6 +160,12 @@ interface CommandLineState {
   active: boolean;
   value: string;
   prompt: ":" | "/" | "?";
+}
+
+interface CommandCompletionItem {
+  label: string;
+  detail?: string;
+  run(): void;
 }
 
 interface BottomMessageState {
@@ -341,6 +348,24 @@ function normalizeLanguageServices(input: EditorLanguageServiceInput | null | un
   }
 
   return Array.isArray(input) ? [...input] : [input];
+}
+
+function normalizeCommandThemes(themes: readonly ThemeSpec[] | undefined, activeTheme: ThemeSpec): ThemeSpec[] {
+  const seen = new Set<string>();
+  const nextThemes: ThemeSpec[] = [];
+
+  for (const theme of [activeTheme, defaultTheme, ...(themes ?? [])]) {
+    const key = theme.name.trim().toLowerCase();
+
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    nextThemes.push(theme);
+  }
+
+  return nextThemes;
 }
 
 function mountStyles(styleHost: HTMLElement): void {
@@ -774,6 +799,61 @@ function mountStyles(styleHost: HTMLElement): void {
       padding: 0 1ch;
       line-height: var(--wx-line-height, 24px);
       white-space: pre;
+    }
+
+    .wx-editor__command-popover {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: calc(var(--wx-line-height, 24px) * 2);
+      display: flex;
+      justify-content: flex-start;
+      padding: 0 1ch 8px;
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    .wx-editor__command-popover[hidden] {
+      display: none;
+    }
+
+    .wx-editor__command-popover-panel {
+      min-width: min(42ch, calc(100% - 2ch));
+      max-width: min(64ch, calc(100% - 2ch));
+      max-height: calc(var(--wx-line-height, 24px) * 6);
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      background: rgba(10, 11, 15, 0.98);
+      box-shadow: 0 18px 40px rgba(2, 8, 23, 0.35);
+    }
+
+    .wx-editor__command-completion {
+      display: grid;
+      grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+      align-items: center;
+      gap: 2ch;
+      min-height: var(--wx-line-height, 24px);
+      padding: 0 1ch;
+      color: #dbe2f0;
+      white-space: nowrap;
+    }
+
+    .wx-editor__command-completion[data-selected="true"] {
+      background: color-mix(in srgb, var(--wx-color-selection) 80%, transparent);
+      color: #ffffff;
+    }
+
+    .wx-editor__command-completion-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 700;
+    }
+
+    .wx-editor__command-completion-detail {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #aeb8cb;
+      text-align: right;
     }
 
     .wx-editor__bottom-row[data-active="false"] {
@@ -1574,12 +1654,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let gutterWidth = 0;
   let anchoredTopVisualRow = 0;
   let visibleLineCapacity = 1;
+  let commandCompletionIndex = 0;
+  let previewTheme: ThemeSpec | null = null;
   let destroyed = false;
   let mountedContainer: HTMLElement | null = container;
   let unsubscribeController = () => {};
   let currentLayoutModel: EditorLayoutModel | null = null;
   let pendingMountFrame = 0;
   let resizeObserver: ResizeObserver | null = null;
+  let availableCommandThemes = normalizeCommandThemes(options.commandThemes, options.theme ?? defaultTheme);
 
   const getHighlighter = () => languageServices.find((services) => services.highlighter)?.highlighter;
   const getSyntaxSelector = () => languageServices.find((services) => services.syntaxSelector)?.syntaxSelector;
@@ -1697,6 +1780,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   const rows = document.createElement("div");
   const viewportRows = document.createElement("div");
   const tooltip = document.createElement("div");
+  const commandPopover = document.createElement("div");
   const status = document.createElement("div");
   const statusMode = document.createElement("div");
   const statusFile = document.createElement("div");
@@ -1725,6 +1809,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   tooltip.dataset.wxEditorTooltip = "true";
   tooltip.hidden = true;
 
+  commandPopover.className = "wx-editor__command-popover";
+  commandPopover.dataset.wxEditorCommandPopover = "true";
+  commandPopover.hidden = true;
+
   status.className = "wx-editor__status";
   status.dataset.wxEditor = "status";
 
@@ -1750,7 +1838,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   status.append(statusMode, statusFile, statusMeta);
   rows.append(viewportRows);
   surface.append(rows, tooltip, textarea);
-  root.append(surface, status, bottomRow);
+  root.append(surface, commandPopover, status, bottomRow);
   mountedContainer.replaceChildren(root);
 
   function getSnapshot() {
@@ -2507,6 +2595,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const layout = getRenderedLayout();
     bottomRow.dataset.active = String(layout.bottomBar.active);
     bottomRow.replaceChildren();
+    patchCommandPopover();
     const promptRun = layout.bottomBar.runs.find((run) => run.part === "command-prompt");
     const commandTextRun = layout.bottomBar.runs.find((run) => run.part === "command-text");
     const pickerRuns = layout.bottomBar.runs.filter((run) => run.part === "code-action");
@@ -3034,11 +3123,47 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     pendingAction = null;
     clearFlash();
     clearHover();
+    commandCompletionIndex = 0;
     commandLine = { active: true, value: "", prompt };
     patchBottomRow();
   }
 
-  function closeCommandLine(): void {
+  function applyRenderedTheme(nextTheme: ThemeSpec): void {
+    applyThemeVariables(root, nextTheme);
+    renderVisibleRows(true);
+    patchStatus();
+  }
+
+  function previewThemeByName(name: string | null): void {
+    if (!name) {
+      if (!previewTheme) {
+        return;
+      }
+
+      previewTheme = null;
+      applyRenderedTheme(theme);
+      return;
+    }
+
+    const nextTheme = availableCommandThemes.find((entry) => entry.name.toLowerCase() === name.trim().toLowerCase());
+
+    if (!nextTheme) {
+      return;
+    }
+
+    if (previewTheme?.name === nextTheme.name || (!previewTheme && theme.name === nextTheme.name)) {
+      return;
+    }
+
+    previewTheme = nextTheme;
+    applyRenderedTheme(nextTheme);
+  }
+
+  function closeCommandLine(restorePreview = true): void {
+    if (restorePreview) {
+      previewThemeByName(null);
+    }
+    commandCompletionIndex = 0;
     commandLine = { active: false, value: "", prompt: ":" };
     patchBottomRow();
   }
@@ -3058,6 +3183,189 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function setBottomMessage(message: BottomMessageState | null): void {
     bottomMessage = message;
     patchBottomRow();
+  }
+
+  function updateCommandLineValue(value: string, preserveCompletionIndex = false): void {
+    if (!preserveCompletionIndex) {
+      commandCompletionIndex = 0;
+    }
+    commandLine = {
+      ...commandLine,
+      value
+    };
+    patchBottomRow();
+  }
+
+  function setThemeByName(name: string): boolean {
+    const normalized = name.trim().toLowerCase();
+    const nextTheme = availableCommandThemes.find((entry) => entry.name.toLowerCase() === normalized);
+
+    if (!nextTheme) {
+      setBottomMessage({ tone: "warning", text: `Unknown theme: ${name}` });
+      return false;
+    }
+
+    theme = nextTheme;
+    previewTheme = null;
+    availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
+    applyRenderedTheme(theme);
+    patchBottomRow();
+    setBottomMessage({ tone: "info", text: `Theme ${nextTheme.name}` });
+    return true;
+  }
+
+  function getCommandCompletionItems(): readonly CommandCompletionItem[] {
+    if (!commandLine.active || commandLine.prompt !== ":") {
+      return [];
+    }
+
+    const rawValue = commandLine.value;
+    const trimmedStart = rawValue.trimStart();
+
+    if (!trimmedStart) {
+      return [
+        {
+          label: "theme",
+          detail: "switch theme",
+          run: () => {
+            updateCommandLineValue("theme ");
+          }
+        },
+        {
+          label: "write",
+          detail: "save document",
+          run: () => {
+            closeCommandLine();
+            void saveDocument(filePath);
+          }
+        },
+        {
+          label: "format",
+          detail: "format document",
+          run: () => {
+            closeCommandLine();
+            void formatDocument();
+          }
+        },
+        {
+          label: "code-actions",
+          detail: "show code actions",
+          run: () => {
+            closeCommandLine();
+            void loadCodeActions();
+          }
+        }
+      ];
+    }
+
+    const parts = trimmedStart.split(/\s+/);
+    const commandName = (parts[0] ?? "").toLowerCase();
+    const hasArgumentSpace = /\s$/.test(rawValue);
+    const commandArgument = trimmedStart.slice(parts[0]?.length ?? 0).trim();
+
+    if (commandName === "theme") {
+      const query = commandArgument;
+      const filteredThemes = availableCommandThemes.filter((entry) => entry.name.toLowerCase().includes(query.toLowerCase()));
+
+      return filteredThemes.map((entry) => ({
+        label: entry.name,
+        detail: "theme",
+        run: () => {
+          closeCommandLine(false);
+          setThemeByName(entry.name);
+        }
+      }));
+    }
+
+    if (!hasArgumentSpace) {
+      const commands = [
+        { label: "theme", detail: "switch theme", run: () => updateCommandLineValue("theme ") },
+        { label: "write", detail: "save document", run: () => updateCommandLineValue("write ") },
+        { label: "format", detail: "format document", run: () => updateCommandLineValue("format") },
+        { label: "code-actions", detail: "show code actions", run: () => updateCommandLineValue("code-actions") }
+      ];
+
+      return commands.filter((entry) => entry.label.startsWith(commandName));
+    }
+
+    return [];
+  }
+
+  function hasRunnableCommandLineValue(rawValue: string): boolean {
+    const trimmed = rawValue.trim();
+
+    if (!trimmed) {
+      return false;
+    }
+
+    const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
+    const value = commandName.toLowerCase();
+    const commandArgument = argumentParts.join(" ").trim();
+
+    if (["format", "fmt", "w", "write", "code-actions", "codeaction", "ca"].includes(value)) {
+      return true;
+    }
+
+    if (value !== "theme") {
+      return false;
+    }
+
+    if (!commandArgument) {
+      return true;
+    }
+
+    const normalizedArgument = commandArgument.toLowerCase();
+    return availableCommandThemes.some(
+      (entry) =>
+        entry.name.toLowerCase() === normalizedArgument ||
+        entry.name.toLowerCase().startsWith(normalizedArgument)
+    );
+  }
+
+  function patchCommandPopover(): void {
+    const items = getCommandCompletionItems();
+    const rawValue = commandLine.value.trimStart();
+    const activeCommandName = rawValue.split(/\s+/)[0]?.toLowerCase() ?? "";
+
+    if (items.length === 0 || !commandLine.active || commandLine.prompt !== ":") {
+      previewThemeByName(null);
+      commandPopover.hidden = true;
+      commandPopover.replaceChildren();
+      return;
+    }
+
+    commandPopover.hidden = false;
+    commandCompletionIndex = Math.max(0, Math.min(items.length - 1, commandCompletionIndex));
+
+    if (activeCommandName === "theme") {
+      previewThemeByName(items[commandCompletionIndex]?.label ?? null);
+    } else {
+      previewThemeByName(null);
+    }
+
+    const panel = document.createElement("div");
+    panel.className = "wx-editor__command-popover-panel";
+
+    items.slice(0, 6).forEach((item, index) => {
+      const row = document.createElement("div");
+      const label = document.createElement("span");
+      const detail = document.createElement("span");
+
+      row.className = "wx-editor__command-completion";
+      row.dataset.selected = String(index === commandCompletionIndex);
+      row.dataset.wxEditorCommandCompletion = item.label;
+
+      label.className = "wx-editor__command-completion-label";
+      label.textContent = item.label;
+
+      detail.className = "wx-editor__command-completion-detail";
+      detail.textContent = item.detail ?? "";
+
+      row.append(label, detail);
+      panel.append(row);
+    });
+
+    commandPopover.replaceChildren(panel);
   }
 
   function patchTooltip(): void {
@@ -3666,6 +3974,27 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
+    if (value === "theme") {
+      if (!commandArgument) {
+        setBottomMessage({ tone: "warning", text: "Theme name required" });
+        return;
+      }
+
+      const normalizedArgument = commandArgument.toLowerCase();
+      const matchingThemes = availableCommandThemes.filter((entry) => entry.name.toLowerCase().startsWith(normalizedArgument));
+
+      if (matchingThemes.length === 1) {
+        setThemeByName(matchingThemes[0].name);
+        return;
+      }
+
+      if (setThemeByName(commandArgument)) {
+        return;
+      }
+
+      return;
+    }
+
     if (value === "code-actions" || value === "codeaction" || value === "ca") {
       void loadCodeActions();
       return;
@@ -4265,6 +4594,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     if (commandLine.active) {
+      const completionItems = getCommandCompletionItems();
+
       if (event.key === "Escape") {
         event.preventDefault();
         closeCommandLine();
@@ -4272,31 +4603,48 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         return;
       }
 
+      if (event.key === "Tab") {
+        if (completionItems.length === 0) {
+          return;
+        }
+
+        event.preventDefault();
+        const delta = event.shiftKey ? -1 : 1;
+        commandCompletionIndex =
+          (commandCompletionIndex + delta + completionItems.length) % completionItems.length;
+        patchBottomRow();
+        return;
+      }
+
       if (event.key === "Enter") {
         event.preventDefault();
         const nextValue = commandLine.value;
-        runCommandLineCommand(nextValue);
+        const selectedCompletion = completionItems[commandCompletionIndex];
+        const shouldTakeCompletion =
+          !!selectedCompletion &&
+          commandLine.prompt === ":" &&
+          /^\s*theme\s+$/i.test(nextValue);
+
+        if (shouldTakeCompletion) {
+          selectedCompletion.run();
+        } else if (hasRunnableCommandLineValue(nextValue) || !selectedCompletion) {
+          runCommandLineCommand(nextValue);
+        } else {
+          selectedCompletion.run();
+        }
         textarea.focus();
         return;
       }
 
       if (event.key === "Backspace") {
         event.preventDefault();
-        commandLine = {
-          ...commandLine,
-          value: commandLine.value.slice(0, -1)
-        };
-        patchBottomRow();
+        updateCommandLineValue(commandLine.value.slice(0, -1));
         return;
       }
 
       if (event.key.length === 1) {
         event.preventDefault();
-        commandLine = {
-          ...commandLine,
-          value: `${commandLine.value}${event.key}`
-        };
-        patchBottomRow();
+        updateCommandLineValue(`${commandLine.value}${event.key}`);
       }
       return;
     }
@@ -4886,9 +5234,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     },
     setTheme(nextTheme: ThemeSpec) {
       theme = nextTheme;
-      applyThemeVariables(root, theme);
-      renderVisibleRows(true);
-      patchStatus();
+      previewTheme = null;
+      availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
+      applyRenderedTheme(theme);
       patchBottomRow();
     },
     async setValue(value: string) {

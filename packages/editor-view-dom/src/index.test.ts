@@ -1152,6 +1152,116 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-command-prompt='true']")).toBeNull();
   });
 
+  it("autocompletes :t to theme and shows a command popover", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, { value: "abc" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
+
+    expect(container.querySelector('[data-wx-editor-command-completion="theme"]')).not.toBeNull();
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(container.querySelector("[data-wx-editor-command-prompt='true']")?.textContent).toBe(":");
+    expect(container.querySelector("[data-wx-editor-command-text='true']")?.textContent).toBe("theme ");
+    expect(container.querySelector('[data-wx-editor-command-completion="theme"]')).toBeNull();
+  });
+
+  it("cycles theme completions with Tab and Shift+Tab and applies the selected theme on Enter", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const sunriseTheme = {
+      name: "sunrise",
+      colors: {
+        background: "#20110f"
+      }
+    };
+    const tideTheme = {
+      name: "tide",
+      colors: {
+        background: "#042f3a"
+      }
+    };
+
+    createEditor(container, {
+      value: "abc",
+      theme: sunriseTheme,
+      commandThemes: [sunriseTheme, tideTheme]
+    });
+
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+    const root = container.querySelector("[data-wx-editor='root']") as HTMLDivElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(container.querySelector('[data-wx-editor-command-completion="sunrise"]')?.getAttribute("data-selected")).toBe("true");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(container.querySelector('[data-wx-editor-command-completion="wx-daybreak"]')?.getAttribute("data-selected")).toBe("true");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, shiftKey: true }));
+    expect(container.querySelector('[data-wx-editor-command-completion="sunrise"]')?.getAttribute("data-selected")).toBe("true");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, shiftKey: true }));
+    expect(container.querySelector('[data-wx-editor-command-completion="tide"]')?.getAttribute("data-selected")).toBe("true");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(root.style.getPropertyValue("--wx-color-background")).toBe("#042f3a");
+    expect(container.querySelector("[data-wx-editor-command-prompt='true']")).toBeNull();
+  });
+
+  it("previews themes live while cycling and restores the committed theme on Escape", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const sunriseTheme = {
+      name: "sunrise",
+      colors: {
+        background: "#20110f"
+      }
+    };
+    const tideTheme = {
+      name: "tide",
+      colors: {
+        background: "#042f3a"
+      }
+    };
+
+    createEditor(container, {
+      value: "abc",
+      theme: sunriseTheme,
+      commandThemes: [sunriseTheme, tideTheme]
+    });
+
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+    const root = container.querySelector("[data-wx-editor='root']") as HTMLDivElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(root.style.getPropertyValue("--wx-color-background")).toBe("#20110f");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, shiftKey: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, shiftKey: true }));
+
+    expect(root.style.getPropertyValue("--wx-color-background")).toBe("#042f3a");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(root.style.getPropertyValue("--wx-color-background")).toBe("#20110f");
+    expect(container.querySelector("[data-wx-editor-command-prompt='true']")).toBeNull();
+  });
+
   it("renders diagnostics in the gutter, status bar, and bottom row", async () => {
     const container = document.createElement("div");
     document.body.append(container);
