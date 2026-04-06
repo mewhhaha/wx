@@ -67,6 +67,14 @@ import {
   type EditorController,
   type EditorUpdate
 } from "@wx/editor-controller";
+import {
+  buildEditorLayout,
+  type EditorLayoutModel,
+  type EditorLayoutPanel,
+  type EditorLayoutRow,
+  type EditorLayoutRun,
+  type EditorLayoutToken
+} from "../../editor-layout/src/index";
 import type {
   CommentToggler,
   DiagnosticSeverity,
@@ -281,6 +289,41 @@ function roleClassName(role: HighlightRole): string {
 
 function diagnosticClassName(severity: DiagnosticSeverity): string {
   return `wx-diagnostic-${severity}`;
+}
+
+function tokenToHighlightRole(token: EditorLayoutToken): HighlightRole | null {
+  switch (token) {
+    case "text":
+    case "comment":
+    case "function":
+    case "gutter":
+    case "keyword":
+    case "number":
+    case "operator":
+    case "punctuation":
+    case "string":
+    case "type":
+      return token;
+    default:
+      return null;
+  }
+}
+
+function tokenToDiagnosticSeverity(
+  token: EditorLayoutToken
+): DiagnosticSeverity | null {
+  switch (token) {
+    case "diagnostic-error":
+      return "error";
+    case "diagnostic-warning":
+      return "warning";
+    case "diagnostic-info":
+      return "info";
+    case "diagnostic-hint":
+      return "hint";
+    default:
+      return null;
+  }
 }
 
 function toneForSeverity(severity: DiagnosticSeverity): "info" | "warning" | "error" {
@@ -1531,6 +1574,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let destroyed = false;
   let mountedContainer: HTMLElement | null = container;
   let unsubscribeController = () => {};
+  let currentLayoutModel: EditorLayoutModel | null = null;
 
   const getHighlighter = () => languageServices.find((services) => services.highlighter)?.highlighter;
   const getSyntaxSelector = () => languageServices.find((services) => services.syntaxSelector)?.syntaxSelector;
@@ -1541,6 +1585,89 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   const getCommentToggler = () => languageServices.find((services) => services.comments)?.comments;
   const getSyntaxTextobjectProvider = () => languageServices.find((services) => services.syntaxTextobjects)?.syntaxTextobjects;
   const getSyntaxNavigationProvider = () => languageServices.find((services) => services.syntaxNavigation)?.syntaxNavigation;
+
+  function currentLineChanges(): EditorLineChange[] {
+    const changes: EditorLineChange[] = [];
+
+    for (const [line, state] of lineChangesByLine.entries()) {
+      if (state.kind) {
+        changes.push({ line, kind: state.kind });
+      }
+
+      if (state.deleted) {
+        changes.push({ line, kind: "deleted" });
+      }
+    }
+
+    return changes;
+  }
+
+  function buildLayoutModelForViewport(viewport: LineViewport): EditorLayoutModel {
+    const normalizedViewport =
+      viewport.toLine >= viewport.fromLine
+        ? viewport
+        : {
+            fromLine: 0,
+            toLine: Math.max(0, getVisibleLineCapacity() - 1)
+          };
+
+    const model = buildEditorLayout({
+      state,
+      filePath,
+      searchState: controller.getSearchState(),
+      highlights: [...highlightCache.values()].flat(),
+      diagnostics,
+      lineChanges: currentLineChanges(),
+      commandLine,
+      bottomMessage,
+      picker: {
+        active: pickerState.active,
+        loading: pickerState.loading,
+        title: pickerState.title,
+        items: pickerState.items.map((item, index) => ({
+          label: item.label,
+          detail: item.detail,
+          selected: index === pickerState.selectedIndex
+        })),
+        selectedIndex: pickerState.selectedIndex,
+        error: pickerState.error
+      },
+      hover: {
+        active: hoverState.active,
+        pinned: hoverState.pinned,
+        offset: hoverState.offset,
+        content: hoverState.content,
+        source: hoverState.source,
+        tone: hoverState.tone,
+        col: Math.max(0, Math.floor(hoverState.left / Math.max(metrics.charWidth, 1))),
+        row: Math.max(0, Math.floor(hoverState.top / Math.max(metrics.lineHeight, 1)))
+      },
+      flash: flashState,
+      pendingAction:
+        pendingAction?.kind === "find" ||
+        pendingAction?.kind === "textobject" ||
+        pendingAction?.kind === "surround-add" ||
+        pendingAction?.kind === "surround-delete" ||
+        pendingAction?.kind === "surround-replace-from" ||
+        pendingAction?.kind === "surround-replace-to" ||
+        pendingAction?.kind === "register-select"
+          ? null
+          : pendingAction,
+      pendingCount,
+      viewport: {
+        cols: Math.max(1, getContentColumns()),
+        rows: Math.max(1, normalizedViewport.toLine - normalizedViewport.fromLine + 1),
+        topVisualRow: normalizedViewport.fromLine
+      },
+      softWrap,
+      indentGuides
+    });
+
+    visualRows = [...model.document.visualRows] as VisualRow[];
+    lineVisualRanges = [...model.document.lineVisualRanges];
+    currentLayoutModel = model;
+    return model;
+  }
 
   const root = document.createElement("div");
   const surface = document.createElement("div");
@@ -1738,62 +1865,20 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function rebuildVisualRows(force = false): boolean {
     const nextWrapColumns = getContentColumns();
 
-    if (!force && wrapRevision === state.revision && wrapColumns === nextWrapColumns) {
+    if (!force && wrapRevision === state.revision && wrapColumns === nextWrapColumns && visualRows.length > 0) {
       return false;
     }
 
     wrapColumns = nextWrapColumns;
     wrapRevision = state.revision;
-    visualRows = [];
-    lineVisualRanges = [];
-
-    for (let lineIndex = 0; lineIndex < state.doc.lineCount; lineIndex += 1) {
-      const line = state.doc.lineAt(lineIndex);
-      const lineStartRow = visualRows.length;
-      const textLength = line.text.length;
-
-      if (!softWrap || textLength <= wrapColumns || wrapColumns === Number.MAX_SAFE_INTEGER) {
-        visualRows.push({
-          docLine: lineIndex,
-          visualRowIndex: visualRows.length,
-          segmentStart: line.start,
-          segmentEnd: line.end,
-          startColumn: 0,
-          isContinuation: false,
-          isLastSegment: true
-        });
-      } else {
-        for (let startColumn = 0; startColumn < textLength; startColumn += wrapColumns) {
-          const endColumn = Math.min(textLength, startColumn + wrapColumns);
-          visualRows.push({
-            docLine: lineIndex,
-            visualRowIndex: visualRows.length,
-            segmentStart: line.start + startColumn,
-            segmentEnd: line.start + endColumn,
-            startColumn,
-            isContinuation: startColumn > 0,
-            isLastSegment: endColumn >= textLength
-          });
-        }
-      }
-
-      if (visualRows.length === lineStartRow) {
-        visualRows.push({
-          docLine: lineIndex,
-          visualRowIndex: visualRows.length,
-          segmentStart: line.start,
-          segmentEnd: line.start,
-          startColumn: 0,
-          isContinuation: false,
-          isLastSegment: true
-        });
-      }
-
-      lineVisualRanges[lineIndex] = {
-        from: lineStartRow,
-        to: visualRows.length - 1
-      };
-    }
+    buildLayoutModelForViewport(
+      renderedViewport.toLine >= renderedViewport.fromLine
+        ? renderedViewport
+        : {
+            fromLine: 0,
+            toLine: Math.max(0, getVisibleLineCapacity() - 1)
+          }
+    );
 
     return true;
   }
@@ -2136,29 +2221,28 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return activeLineDiagnostics[0] ?? null;
   }
 
+  function getRenderedLayout(): EditorLayoutModel {
+    return buildLayoutModelForViewport(
+      renderedViewport.toLine >= renderedViewport.fromLine ? renderedViewport : expandViewport(getVisibleViewport())
+    );
+  }
+
   function patchRowView(view: RowView, visualRowIndex: number): void {
-    const visualRow = getVisualRow(visualRowIndex);
-    const lineIndex = visualRow.docLine;
-    const line = state.doc.lineAt(lineIndex);
-    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const cursorVisual = getVisualRowForOffset(activeOffset);
-    const lineDiagnostics = getLineDiagnostics(lineIndex);
-    const lineSearchMatches = getLineSearchMatches(lineIndex);
-    const currentSearchMatch = controller.getSearchState().lastMatch;
-    const lineDiagnosticSeverity = visualRow.isContinuation ? null : getLineDiagnosticSeverity(lineIndex);
-    const lineChangeState = visualRow.isContinuation ? { kind: null, deleted: false } : getLineChangeState(lineIndex);
-    const inlineDiagnostic = getInlineDiagnosticForLine(lineIndex);
-    const flashHints = getFlashHintsForVisualRow(visualRow);
-    const flashOffsets = getFlashOffsetsForVisualRow(visualRow);
-    const inlineDiagnosticInRow =
-      inlineDiagnostic && inlineDiagnostic.from >= visualRow.segmentStart && inlineDiagnostic.from <= visualRow.segmentEnd
-        ? inlineDiagnostic
-        : null;
-    const endOfLineDiagnostic = visualRow.isLastSegment ? getEndOfLineDiagnosticForLine(lineIndex) : null;
+    const layout = currentLayoutModel ?? getRenderedLayout();
+    const layoutRow = layout.document.rows.find((row) => row.visualRowIndex === visualRowIndex);
+
+    if (!layoutRow) {
+      return;
+    }
+
+    const lineIndex = layoutRow.docLine;
     const gutterMarker = document.createElement("span");
     const gutterNumber = document.createElement("span");
     const gutterChange = document.createElement("span");
     const lineText = document.createElement("span");
+    const markerRun = layoutRow.gutterRuns.find((run) => run.part === "gutter-marker");
+    const numberRun = layoutRow.gutterRuns.find((run) => run.part === "gutter-number");
+    const changeRun = layoutRow.gutterRuns.find((run) => run.part === "gutter-change");
 
     view.visualRowIndex = visualRowIndex;
     view.row.dataset.wxEditorRow = String(lineIndex + 1);
@@ -2166,121 +2250,117 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     view.gutter.dataset.wxEditorGutter = String(lineIndex + 1);
     view.content.dataset.wxEditorContent = String(lineIndex + 1);
     gutterMarker.className = "wx-editor__gutter-marker";
-    gutterMarker.dataset.severity = lineDiagnosticSeverity ?? "";
-    gutterMarker.dataset.wxEditorDiagnosticMarker = lineDiagnosticSeverity ?? "";
+    gutterMarker.dataset.severity = markerRun?.severity ?? "";
+    gutterMarker.dataset.wxEditorDiagnosticMarker = markerRun?.severity ?? "";
     gutterNumber.className = "wx-editor__gutter-number";
-    gutterNumber.textContent = visualRow.isContinuation ? "↪" : String(lineIndex + 1);
+    gutterNumber.textContent = numberRun?.text ?? String(lineIndex + 1);
     gutterChange.className = "wx-editor__gutter-change";
-    gutterChange.dataset.change = lineChangeState.kind ?? "";
-    gutterChange.dataset.deleted = String(lineChangeState.deleted);
-    gutterChange.dataset.wxEditorLineChange = lineChangeState.kind ?? (lineChangeState.deleted ? "deleted" : "");
+    gutterChange.dataset.change = changeRun?.lineChangeKind ?? "";
+    gutterChange.dataset.deleted = String(changeRun?.deleted ?? false);
+    gutterChange.dataset.wxEditorLineChange = changeRun?.lineChangeKind ?? (changeRun?.deleted ? "deleted" : "");
     view.gutter.replaceChildren(gutterMarker, gutterNumber, gutterChange);
-    view.row.classList.toggle("wx-row-active", visualRowIndex === cursorVisual.rowIndex);
+    view.row.classList.toggle("wx-row-active", layoutRow.isActive);
     view.content.replaceChildren();
     view.host.replaceChildren(view.row);
     lineText.className = "wx-editor__line-text";
     view.content.append(lineText);
 
-    for (const segment of renderLineFragments(
-      line,
-      state,
-      getLineHighlights(lineIndex),
-      lineDiagnostics,
-      lineSearchMatches,
-      currentSearchMatch,
-      flashOffsets,
-      visualRow.segmentStart,
-      visualRow.segmentEnd,
-      visualRow.isLastSegment,
-      indentGuides
-    )) {
+    for (const segment of layoutRow.contentRuns) {
       const token = document.createElement("span");
       token.className = "wx-token";
-      token.classList.add(roleClassName(segment.role));
-      addClassName(token, "wx-indent-guide", segment.isIndentGuide);
-      addClassName(token, "wx-is-selected", segment.isSelected);
-      addClassName(token, "wx-search-match", segment.isSearchMatch);
-      addClassName(token, "wx-search-current", segment.isCurrentSearchMatch);
-      addClassName(token, "wx-flash-target", segment.isFlashTarget);
-      addClassName(token, diagnosticClassName(segment.diagnosticSeverity), !!segment.diagnosticSeverity);
+      const highlightRole = tokenToHighlightRole(segment.token);
+      const severity = segment.severity ?? tokenToDiagnosticSeverity(segment.token);
 
-      if (segment.isCursor) {
-        token.classList.add("wx-cursor-block");
-        token.dataset.wxEditorCursor = "true";
-        token.dataset.wxEditorCursorKind = segment.cursorKind ?? "";
+      if (highlightRole) {
+        token.classList.add(roleClassName(highlightRole));
       }
 
-      if (segment.offset !== null) {
-        token.dataset.wxEditorOffset = String(segment.offset);
-        if (segment.endOffset !== null) {
-          token.dataset.wxEditorOffsetEnd = String(segment.endOffset);
-        }
+      addClassName(token, "wx-is-selected", !!segment.selected);
+      addClassName(token, "wx-search-match", !!segment.searchMatch);
+      addClassName(token, "wx-search-current", !!segment.currentSearchMatch);
+      addClassName(token, "wx-flash-target", !!segment.flashTarget);
+      addClassName(token, "wx-indent-guide", !!segment.isIndentGuide);
+      addClassName(token, diagnosticClassName(severity), !!severity);
+
+      if (segment.cursorBlock) {
+        token.classList.add("wx-cursor-block");
+        token.dataset.wxEditorCursor = "true";
+        token.dataset.wxEditorCursorKind = "block";
+      }
+
+      if (segment.sourceRange) {
+        token.dataset.wxEditorOffset = String(segment.sourceRange.from);
+        token.dataset.wxEditorOffsetEnd = String(segment.sourceRange.to);
       }
 
       token.textContent = segment.text;
       lineText.append(token);
     }
 
+    const flashHints = layoutRow.overlays.filter((overlay) => overlay.kind === "flash-hint");
+
     if (flashHints.length > 0) {
       const flashLayer = document.createElement("div");
       flashLayer.className = "wx-editor__flash-layer";
 
       for (const hint of flashHints) {
-        const label = hint.label;
-        const column = state.doc.positionAt(hint.offset).column - visualRow.startColumn;
         const marker = document.createElement("span");
         marker.className = "wx-editor__flash-hint";
-        marker.dataset.wxEditorFlashHint = hint.label;
-        marker.style.left = `${Math.max(0, column) * metrics.charWidth}px`;
-        marker.style.width = `${Math.max(1, label.length) * metrics.charWidth}px`;
-        marker.textContent = label;
+        marker.dataset.wxEditorFlashHint = hint.text;
+        marker.style.left = `${Math.max(0, hint.col) * metrics.charWidth}px`;
+        marker.style.width = `${Math.max(1, hint.text.length) * metrics.charWidth}px`;
+        marker.textContent = hint.text;
         flashLayer.append(marker);
       }
 
       view.content.append(flashLayer);
     }
 
-    if (endOfLineDiagnostic) {
+    for (const overlay of layoutRow.overlays) {
+      if (overlay.kind !== "inline-diagnostic" || overlay.row !== 0) {
+        continue;
+      }
+
       const note = document.createElement("span");
       note.className = "wx-editor__eol-diagnostic";
-      note.dataset.severity = endOfLineDiagnostic.severity;
+      note.dataset.severity = overlay.severity;
       note.dataset.wxEditorDiagnosticNote = "eol";
-      note.textContent = `  ${endOfLineDiagnostic.message}`;
+      note.textContent = `  ${overlay.text}`;
       view.content.append(note);
     }
 
-    if (inlineDiagnosticInRow) {
+    for (const overlay of layoutRow.overlays) {
+      if (overlay.kind !== "inline-diagnostic" || overlay.row !== 1) {
+        continue;
+      }
+
       const detailRow = document.createElement("div");
       const detailGutter = document.createElement("div");
       const detailContent = document.createElement("div");
       const detail = document.createElement("div");
       const hook = document.createElement("span");
       const text = document.createElement("span");
-      const diagnosticStartColumn = Math.max(
-        0,
-        inlineDiagnosticInRow.from > visualRow.segmentStart
-          ? state.doc.positionAt(inlineDiagnosticInRow.from).column - visualRow.startColumn
-          : 0
-      );
       detailRow.className = "wx-editor__diagnostic-row";
       detailGutter.className = "wx-editor__diagnostic-gutter";
       detailContent.className = "wx-editor__diagnostic-content";
       detailGutter.textContent = " ";
       detail.className = "wx-editor__inline-diagnostic";
-      detail.dataset.severity = inlineDiagnosticInRow.severity;
+      detail.dataset.severity = overlay.severity;
       detail.dataset.wxEditorDiagnosticNote = "inline";
-      detail.style.marginLeft = `${diagnosticStartColumn * metrics.charWidth}px`;
+      detail.style.marginLeft = `${overlay.col * metrics.charWidth}px`;
       hook.className = "wx-editor__inline-diagnostic-hook";
-      hook.dataset.wxEditorDiagnosticHook = inlineDiagnosticInRow.severity;
+      hook.dataset.wxEditorDiagnosticHook = overlay.severity;
       text.className = "wx-editor__inline-diagnostic-text";
-      text.textContent = inlineDiagnosticInRow.message;
+      text.textContent = overlay.text;
       detail.append(hook, text);
       detailContent.append(detail);
       detailRow.append(detailGutter, detailContent);
       view.host.append(detailRow);
     }
 
-    if (state.mode === "insert" && visualRowIndex === cursorVisual.rowIndex) {
+    const cursorLine = layoutRow.overlays.find((overlay) => overlay.kind === "cursor-line");
+
+    if (cursorLine) {
       const caret = document.createElement("span");
       const caretHeight = Math.max(14, Math.round(metrics.lineHeight * 0.84));
       const caretTop = Math.max(0, Math.round((metrics.lineHeight - caretHeight) / 2));
@@ -2288,7 +2368,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       caret.className = "wx-cursor-line";
       caret.dataset.wxEditorCursor = "true";
       caret.dataset.wxEditorCursorKind = "line";
-      caret.style.left = `${cursorVisual.column * metrics.charWidth}px`;
+      caret.style.left = `${cursorLine.col * metrics.charWidth}px`;
       caret.style.top = `${caretTop}px`;
       caret.style.height = `${caretHeight}px`;
       view.content.append(caret);
@@ -2341,14 +2421,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     renderedViewport = nextViewport;
     rowViews = [];
+    const layout = buildLayoutModelForViewport(renderedViewport);
     topSpacer.style.height = `${renderedViewport.fromLine * metrics.lineHeight}px`;
-    bottomSpacer.style.height = `${Math.max(0, visualRows.length - renderedViewport.toLine - 1) * metrics.lineHeight}px`;
+    bottomSpacer.style.height = `${Math.max(0, layout.document.totalVisualRows - renderedViewport.toLine - 1) * metrics.lineHeight}px`;
 
     const fragment = document.createDocumentFragment();
 
-    for (let visualRowIndex = renderedViewport.fromLine; visualRowIndex <= renderedViewport.toLine; visualRowIndex += 1) {
-      const view = createRowView(visualRowIndex);
-      patchRowView(view, visualRowIndex);
+    for (const row of layout.document.rows) {
+      const view = createRowView(row.visualRowIndex);
+      patchRowView(view, row.visualRowIndex);
       rowViews.push(view);
       fragment.append(view.host);
     }
@@ -2381,44 +2462,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     viewportRows.replaceChildren(fragment);
   }
 
-  function patchVisibleLines(lines: Iterable<number>): void {
-    const seen = new Set<number>();
-
-    for (const lineIndex of lines) {
-      if (seen.has(lineIndex) || !isDocLineVisible(lineIndex)) {
-        continue;
-      }
-
-      seen.add(lineIndex);
-
-      for (const view of rowViews) {
-        const visualRow = getVisualRow(view.visualRowIndex);
-        if (visualRow.docLine === lineIndex) {
-          patchRowView(view, view.visualRowIndex);
-        }
-      }
-    }
+  function patchVisibleLines(_lines: Iterable<number>): void {
+    renderVisibleRows(true);
   }
 
   function patchStatus(): void {
-    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const cursorPosition = state.doc.positionAt(activeOffset);
-    const { errors, warnings } = getDiagnosticsSummary();
-    const parts = ["1 sel"];
-
-    if (errors > 0) {
-      parts.push(`E${errors}`);
-    }
-
-    if (warnings > 0) {
-      parts.push(`W${warnings}`);
-    }
-
-    parts.push(`${cursorPosition.line + 1}:${cursorPosition.column + 1}`);
-
-    statusMode.textContent = state.mode === "insert" ? "INS" : state.mode === "visual" ? "VIS" : "NOR";
-    statusFile.textContent = filePath;
-    statusMeta.textContent = parts.join("   ");
+    const layout = getRenderedLayout();
+    statusMode.textContent = layout.statusBar.find((run) => run.part === "status-mode")?.text ?? "";
+    statusFile.textContent = layout.statusBar.find((run) => run.part === "status-file")?.text ?? "";
+    statusMeta.textContent = layout.statusBar.find((run) => run.part === "status-meta")?.text ?? "";
   }
 
   function getViewportContext() {
@@ -2430,42 +2482,47 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function patchBottomRow(): void {
-    bottomRow.dataset.active = String(commandLine.active || pickerState.active || !!bottomMessage || !!pendingAction);
+    const layout = getRenderedLayout();
+    bottomRow.dataset.active = String(layout.bottomBar.active);
     bottomRow.replaceChildren();
+    const promptRun = layout.bottomBar.runs.find((run) => run.part === "command-prompt");
+    const commandTextRun = layout.bottomBar.runs.find((run) => run.part === "command-text");
+    const pickerRuns = layout.bottomBar.runs.filter((run) => run.part === "code-action");
+    const pickerMessage = layout.bottomBar.runs.find((run) => run.part === "picker-loading" || run.part === "picker-error");
+    const messageRun = layout.bottomBar.runs.find((run) => run.part === "bottom-message");
+    const prefixRun = layout.bottomBar.runs.find((run) => run.part === "prefix-hint");
 
-    if (commandLine.active) {
+    if (promptRun) {
       const prompt = document.createElement("span");
       const value = document.createElement("span");
 
       prompt.className = "wx-editor__command-prompt";
       prompt.dataset.wxEditorCommandPrompt = "true";
-      prompt.textContent = commandLine.prompt;
+      prompt.textContent = promptRun.text;
 
       value.className = "wx-editor__command-text";
       value.dataset.wxEditorCommandText = "true";
-      value.textContent = commandLine.value;
+      value.textContent = commandTextRun?.text ?? "";
 
       bottomRow.append(prompt, value);
       return;
     }
 
-    if (pickerState.active) {
+    if (pickerRuns.length > 0 || pickerMessage) {
       const actions = document.createElement("div");
       actions.className = "wx-editor__code-actions";
       actions.dataset.wxEditorCodeActions = "true";
       actions.dataset.wxEditorPicker = "true";
 
-      if (pickerState.loading) {
-        actions.textContent = `Loading ${pickerState.title}...`;
-      } else if (pickerState.error) {
-        actions.textContent = pickerState.error;
+      if (pickerMessage) {
+        actions.textContent = pickerMessage.text;
       } else {
-        pickerState.items.slice(0, 9).forEach((entry, index) => {
+        pickerRuns.forEach((entry, index) => {
           const pickerItem = document.createElement("span");
           pickerItem.className = "wx-editor__code-action";
-          pickerItem.dataset.selected = String(index === pickerState.selectedIndex);
+          pickerItem.dataset.selected = String(!!entry.selectedInPicker);
           pickerItem.dataset.wxEditorCodeAction = String(index + 1);
-          pickerItem.textContent = `${index + 1}:${entry.label}`;
+          pickerItem.textContent = entry.text;
           actions.append(pickerItem);
         });
       }
@@ -2474,68 +2531,30 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    if (bottomMessage) {
+    if (messageRun) {
       const message = document.createElement("span");
       message.className = "wx-editor__bottom-message";
-      message.dataset.tone = bottomMessage.tone;
+      message.dataset.tone = messageRun.tone ?? "info";
       message.dataset.wxEditorBottomMessage = "true";
-      message.textContent = bottomMessage.text;
+      message.textContent = messageRun.text;
       bottomRow.append(message);
       return;
     }
 
-    if (flashState.active) {
+    if (prefixRun) {
       const prefix = document.createElement("span");
       prefix.className = "wx-editor__prefix-hint";
-      prefix.dataset.wxEditorPrefixHint = "flash";
-      prefix.textContent = flashState.input
-        ? `,${flashState.target} ${flashState.input}`
-        : `,${flashState.target}`;
-      bottomRow.append(prefix);
-      return;
-    }
-
-    if (pendingAction?.kind === "flash-target") {
-      const prefix = document.createElement("span");
-      prefix.className = "wx-editor__prefix-hint";
-      prefix.dataset.wxEditorPrefixHint = "flash-target";
-      prefix.textContent = ",";
-      bottomRow.append(prefix);
-      return;
-    }
-
-    if (pendingAction?.kind === "space") {
-      const prefix = document.createElement("span");
-      prefix.className = "wx-editor__prefix-hint";
-      prefix.dataset.wxEditorPrefixHint = "space";
-      prefix.textContent = "<space>";
-      bottomRow.append(prefix);
-      return;
-    }
-
-    if (pendingAction?.kind === "g" || pendingAction?.kind === "[" || pendingAction?.kind === "]" || pendingAction?.kind === "m") {
-      const prefix = document.createElement("span");
-      prefix.className = "wx-editor__prefix-hint";
-      prefix.dataset.wxEditorPrefixHint = pendingAction.kind;
-      prefix.textContent = pendingAction.kind;
-      bottomRow.append(prefix);
-      return;
-    }
-
-    if (pendingAction?.kind === "z") {
-      const prefix = document.createElement("span");
-      prefix.className = "wx-editor__prefix-hint";
-      prefix.dataset.wxEditorPrefixHint = pendingAction.sticky ? "Z" : "z";
-      prefix.textContent = pendingAction.sticky ? "Z" : "z";
-      bottomRow.append(prefix);
-      return;
-    }
-
-    if (pendingCount) {
-      const prefix = document.createElement("span");
-      prefix.className = "wx-editor__prefix-hint";
-      prefix.dataset.wxEditorPrefixHint = "count";
-      prefix.textContent = pendingCount;
+      prefix.dataset.wxEditorPrefixHint =
+        flashState.active
+          ? "flash"
+          : pendingAction?.kind === "flash-target"
+            ? "flash-target"
+            : pendingAction?.kind === "space"
+              ? "space"
+              : pendingAction?.kind === "z"
+                ? (pendingAction.sticky ? "Z" : "z")
+                : pendingAction?.kind ?? (pendingCount ? "count" : "prefix");
+      prefix.textContent = prefixRun.text;
       bottomRow.append(prefix);
       return;
     }
@@ -3020,28 +3039,35 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function patchTooltip(): void {
-    if (!hoverState.active) {
+    const panel = getRenderedLayout().panels[0];
+
+    if (!panel) {
       tooltip.hidden = true;
       tooltip.replaceChildren();
       return;
     }
 
     tooltip.hidden = false;
-    tooltip.dataset.tone = hoverState.tone;
-    tooltip.style.left = `${hoverState.left}px`;
-    tooltip.style.top = `${hoverState.top}px`;
+    tooltip.dataset.tone = panel.tone ?? "info";
+    tooltip.style.left = `${panel.anchor.col * metrics.charWidth}px`;
+    tooltip.style.top = `${panel.anchor.row * metrics.lineHeight}px`;
     tooltip.replaceChildren();
 
-    if (hoverState.source) {
-      const source = document.createElement("span");
-      source.className = "wx-editor__tooltip-source";
-      source.textContent = hoverState.source;
-      tooltip.append(source);
-    }
+    for (const row of panel.rows) {
+      for (const run of row) {
+        if (run.part === "tooltip-source") {
+          const source = document.createElement("span");
+          source.className = "wx-editor__tooltip-source";
+          source.textContent = run.text;
+          tooltip.append(source);
+          continue;
+        }
 
-    const body = document.createElement("div");
-    body.textContent = hoverState.content;
-    tooltip.append(body);
+        const body = document.createElement("div");
+        body.textContent = run.text;
+        tooltip.append(body);
+      }
+    }
   }
 
   function setHoverState(next: HoverState): void {
@@ -3429,6 +3455,22 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return selected;
   }
 
+  async function readSystemClipboard(): Promise<string | null> {
+    const clipboard = navigator.clipboard;
+
+    if (!clipboard?.readText) {
+      setBottomMessage({ tone: "warning", text: "System clipboard is unavailable" });
+      return null;
+    }
+
+    try {
+      return await clipboard.readText();
+    } catch {
+      setBottomMessage({ tone: "error", text: "Could not read the system clipboard" });
+      return null;
+    }
+  }
+
   function primeRegisterForPaste(): void {
     const selected = consumeSelectedRegister();
 
@@ -3443,7 +3485,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   async function insertRegisterValue(name: string): Promise<boolean> {
-    const value = controller.getRegister(name);
+    const value = name === "+" ? await readSystemClipboard() : controller.getRegister(name);
     controller.selectRegister(null);
 
     if (!value) {
@@ -3452,6 +3494,40 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     return runCommand(insertText(value));
+  }
+
+  async function pasteSystemClipboard(count: number): Promise<boolean> {
+    const value = await readSystemClipboard();
+    controller.selectRegister(null);
+
+    if (!value) {
+      setBottomMessage({ tone: "warning", text: 'Register "+" is empty' });
+      return false;
+    }
+
+    controller.dispatch({
+      yankBuffer: value
+    });
+
+    let applied = false;
+
+    for (let index = 0; index < count; index += 1) {
+      const previousMode = state.mode;
+      const previousRevision = state.revision;
+      const didRun = runCommand(pasteAfter);
+
+      if (!didRun) {
+        break;
+      }
+
+      applied = true;
+
+      if (state.mode !== previousMode || state.revision === previousRevision) {
+        break;
+      }
+    }
+
+    return applied;
   }
 
   function pushCurrentJump(): boolean {
@@ -3642,6 +3718,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   function runCommandWithCount(command: Command, explicitCount?: number): boolean {
     const count = explicitCount ?? readPendingCount();
+    const selectedRegister = controller.getSelectedRegister();
+
+    if (command === pasteAfter && selectedRegister === "+") {
+      void pasteSystemClipboard(count);
+      return true;
+    }
+
     let applied = false;
 
     for (let index = 0; index < count; index += 1) {
@@ -4597,6 +4680,22 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     void refreshHighlights(getHighlightViewport(renderedViewport), false);
   }
 
+  function handlePaste(event: ClipboardEvent): void {
+    if (state.mode !== "insert" || commandLine.active || pickerState.active) {
+      return;
+    }
+
+    const pastedText = event.clipboardData?.getData("text/plain") ?? "";
+
+    if (!pastedText) {
+      return;
+    }
+
+    event.preventDefault();
+    textarea.value = "";
+    runCommand(insertText(pastedText));
+  }
+
   function handleMouseMove(event: MouseEvent): void {
     if (commandLine.active || pickerState.active) {
       return;
@@ -4659,6 +4758,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     textarea.focus();
   });
   textarea.addEventListener("keydown", handleKeydown);
+  textarea.addEventListener("paste", handlePaste);
   surface.addEventListener("wheel", handleWheel, { passive: false });
   surface.addEventListener("scroll", handleScroll);
   viewportRows.addEventListener("mousemove", handleMouseMove);

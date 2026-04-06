@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { getSelectionOffsets } from "@wx/editor-core";
 import { createEditorController } from "@wx/editor-controller";
@@ -1613,6 +1613,35 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "p", bubbles: true }));
     expect(editor.getState().doc.text).toBe("(a)b(a)c");
+  });
+
+  it('pastes from the system clipboard with "+p and Ctrl-r +', async () => {
+    const readText = vi.fn(async () => "clip");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText }
+    });
+
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "abc" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "\"", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "+", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "p", bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(editor.getState().doc.text).toBe("aclipbc");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "r", ctrlKey: true, bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "+", bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(editor.getState().doc.text).toBe("aclipclipbc");
+    expect(readText).toHaveBeenCalledTimes(2);
   });
 
   it("uses comment and syntax providers when available", async () => {
