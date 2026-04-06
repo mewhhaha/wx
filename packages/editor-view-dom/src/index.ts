@@ -247,7 +247,6 @@ const SURFACE_VERTICAL_PADDING = 16;
 const EMPTY_CELL_TEXT = "\u00a0";
 const INSERT_TAB_TEXT = "  ";
 const DEFAULT_INDENT_GUIDE_CHARACTER = "│";
-const HIGHLIGHT_CONTEXT_LINES = 2;
 const VIEWPORT_OVERSCAN_LINES = 6;
 const VERTICAL_SCROLLOFF_ROWS = 3;
 const END_OF_LINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "hint";
@@ -1642,7 +1641,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let diagnosticsByLine = languageState.diagnosticsByLine;
   let lineChangesByLine: LineChangesByLine = languageState.lineChangesByLine as LineChangesByLine;
   let pickerActions: readonly PickerItem[] = [];
-  let searchMatches: Array<{ from: number; to: number }> = [];
   let flashState: FlashState = uiState.flash as FlashState;
   let pendingAction: PendingAction = uiState.pendingAction;
   let pendingCount = uiState.pendingCount;
@@ -1701,6 +1699,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     syncViewportMirrors();
     syncLanguageMirrors();
     syncUiMirrors();
+    currentLayoutModel = null;
   }
 
   syncPresentationMirrors();
@@ -1708,51 +1707,61 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function setCommandLineState(next: CommandLineState): void {
     commandLine = next;
     uiState.commandLine = next;
+    currentLayoutModel = null;
   }
 
   function setBottomMessageState(next: BottomMessageState | null): void {
     bottomMessage = next;
     uiState.bottomMessage = next;
+    currentLayoutModel = null;
   }
 
   function setHoverPresentation(next: HoverState): void {
     hoverState = next;
     uiState.hover = next;
+    currentLayoutModel = null;
   }
 
   function setFlashPresentation(next: FlashState): void {
     flashState = next;
     uiState.flash = next;
+    currentLayoutModel = null;
   }
 
   function setPendingActionState(next: PendingAction): void {
     pendingAction = next;
     uiState.pendingAction = next;
+    currentLayoutModel = null;
   }
 
   function setPendingCountState(next: string): void {
     pendingCount = next;
     uiState.pendingCount = next;
+    currentLayoutModel = null;
   }
 
   function setStickyViewModeState(next: boolean): void {
     stickyViewMode = next;
     uiState.stickyViewMode = next;
+    currentLayoutModel = null;
   }
 
   function setCommandCompletionIndexState(next: number): void {
     commandCompletionIndex = next;
     uiState.commandCompletionIndex = next;
+    currentLayoutModel = null;
   }
 
   function setLastRepeatableMotionState(next: RepeatableMotion | null): void {
     lastRepeatableMotion = next;
     uiState.lastRepeatableMotion = next;
+    currentLayoutModel = null;
   }
 
   function setPreviewThemeState(next: ThemeSpec | null): void {
     previewTheme = next;
     uiState.previewTheme = next?.name ?? null;
+    currentLayoutModel = null;
   }
 
   function setPickerPresentation(next: PickerState): void {
@@ -1769,6 +1778,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       selectedIndex: next.selectedIndex,
       error: next.error
     };
+    currentLayoutModel = null;
   }
 
   const getHighlighter = () => languageServices.find((services) => services.highlighter)?.highlighter;
@@ -1782,6 +1792,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   const getSyntaxNavigationProvider = () => languageServices.find((services) => services.syntaxNavigation)?.syntaxNavigation;
 
   function buildLayoutModelForViewport(_viewport: LineViewport): EditorLayoutModel {
+    if (currentLayoutModel) {
+      return currentLayoutModel;
+    }
+
     const model = buildEditorLayout({
       state,
       presentation,
@@ -1792,12 +1806,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       indentGuides
     });
 
-    visualRows = [...model.document.visualRows] as VisualRow[];
-    lineVisualRanges = [...model.document.lineVisualRanges];
-    viewportState.visualRows = visualRows;
-    viewportState.lineVisualRanges = lineVisualRanges;
-    viewportState.wrapColumns = wrapColumns;
-    viewportState.wrapRevision = wrapRevision;
     currentLayoutModel = model;
     return model;
   }
@@ -1814,18 +1822,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         return;
       }
       refreshGutterWidth(true);
-      updateVisibleLineCapacity(true);
+      refreshViewportMetricsIfNeeded(true);
       revealCursor();
-      const previousViewport = renderedViewport;
       renderVisibleRows(true);
-      if (!viewportEquals(previousViewport, renderedViewport)) {
-        requestLanguageRefresh({
-          highlightViewport: getHighlightViewport(renderedViewport),
-          refreshHighlights: true,
-          refreshDiagnostics: false,
-          refreshLineChanges: false
-        });
-      }
     });
   }
 
@@ -1955,28 +1954,41 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return Math.max(1, Math.floor(contentWidth / metrics.charWidth));
   }
 
-  function rebuildVisualRows(force = false): boolean {
+  function measureVisibleLineCapacity(): number {
+    const viewportHeight = Math.max(
+      metrics.lineHeight,
+      (surface.clientHeight || metrics.lineHeight * 20) - SURFACE_VERTICAL_PADDING * 2
+    );
+    return Math.max(1, Math.ceil(viewportHeight / metrics.lineHeight));
+  }
+
+  function syncMeasuredViewportMetrics(force = false): boolean {
+    const nextVisibleLineCapacity = measureVisibleLineCapacity();
     const nextWrapColumns = getContentColumns();
 
-    if (!force && wrapRevision === state.revision && wrapColumns === nextWrapColumns && visualRows.length > 0) {
+    if (
+      !force &&
+      nextVisibleLineCapacity === visibleLineCapacity &&
+      nextWrapColumns === wrapColumns &&
+      viewportState.softWrap === softWrap
+    ) {
       return false;
     }
 
-    wrapColumns = nextWrapColumns;
-    wrapRevision = state.revision;
-    viewportState.softWrap = softWrap;
-    viewportState.wrapColumns = wrapColumns;
-    viewportState.wrapRevision = wrapRevision;
-    buildLayoutModelForViewport(
-      renderedViewport.toLine >= renderedViewport.fromLine
-        ? renderedViewport
-        : {
-            fromLine: 0,
-            toLine: Math.max(0, getVisibleLineCapacity() - 1)
-          }
-    );
-
+    controller.setViewportMetrics({
+      visibleRowCapacity: nextVisibleLineCapacity,
+      wrapColumns: nextWrapColumns,
+      softWrap
+    });
     return true;
+  }
+
+  function refreshViewportMetricsIfNeeded(force = false): boolean {
+    const changed = syncMeasuredViewportMetrics(force);
+    if (changed) {
+      syncPresentationMirrors();
+    }
+    return changed;
   }
 
   function getVisualRow(visualRowIndex: number): VisualRow {
@@ -2007,17 +2019,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       {
         fromLine: fromRow.docLine,
         toLine: toRow.docLine
-      },
-      state.doc.lineCount
-    );
-  }
-
-  function getHighlightViewport(viewport: LineViewport): LineViewport {
-    const lineViewport = getLineViewportForVisualViewport(viewport);
-    return normalizeViewport(
-      {
-        fromLine: lineViewport.fromLine - HIGHLIGHT_CONTEXT_LINES,
-        toLine: lineViewport.toLine + HIGHLIGHT_CONTEXT_LINES
       },
       state.doc.lineCount
     );
@@ -2143,12 +2144,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return selectDiagnostic(entries, END_OF_LINE_DIAGNOSTIC_MIN, getInlineDiagnosticForLine(lineIndex));
   }
 
-  function getLineSearchMatches(lineIndex: number): Array<{ from: number; to: number }> {
-    const line = state.doc.lineAt(lineIndex);
-    const lineEnd = line.start + line.text.length;
-    return searchMatches.filter((entry) => entry.from < lineEnd && entry.to > line.start);
-  }
-
   function isFlashJumpOffset(offset: number, target: string): boolean {
     const character = state.doc.text[offset] ?? "";
 
@@ -2177,7 +2172,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function collectVisibleFlashHints(target: string): readonly FlashHint[] {
-    rebuildVisualRows();
     const viewport = getVisibleViewport();
     const offsets: number[] = [];
 
@@ -2321,14 +2315,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     );
   }
 
-  function patchRowView(view: RowView, visualRowIndex: number): void {
-    const layout = currentLayoutModel ?? getRenderedLayout();
-    const layoutRow = layout.document.rows.find((row) => row.visualRowIndex === visualRowIndex);
-
-    if (!layoutRow) {
-      return;
-    }
-
+  function patchRowView(view: RowView, layoutRow: EditorLayoutModel["document"]["rows"][number]): void {
+    const visualRowIndex = layoutRow.visualRowIndex;
     const lineIndex = layoutRow.docLine;
     const gutterMarker = document.createElement("span");
     const gutterNumber = document.createElement("span");
@@ -2470,7 +2458,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function getVisibleViewport(): LineViewport {
-    rebuildVisualRows();
     const lineCount = Math.max(1, visualRows.length);
     const fromLine = Math.max(0, Math.min(lineCount - 1, anchoredTopVisualRow));
     const toLine = Math.min(lineCount - 1, fromLine + visibleLineCapacity - 1);
@@ -2493,53 +2480,58 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     viewportState.topVisualRow = anchoredTopVisualRow;
   }
 
-  function updateVisibleLineCapacity(force = false): boolean {
-    const viewportHeight = Math.max(
-      metrics.lineHeight,
-      (surface.clientHeight || metrics.lineHeight * 20) - SURFACE_VERTICAL_PADDING * 2
-    );
-    const nextCapacity = Math.max(1, Math.ceil(viewportHeight / metrics.lineHeight));
-
-    if (!force && nextCapacity === visibleLineCapacity) {
-      return false;
-    }
-
-    visibleLineCapacity = nextCapacity;
-    viewportState.visibleRowCapacity = nextCapacity;
-    setAnchoredTopVisualRow(anchoredTopVisualRow);
-    return true;
-  }
-
   function renderVisibleRows(force = false): void {
-    const wrapChanged = rebuildVisualRows();
-    if (wrapChanged) {
-      force = true;
-    }
     const visibleViewport = getVisibleViewport();
 
     if (
       !force &&
-      viewportEquals(visibleViewport, renderedViewport)
+      viewportEquals(visibleViewport, renderedViewport) &&
+      currentLayoutModel
     ) {
       return;
     }
 
     renderedViewport = visibleViewport;
-    rowViews = [];
     const layout = buildLayoutModelForViewport(renderedViewport);
+    const nextRows = layout.document.rows;
+    const nextFillerCount = Math.max(0, getVisibleLineCapacity() - nextRows.length);
 
+    if (rowViews.length === nextRows.length && viewportRows.children.length === nextRows.length + nextFillerCount) {
+      for (let index = 0; index < nextRows.length; index += 1) {
+        const view = rowViews[index];
+        const layoutRow = nextRows[index];
+        if (!view || !layoutRow) {
+          force = true;
+          break;
+        }
+        patchRowView(view, layoutRow);
+      }
+      if (!force) {
+        let fillerIndex = 0;
+        for (let index = nextRows.length; index < viewportRows.children.length; index += 1) {
+          const fillerRow = viewportRows.children[index] as HTMLDivElement;
+          const fillerNumber = fillerRow.querySelector(".wx-editor__gutter-number");
+          if (fillerNumber) {
+            fillerNumber.textContent = fillerIndex === 0 ? "~" : " ";
+          }
+          fillerRow.dataset.wxEditorFillerRow = String(fillerIndex);
+          fillerIndex += 1;
+        }
+        return;
+      }
+    }
+
+    rowViews = [];
     const fragment = document.createDocumentFragment();
 
-    for (const row of layout.document.rows) {
+    for (const row of nextRows) {
       const view = createRowView(row.visualRowIndex);
-      patchRowView(view, row.visualRowIndex);
+      patchRowView(view, row);
       rowViews.push(view);
       fragment.append(view.host);
     }
 
-    const fillerCount = Math.max(0, getVisibleLineCapacity() - rowViews.length);
-
-    for (let index = 0; index < fillerCount; index += 1) {
+    for (let index = 0; index < nextFillerCount; index += 1) {
       const fillerRow = document.createElement("div");
       const fillerGutter = document.createElement("div");
       const fillerMarker = document.createElement("span");
@@ -2563,10 +2555,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     viewportRows.replaceChildren(fragment);
-  }
-
-  function patchVisibleLines(_lines: Iterable<number>): void {
-    renderVisibleRows(true);
   }
 
   function patchStatus(): void {
@@ -2666,17 +2654,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     bottomRow.textContent = " ";
   }
 
-  function requestLanguageRefresh(options: {
-    changes?: readonly TextChange[];
-    forceDocumentSync?: boolean;
-    highlightViewport?: { fromLine: number; toLine: number };
-    refreshHighlights?: boolean;
-    refreshDiagnostics?: boolean;
-    refreshLineChanges?: boolean;
-  }): void {
-    void controller.refreshLanguage(options);
-  }
-
   function handleControllerUpdate(update: EditorUpdate): void {
     const previousState = update.prevState;
     const nextState = update.nextState;
@@ -2690,22 +2667,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     syncPresentationMirrors();
 
     if (isPresentationOnlyUpdate) {
-      const previousViewport = renderedViewport;
+      renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
-      renderVisibleRows(true);
-      if (
-        !viewportEquals(previousViewport, renderedViewport) &&
-        languageRevision >= 0 &&
-        languageRevision === state.revision
-      ) {
-        requestLanguageRefresh({
-          highlightViewport: getHighlightViewport(renderedViewport),
-          refreshHighlights: true,
-          refreshDiagnostics: false,
-          refreshLineChanges: false
-        });
-      }
       return;
     }
 
@@ -2713,60 +2677,31 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       if (flashState.active) {
         setFlashPresentation({ active: false, target: "", input: "", hints: [] });
       }
-      refreshSearchMatches();
       invalidateHover();
 
       if (previousDigits !== nextDigits) {
         refreshGutterWidth(true);
+        if (refreshViewportMetricsIfNeeded(true)) {
+          return;
+        }
       }
 
-      updateVisibleLineCapacity();
+      renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
-      revealCursor();
-      const previousViewport = renderedViewport;
-      renderVisibleRows(true);
-      if (!viewportEquals(previousViewport, renderedViewport)) {
-        requestLanguageRefresh({
-          highlightViewport: getHighlightViewport(renderedViewport),
-          refreshHighlights: true,
-          refreshDiagnostics: false,
-          refreshLineChanges: false
-        });
-      }
-      requestLanguageRefresh({
-        changes,
-        forceDocumentSync: changes.length === 0,
-        highlightViewport: getHighlightViewport(renderedViewport),
-        refreshHighlights: true,
-        refreshDiagnostics: true,
-        refreshLineChanges: true
-      });
       return;
     }
 
     if (previousDigits !== nextDigits) {
       refreshGutterWidth(true);
+      if (refreshViewportMetricsIfNeeded(true)) {
+        return;
+      }
     }
 
-    updateVisibleLineCapacity();
+    renderVisibleRows(true);
     patchStatus();
     patchBottomRow();
-    revealCursor();
-    const previousViewport = renderedViewport;
-    renderVisibleRows();
-    if (!viewportEquals(previousViewport, renderedViewport)) {
-      requestLanguageRefresh({
-        highlightViewport: getHighlightViewport(renderedViewport),
-        refreshHighlights: true,
-        refreshDiagnostics: false,
-        refreshLineChanges: false
-      });
-    }
-
-    if (viewportEquals(previousViewport, renderedViewport)) {
-      patchVisibleLines(getVisualDirtyLines(previousState, nextState));
-    }
   }
 
   function openCommandLine(prompt: ":" | "/" | "?" = ":"): void {
@@ -3329,16 +3264,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     controller.setFilePath(targetFilePath);
     patchStatus();
     setBottomMessage({ tone: "info", text: `Wrote ${targetFilePath}` });
-    requestLanguageRefresh({
-      refreshHighlights: false,
-      refreshDiagnostics: false,
-      refreshLineChanges: true
-    });
     return true;
-  }
-
-  function refreshSearchMatches(): void {
-    searchMatches = collectSearchMatches(state.doc.text, controller.getSearchState().query);
   }
 
   function applySelectionRange(from: number, to: number): boolean {
@@ -3366,7 +3292,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       direction,
       lastMatch: null
     });
-    refreshSearchMatches();
 
     if (nextMatches.length === 0) {
       setBottomMessage({ tone: "warning", text: `No matches for ${query}` });
@@ -3685,7 +3610,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function moveByVisualRows(delta: number): boolean {
-    rebuildVisualRows();
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
     const current = getVisualRowForOffset(activeOffset);
     const preferredColumn = state.selection.ranges[state.selection.primaryIndex]?.preferredColumn ?? current.column;
@@ -3700,7 +3624,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function gotoVisibleRow(position: "top" | "center" | "bottom"): boolean {
-    rebuildVisualRows();
     const viewport = getVisibleViewport();
     const targetRowIndex =
       position === "top"
@@ -3892,34 +3815,16 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return true;
     }
 
-    const previousViewport = renderedViewport;
     controller.scrollViewportBy(rowsDelta);
     syncViewportMirrors();
     renderVisibleRows();
-    if (!viewportEquals(previousViewport, renderedViewport)) {
-      requestLanguageRefresh({
-        highlightViewport: getHighlightViewport(renderedViewport),
-        refreshHighlights: true,
-        refreshDiagnostics: false,
-        refreshLineChanges: false
-      });
-    }
     return true;
   }
 
   function alignViewportToCursor(position: "top" | "center" | "bottom"): boolean {
-    const previousViewport = renderedViewport;
     controller.alignViewportToSelection(position);
     syncViewportMirrors();
     renderVisibleRows();
-    if (!viewportEquals(previousViewport, renderedViewport)) {
-      requestLanguageRefresh({
-        highlightViewport: getHighlightViewport(renderedViewport),
-        refreshHighlights: true,
-        refreshDiagnostics: false,
-        refreshLineChanges: false
-      });
-    }
     return true;
   }
 
@@ -4009,9 +3914,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    refreshGutterWidth();
-    updateVisibleLineCapacity();
-    rebuildVisualRows();
+    refreshViewportMetricsIfNeeded();
 
     if (flashState.active) {
       const handled = handleFlashInput(event.key);
@@ -4790,38 +4693,20 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   unsubscribeController = controller.subscribe(handleControllerUpdate);
 
   refreshGutterWidth(true);
-  updateVisibleLineCapacity(true);
-  refreshSearchMatches();
+  refreshViewportMetricsIfNeeded(true);
   revealCursor();
   renderVisibleRows(true);
   patchStatus();
   patchBottomRow();
   schedulePostMountReveal();
-  requestLanguageRefresh({
-    forceDocumentSync: true,
-    highlightViewport: getHighlightViewport(renderedViewport),
-    refreshHighlights: true,
-    refreshDiagnostics: true,
-    refreshLineChanges: true
-  });
 
   if (typeof ResizeObserver !== "undefined") {
     resizeObserver = new ResizeObserver(() => {
       refreshGutterWidth(true);
-      const capacityChanged = updateVisibleLineCapacity();
-      if (capacityChanged) {
-        revealCursor();
+      if (refreshViewportMetricsIfNeeded()) {
+        return;
       }
-      const previousViewport = renderedViewport;
       renderVisibleRows(true);
-      if (!viewportEquals(previousViewport, renderedViewport)) {
-        requestLanguageRefresh({
-          highlightViewport: getHighlightViewport(renderedViewport),
-          refreshHighlights: true,
-          refreshDiagnostics: false,
-          refreshLineChanges: false
-        });
-      }
     });
     resizeObserver.observe(surface);
   }
@@ -4832,7 +4717,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       mountedContainer = nextContainer;
       mountedContainer.replaceChildren(root);
       refreshGutterWidth(true);
-      updateVisibleLineCapacity(true);
+      refreshViewportMetricsIfNeeded(true);
       revealCursor();
       renderVisibleRows(true);
       patchStatus();
@@ -4875,11 +4760,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       filePath = nextFilePath;
       controller.setFilePath(nextFilePath);
       patchStatus();
-      requestLanguageRefresh({
-        refreshHighlights: false,
-        refreshDiagnostics: false,
-        refreshLineChanges: true
-      });
     },
     async setLanguageServices(nextLanguageServices: EditorLanguageServiceInput | null) {
       for (const services of languageServices) {
@@ -4888,17 +4768,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       languageServices = normalizeLanguageServices(nextLanguageServices);
       controller.setLanguageServices(languageServices);
       syncLanguageMirrors();
-      refreshSearchMatches();
       renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
-      await controller.refreshLanguage({
-        forceDocumentSync: true,
-        highlightViewport: getHighlightViewport(renderedViewport),
-        refreshHighlights: true,
-        refreshDiagnostics: true,
-        refreshLineChanges: false
-      });
     },
     async setLanguage(nextLanguage: LanguageProvider | null) {
       await this.setLanguageServices(languageProviderToServices(nextLanguage));
@@ -4912,17 +4784,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       patchBottomRow();
     },
     async setValue(value: string) {
-      refreshSearchMatches();
       setAnchoredTopVisualRow(0);
       controller.replaceState(createEditorState({ value, selection: createSelection(0, 0) }));
       syncLanguageMirrors();
-      await controller.refreshLanguage({
-        forceDocumentSync: true,
-        highlightViewport: getHighlightViewport(renderedViewport),
-        refreshHighlights: true,
-        refreshDiagnostics: true,
-        refreshLineChanges: false
-      });
     }
   };
 }

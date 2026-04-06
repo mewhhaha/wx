@@ -785,19 +785,13 @@ function splitPanelRows(token: "tooltip" | "tooltip-source", text: string, part:
 }
 
 export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
-  const { visualRows, lineVisualRanges } = buildVisualRows({
-    state: input.state,
-    viewport: {
-      cols: input.presentation.viewport.wrapColumns,
-      rows: input.presentation.viewport.visibleRowCapacity,
-      topVisualRow: input.presentation.viewport.topVisualRow
-    },
-    softWrap: input.presentation.viewport.softWrap
-  });
-  const highlightCache = buildHighlightCache(input.state, input.presentation.language.visibleHighlights);
-  const diagnosticsByLine = buildDiagnosticsCache(input.state, input.presentation.language.visibleDiagnostics);
-  const lineChangesByLine = buildLineChangesMap(input.presentation.language.visibleLineChanges);
-  const searchMatches = collectSearchMatches(input.state.doc.text, input.presentation.search.query);
+  const visualRows = input.presentation.viewport.visualRows;
+  const visibleVisualRows = input.presentation.viewport.visibleVisualRows;
+  const lineVisualRanges = input.presentation.viewport.lineVisualRanges;
+  const highlightCache = input.presentation.language.highlightCache;
+  const diagnosticsByLine = input.presentation.language.diagnosticsByLine;
+  const lineChangesByLine = input.presentation.language.lineChangesByLine;
+  const searchMatchesByLine = input.presentation.search.visibleMatchesByLine;
   const activeOffset = getActiveOffset(input.state);
   const activeRow = getVisualRowForOffset(
     input.state,
@@ -807,28 +801,14 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
     input.presentation.viewport.softWrap,
     input.presentation.viewport.softWrap ? Math.max(1, input.presentation.viewport.wrapColumns) : Number.MAX_SAFE_INTEGER
   );
-  const visibleRange = normalizeViewport(
-    {
-      fromLine: input.presentation.viewport.topVisualRow,
-      toLine:
-        input.presentation.viewport.topVisualRow +
-        Math.max(0, input.presentation.viewport.visibleRowCapacity - 1)
-    },
-    Math.max(1, visualRows.length)
-  );
-
   const rows: EditorLayoutRow[] = [];
 
-  for (let visualRowIndex = visibleRange.fromLine; visualRowIndex <= visibleRange.toLine; visualRowIndex += 1) {
-    const visualRow = visualRows[visualRowIndex];
-
-    if (!visualRow) {
-      continue;
-    }
+  for (const visualRow of visibleVisualRows) {
+    const visualRowIndex = visualRow.visualRowIndex;
 
     const lineIndex = visualRow.docLine;
     const lineDiagnostics = diagnosticsByLine.get(lineIndex) ?? [];
-    const lineSearchMatches = getLineSearchMatches(lineIndex, input.state, searchMatches);
+    const lineSearchMatches = searchMatchesByLine.get(lineIndex) ?? [];
     const lineDiagnosticSeverity = visualRow.isContinuation ? null : getLineDiagnosticSeverity(lineDiagnostics);
     const lineChangeState = visualRow.isContinuation
       ? { kind: null, deleted: false }
@@ -1131,8 +1111,10 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
     document: {
       totalVisualRows: Math.max(1, visualRows.length),
       visibleRange: {
-        fromVisualRow: visibleRange.fromLine,
-        toVisualRow: visibleRange.toLine
+        fromVisualRow: visibleVisualRows[0]?.visualRowIndex ?? input.presentation.viewport.topVisualRow,
+        toVisualRow:
+          visibleVisualRows[visibleVisualRows.length - 1]?.visualRowIndex ??
+          Math.max(0, input.presentation.viewport.topVisualRow + visibleVisualRows.length - 1)
       },
       rows,
       visualRows,

@@ -101,46 +101,38 @@ describe("editor controller", () => {
   });
 
   it("stores visible highlight slices in the controller presentation state", async () => {
+    const lines = [
+      { from: 0, to: 5, role: "keyword" as const },
+      { from: 6, to: 10, role: "keyword" as const }
+    ];
     const highlighter = {
       open: vi.fn(async () => {}),
       update: vi.fn(async () => {}),
       getHighlights: vi.fn(async (viewport: { fromLine: number; toLine: number }) => {
-        if (viewport.fromLine === 0) {
-          return [{ from: 0, to: 5, role: "keyword" as const }];
-        }
-
-        return [{ from: 6, to: 10, role: "keyword" as const }];
+        return lines.slice(viewport.fromLine, viewport.toLine + 1);
       })
     };
     const controller = createEditorController({ value: "alpha\nbeta" });
 
     controller.setLanguageServices([{ highlighter }]);
     controller.setViewportMetrics({ visibleRowCapacity: 1, wrapColumns: 80, softWrap: false });
-    await controller.refreshLanguage({
-      forceDocumentSync: true,
-      highlightViewport: { fromLine: 0, toLine: 0 },
-      refreshDiagnostics: false,
-      refreshLineChanges: false
-    });
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(controller.getPresentationState().language.visibleHighlights).toEqual([
       { from: 0, to: 5, role: "keyword" }
     ]);
 
     controller.scrollViewportBy(1);
-    expect(controller.getPresentationState().language.visibleHighlights).toEqual([]);
-
-    await controller.refreshLanguage({
-      highlightViewport: { fromLine: 1, toLine: 1 },
-      refreshDiagnostics: false,
-      refreshLineChanges: false
-    });
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(controller.getPresentationState().language.visibleHighlights).toEqual([
       { from: 6, to: 10, role: "keyword" }
     ]);
     expect(highlighter.open).toHaveBeenCalledTimes(1);
     expect(highlighter.update).not.toHaveBeenCalled();
+    expect(highlighter.getHighlights).toHaveBeenCalledTimes(1);
   });
 
   it("does not resync the language document for cursor-only movement", async () => {

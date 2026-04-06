@@ -5,23 +5,122 @@ import { describe, expect, it } from "vitest";
 
 import { createEditorState, createSelection } from "../../editor-core/src/index";
 
-import { buildEditorLayout, buildFlashLabels } from "./index";
+import { buildEditorLayout, buildFlashLabels, buildVisualRows } from "./index";
+
+function collectSearchMatches(text: string, query: string): Array<{ from: number; to: number }> {
+  if (!query) {
+    return [];
+  }
+
+  const pattern = new RegExp(query, "gu");
+  const matches: Array<{ from: number; to: number }> = [];
+  let result = pattern.exec(text);
+
+  while (result) {
+    const matchedText = result[0] ?? "";
+    matches.push({ from: result.index, to: result.index + Math.max(1, matchedText.length) });
+
+    if (matchedText.length === 0) {
+      pattern.lastIndex = result.index + 1;
+    }
+
+    result = pattern.exec(text);
+  }
+
+  return matches;
+}
+
+function buildVisibleSearchMatchesByLine(
+  state: ReturnType<typeof createEditorState>,
+  matches: readonly { from: number; to: number }[],
+  fromLine = 0,
+  toLine = state.doc.lineCount - 1
+): Map<number, { from: number; to: number }[]> {
+  const next = new Map<number, { from: number; to: number }[]>();
+
+  for (const match of matches) {
+    const startLine = state.doc.positionAt(match.from).line;
+    const endLine = state.doc.positionAt(Math.max(match.from, match.to - 1)).line;
+
+    if (endLine < fromLine || startLine > toLine) {
+      continue;
+    }
+
+    for (let line = Math.max(fromLine, startLine); line <= Math.min(toLine, endLine); line += 1) {
+      const entry = next.get(line);
+      if (entry) {
+        entry.push(match);
+      } else {
+        next.set(line, [match]);
+      }
+    }
+  }
+
+  return next;
+}
+
+function withViewport<T extends ReturnType<typeof createInput>>(
+  input: T,
+  overrides: Partial<T["presentation"]["viewport"]>
+): T {
+  const viewport = {
+    ...input.presentation.viewport,
+    ...overrides
+  };
+  const { visualRows, lineVisualRanges } = buildVisualRows({
+    state: input.state,
+    viewport: {
+      cols: viewport.wrapColumns,
+      rows: viewport.visibleRowCapacity,
+      topVisualRow: viewport.topVisualRow
+    },
+    softWrap: viewport.softWrap
+  });
+
+  return {
+    ...input,
+    presentation: {
+      ...input.presentation,
+      viewport: {
+        ...viewport,
+        visualRows,
+        visibleVisualRows: visualRows.slice(viewport.topVisualRow, viewport.topVisualRow + viewport.visibleRowCapacity),
+        lineVisualRanges,
+        wrapRevision: input.state.revision
+      }
+    }
+  };
+}
 
 function createInput(value: string) {
+  const state = createEditorState({ value });
+  const viewport = {
+    topVisualRow: 0,
+    visibleRowCapacity: 12,
+    scrolloffRows: 3,
+    wrapColumns: 8,
+    softWrap: false
+  };
+  const { visualRows, lineVisualRanges } = buildVisualRows({
+    state,
+    viewport: {
+      cols: viewport.wrapColumns,
+      rows: viewport.visibleRowCapacity,
+      topVisualRow: viewport.topVisualRow
+    },
+    softWrap: viewport.softWrap
+  });
   return {
-    state: createEditorState({ value }),
+    state,
     presentation: {
       filePath: "examples/test.ts",
       themeName: null,
       viewport: {
-        topVisualRow: 0,
-        visibleRowCapacity: 12,
-        scrolloffRows: 3,
-        wrapColumns: 8,
-        softWrap: false,
-        visualRows: [],
-        lineVisualRanges: [],
-        wrapRevision: -1
+        ...viewport,
+        visualRows,
+        visibleVisualRows: visualRows.slice(0, viewport.visibleRowCapacity),
+        lineVisualRanges,
+        wrapRevision: state.revision
       },
       language: {
         services: [],
@@ -81,7 +180,9 @@ function createInput(value: string) {
       search: {
         query: "",
         direction: "forward" as const,
-        lastMatch: null
+        lastMatch: null,
+        matches: [],
+        visibleMatchesByLine: new Map()
       },
       jumps: {
         items: [],
@@ -118,17 +219,7 @@ describe("buildEditorLayout", () => {
   });
 
   it("wraps long lines in soft-wrap mode", () => {
-    const layout = buildEditorLayout({
-      ...createInput("abcdefghij"),
-      presentation: {
-        ...createInput("abcdefghij").presentation,
-        viewport: {
-          ...createInput("abcdefghij").presentation.viewport,
-          softWrap: true,
-          wrapColumns: 4
-        }
-      }
-    });
+    const layout = buildEditorLayout(withViewport(createInput("abcdefghij"), { softWrap: true, wrapColumns: 4 }));
 
     expect(layout.document.totalVisualRows).toBe(3);
     expect(layout.document.rows.map((row) => row.contentRuns.map((run) => run.text).join(""))).toEqual([
@@ -158,32 +249,27 @@ describe("buildEditorLayout", () => {
   });
 
   it("marks selected content across wrapped visual rows", () => {
-    const layout = buildEditorLayout({
-      ...createInput("abcdefghij"),
-      state: createEditorState({ value: "abcdefghij", selection: createSelection(2, 7), mode: "visual" }),
-      presentation: {
-        ...createInput("abcdefghij").presentation,
-        viewport: {
-          ...createInput("abcdefghij").presentation.viewport,
-          softWrap: true,
-          wrapColumns: 4
-        }
-      }
-    });
+    const input = createInput("abcdefghij");
+    const state = createEditorState({ value: "abcdefghij", selection: createSelection(2, 7), mode: "visual" });
+    const layout = buildEditorLayout(withViewport({ ...input, state }, { softWrap: true, wrapColumns: 4 }));
 
     expect(layout.document.rows[0]?.contentRuns.some((run) => run.selected)).toBe(true);
     expect(layout.document.rows[1]?.contentRuns.some((run) => run.selected)).toBe(true);
   });
 
   it("applies search and current-search tokens", () => {
+    const input = createInput("alpha beta alpha");
+    const matches = collectSearchMatches(input.state.doc.text, "alpha");
     const layout = buildEditorLayout({
-      ...createInput("alpha beta alpha"),
+      ...input,
       presentation: {
-        ...createInput("alpha beta alpha").presentation,
+        ...input.presentation,
         search: {
           query: "alpha",
           direction: "forward",
-          lastMatch: { from: 11, to: 16 }
+          lastMatch: { from: 11, to: 16 },
+          matches,
+          visibleMatchesByLine: buildVisibleSearchMatchesByLine(input.state, matches)
         }
       }
     });
@@ -193,20 +279,21 @@ describe("buildEditorLayout", () => {
   });
 
   it("renders inline and end-of-line diagnostics", () => {
+    const input = createInput("const bad = value;");
+    const diagnostics = [
+      { from: 0, to: 5, severity: "warning" as const, message: "Warn" },
+      { from: 6, to: 9, severity: "error" as const, message: "Err" }
+    ];
+    const diagnosticsByLine = new Map([[0, diagnostics]]);
     const layout = buildEditorLayout({
-      ...createInput("const bad = value;"),
+      ...input,
       presentation: {
-        ...createInput("const bad = value;").presentation,
+        ...input.presentation,
         language: {
-          ...createInput("const bad = value;").presentation.language,
-          diagnostics: [
-            { from: 0, to: 5, severity: "warning", message: "Warn" },
-            { from: 6, to: 9, severity: "error", message: "Err" }
-          ],
-          visibleDiagnostics: [
-            { from: 0, to: 5, severity: "warning", message: "Warn" },
-            { from: 6, to: 9, severity: "error", message: "Err" }
-          ]
+          ...input.presentation.language,
+          diagnostics,
+          diagnosticsByLine,
+          visibleDiagnostics: diagnostics
         }
       }
     });

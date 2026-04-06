@@ -743,16 +743,22 @@ describe("createEditor", () => {
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
     Object.defineProperty(surface, "clientHeight", { value: 80, configurable: true });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    const flush = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+
+    await flush();
 
     for (let index = 0; index < 11; index += 1) {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
     }
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
+    expect(container.querySelector('[data-wx-editor-row="12"]')).not.toBeNull();
     expect(container.querySelector('[data-wx-editor-row="12"] .wx-role-keyword')).not.toBeNull();
   });
 

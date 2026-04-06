@@ -58,6 +58,11 @@ export interface EditorSearchState {
   lastMatch: { from: number; to: number } | null;
 }
 
+export interface EditorSearchPresentationState extends EditorSearchState {
+  matches: readonly { from: number; to: number }[];
+  visibleMatchesByLine: Map<number, { from: number; to: number }[]>;
+}
+
 export interface EditorJumpEntry {
   selection: SelectionSet;
   mode: EditorState["mode"];
@@ -167,6 +172,7 @@ export interface EditorViewportPresentationState {
   wrapColumns: number;
   softWrap: boolean;
   visualRows: readonly EditorVisualRow[];
+  visibleVisualRows: readonly EditorVisualRow[];
   lineVisualRanges: readonly EditorLineVisualRange[];
   wrapRevision: number;
 }
@@ -210,7 +216,7 @@ export interface EditorPresentationState {
   viewport: EditorViewportPresentationState;
   language: EditorLanguagePresentationState;
   ui: EditorUiPresentationState;
-  search: EditorSearchState;
+  search: EditorSearchPresentationState;
   jumps: {
     items: readonly EditorJumpEntry[];
     cursor: number;
@@ -338,6 +344,16 @@ function normalizeLanguageServices(
   return Array.isArray(input) ? [...input] : [input];
 }
 
+function transactionRequiresFullDocumentLanguageSync(transaction: Transaction): boolean {
+  if ((transaction.changes?.length ?? 0) > 0) {
+    return false;
+  }
+
+  return (transaction.effects ?? []).some((effect) => {
+    return effect.type === "controller.replace-state" || effect.type.startsWith("history.");
+  });
+}
+
 function createPresentationState(state: EditorState, options: CreateEditorControllerOptions): EditorPresentationState {
   return {
     filePath: options.filePath ?? "untitled.ts",
@@ -349,6 +365,7 @@ function createPresentationState(state: EditorState, options: CreateEditorContro
       wrapColumns: Number.MAX_SAFE_INTEGER,
       softWrap: false,
       visualRows: [],
+      visibleVisualRows: [],
       lineVisualRanges: [],
       wrapRevision: -1
     },
@@ -406,7 +423,9 @@ function createPresentationState(state: EditorState, options: CreateEditorContro
     search: {
       query: "",
       direction: "forward",
-      lastMatch: null
+      lastMatch: null,
+      matches: [],
+      visibleMatchesByLine: new Map()
     },
     jumps: {
       items: [],
@@ -549,6 +568,76 @@ function buildLineChangesMap(changes: readonly EditorLineChange[]): Map<number, 
   return next;
 }
 
+function compileSearchPattern(query: string): RegExp | null {
+  if (!query) {
+    return null;
+  }
+
+  try {
+    return new RegExp(query, "gu");
+  } catch {
+    return null;
+  }
+}
+
+function collectSearchMatches(text: string, query: string): Array<{ from: number; to: number }> {
+  const pattern = compileSearchPattern(query);
+
+  if (!pattern) {
+    return [];
+  }
+
+  const matches: Array<{ from: number; to: number }> = [];
+  let result = pattern.exec(text);
+
+  while (result) {
+    const matchedText = result[0] ?? "";
+    const from = result.index;
+    const to = from + Math.max(1, matchedText.length);
+    matches.push({ from, to });
+
+    if (matchedText.length === 0) {
+      pattern.lastIndex = from + 1;
+    }
+
+    result = pattern.exec(text);
+  }
+
+  return matches;
+}
+
+function searchMatchesEqual(
+  left: readonly { from: number; to: number }[],
+  right: readonly { from: number; to: number }[]
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((entry, index) => {
+    const other = right[index];
+    return !!other && entry.from === other.from && entry.to === other.to;
+  });
+}
+
+function searchMatchesByLineEqual(
+  left: ReadonlyMap<number, readonly { from: number; to: number }[]>,
+  right: ReadonlyMap<number, readonly { from: number; to: number }[]>
+): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+
+  for (const [line, matches] of left) {
+    const other = right.get(line);
+    if (!other || !searchMatchesEqual(matches, other)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function diagnosticsEqual(left: readonly EditorDiagnostic[], right: readonly EditorDiagnostic[]): boolean {
   if (left.length !== right.length) {
     return false;
@@ -576,6 +665,41 @@ function lineChangesEqual(left: readonly EditorLineChange[], right: readonly Edi
     const other = right[index];
     return !!other && change.line === other.line && change.kind === other.kind;
   });
+}
+
+function remapHighlightSpans(
+  doc: EditorState["doc"],
+  spans: readonly HighlightSpan[],
+  changes: readonly TextChange[]
+): HighlightSpan[] {
+  const next: HighlightSpan[] = [];
+
+  for (const span of spans) {
+    const originalLength = Math.max(0, span.to - span.from);
+    const hasOverlappingChange = changes.some((change) => change.from < span.to && change.to > span.from);
+    const startAffinity = changes.some(
+      (change) => change.from === span.from && change.to === span.from && change.insert.length > 0
+    )
+      ? "right"
+      : "left";
+    const from = Math.max(0, Math.min(doc.length, mapOffsetThroughChanges(span.from, changes, startAffinity)));
+    const mappedTo = Math.max(from, Math.min(doc.length, mapOffsetThroughChanges(span.to, changes, "right")));
+    const to = hasOverlappingChange
+      ? mappedTo
+      : Math.max(from, Math.min(doc.length, from + originalLength));
+
+    if (to <= from) {
+      continue;
+    }
+
+    next.push({
+      from,
+      to,
+      role: span.role
+    });
+  }
+
+  return next;
 }
 
 export function createSnapshotHistory(): HistoryPlugin {
@@ -663,9 +787,40 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   const jumpList = presentation.jumps.items as EditorJumpEntry[];
   let jumpCursor = presentation.jumps.cursor;
   const registers = presentation.registers;
+  let searchMatchCache = [...presentation.search.matches];
   let viewportModelRevision = -1;
   let viewportModelWrapColumns = presentation.viewport.wrapColumns;
   let viewportModelSoftWrap = presentation.viewport.softWrap;
+  let inFlightVisibleHighlightRequestKey: string | null = null;
+  let inFlightVisibleHighlightRequest: Promise<void> | null = null;
+
+  const refreshSearchMatchCache = (targetState: EditorState = state) => {
+    searchMatchCache = collectSearchMatches(targetState.doc.text, presentation.search.query);
+    presentation.search.matches = searchMatchCache;
+  };
+
+  const syncVisibleViewportRows = (): boolean => {
+    const visualRows = presentation.viewport.visualRows;
+
+    if (visualRows.length === 0) {
+      const changed = presentation.viewport.visibleVisualRows.length > 0;
+      presentation.viewport.visibleVisualRows = [];
+      return changed;
+    }
+
+    const fromRowIndex = Math.max(0, Math.min(visualRows.length - 1, presentation.viewport.topVisualRow));
+    const toRowIndex = Math.max(
+      fromRowIndex,
+      Math.min(visualRows.length - 1, fromRowIndex + presentation.viewport.visibleRowCapacity - 1)
+    );
+    const nextVisibleRows = visualRows.slice(fromRowIndex, toRowIndex + 1);
+    const changed =
+      nextVisibleRows.length !== presentation.viewport.visibleVisualRows.length ||
+      nextVisibleRows.some((row, index) => presentation.viewport.visibleVisualRows[index] !== row);
+
+    presentation.viewport.visibleVisualRows = nextVisibleRows;
+    return changed;
+  };
 
   const notify = (
     prevState: EditorState,
@@ -691,8 +846,14 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     if (update.docChanged) {
       presentation.language.lastHighlightedRevision = -1;
       const changes = transaction.changes ?? [];
+      refreshSearchMatchCache(nextState);
 
       if (changes.length > 0) {
+        presentation.language.visibleHighlights = remapHighlightSpans(
+          nextState.doc,
+          presentation.language.visibleHighlights,
+          changes
+        );
         remapHighlightCacheForChanges(prevState, nextState, changes);
         remapHighlightCoverageForChanges(prevState, nextState, changes);
         remapDiagnosticsForChanges(prevState, nextState, changes);
@@ -721,9 +882,27 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       }
     }
 
+    let viewportChanged = false;
+
     if (update.selectionChanged || update.modeChanged || update.docChanged) {
       rebuildViewportModel();
+      const didReveal = revealSelectionWithinViewport();
+      viewportChanged = syncVisibleViewportRows() || didReveal;
       syncVisibleLanguageDecorations();
+    }
+
+    if (viewportChanged) {
+      ensureVisibleHighlightCoverage();
+    }
+
+    if (update.docChanged) {
+      void syncLanguage({
+        changes: transaction.changes ?? [],
+        forceDocumentSync: transactionRequiresFullDocumentLanguageSync(transaction),
+        refreshHighlights: true,
+        refreshDiagnostics: true,
+        refreshLineChanges: true
+      });
     }
 
     for (const listener of listeners) {
@@ -815,23 +994,18 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     viewportModelSoftWrap = presentation.viewport.softWrap;
     const maxTop = Math.max(0, visualRows.length - presentation.viewport.visibleRowCapacity);
     presentation.viewport.topVisualRow = Math.max(0, Math.min(maxTop, presentation.viewport.topVisualRow));
+    syncVisibleViewportRows();
   };
 
   const getVisibleLineViewport = (): EditorLineRange => {
     rebuildViewportModel();
-    const visualRows = presentation.viewport.visualRows;
+    const visualRows = presentation.viewport.visibleVisualRows;
 
     if (visualRows.length === 0) {
       return { fromLine: 0, toLine: Math.max(0, state.doc.lineCount - 1) };
     }
-
-    const fromRowIndex = Math.max(0, Math.min(visualRows.length - 1, presentation.viewport.topVisualRow));
-    const toRowIndex = Math.max(
-      fromRowIndex,
-      Math.min(visualRows.length - 1, fromRowIndex + presentation.viewport.visibleRowCapacity - 1)
-    );
-    const fromRow = visualRows[fromRowIndex] ?? visualRows[0];
-    const toRow = visualRows[toRowIndex] ?? visualRows[visualRows.length - 1];
+    const fromRow = visualRows[0];
+    const toRow = visualRows[visualRows.length - 1];
 
     return {
       fromLine: fromRow?.docLine ?? 0,
@@ -839,15 +1013,21 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     };
   };
 
+  const getVisibleHighlightViewport = (): EditorLineRange => {
+    const viewport = getVisibleLineViewport();
+
+    return {
+      fromLine: Math.max(0, viewport.fromLine - 2),
+      toLine: Math.min(state.doc.lineCount - 1, viewport.toLine + 2)
+    };
+  };
+
   const syncVisibleLanguageDecorations = (): boolean => {
     const viewport = getVisibleLineViewport();
     const visibleHighlights: HighlightSpan[] = [];
-    const visibleDiagnostics = presentation.language.diagnostics.filter((diagnostic) => {
-      const startLine = state.doc.positionAt(diagnostic.from).line;
-      const endLine = state.doc.positionAt(Math.max(diagnostic.from, diagnostic.to - 1)).line;
-      return endLine >= viewport.fromLine && startLine <= viewport.toLine;
-    });
+    const visibleDiagnostics: EditorDiagnostic[] = [];
     const visibleLineChanges: EditorLineChange[] = [];
+    const visibleSearchMatchesByLine = new Map<number, { from: number; to: number }[]>();
 
     for (let lineIndex = viewport.fromLine; lineIndex <= viewport.toLine; lineIndex += 1) {
       const highlights = presentation.language.highlightCache.get(lineIndex);
@@ -855,8 +1035,26 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         visibleHighlights.push(...highlights);
       }
 
+      const lineDiagnostics = presentation.language.diagnosticsByLine.get(lineIndex);
+      if (lineDiagnostics && lineDiagnostics.length > 0) {
+        for (const diagnostic of lineDiagnostics) {
+          if (
+            visibleDiagnostics.length === 0 ||
+            visibleDiagnostics[visibleDiagnostics.length - 1] !== diagnostic
+          ) {
+            visibleDiagnostics.push(diagnostic);
+          }
+        }
+      }
+
       const lineChange = presentation.language.lineChangesByLine.get(lineIndex);
       if (!lineChange) {
+        const line = state.doc.lineAt(lineIndex);
+        const lineEnd = line.start + line.text.length;
+        const lineSearchMatches = searchMatchCache.filter((entry) => entry.from < lineEnd && entry.to > line.start);
+        if (lineSearchMatches.length > 0) {
+          visibleSearchMatchesByLine.set(lineIndex, lineSearchMatches);
+        }
         continue;
       }
 
@@ -867,17 +1065,26 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       if (lineChange.deleted) {
         visibleLineChanges.push({ line: lineIndex, kind: "deleted" });
       }
+
+      const line = state.doc.lineAt(lineIndex);
+      const lineEnd = line.start + line.text.length;
+      const lineSearchMatches = searchMatchCache.filter((entry) => entry.from < lineEnd && entry.to > line.start);
+      if (lineSearchMatches.length > 0) {
+        visibleSearchMatchesByLine.set(lineIndex, lineSearchMatches);
+      }
     }
 
     const highlightsChanged = !spansEqual(presentation.language.visibleHighlights, visibleHighlights);
     const diagnosticsChanged = !diagnosticsEqual(presentation.language.visibleDiagnostics, visibleDiagnostics);
     const lineChangesChanged = !lineChangesEqual(presentation.language.visibleLineChanges, visibleLineChanges);
+    const searchChanged = !searchMatchesByLineEqual(presentation.search.visibleMatchesByLine, visibleSearchMatchesByLine);
 
     presentation.language.visibleHighlights = visibleHighlights;
     presentation.language.visibleDiagnostics = visibleDiagnostics;
     presentation.language.visibleLineChanges = visibleLineChanges;
+    presentation.search.visibleMatchesByLine = visibleSearchMatchesByLine;
 
-    return highlightsChanged || diagnosticsChanged || lineChangesChanged;
+    return highlightsChanged || diagnosticsChanged || lineChangesChanged || searchChanged;
   };
 
   const getSnapshot = () => ({
@@ -893,20 +1100,14 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
   const getActiveOffset = () => (state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state));
 
-  const getHighlightViewport = (viewport: EditorLineRange): EditorLineRange => {
-    rebuildViewportModel();
-    const visualRows = presentation.viewport.visualRows;
-
-    if (visualRows.length === 0) {
-      return { fromLine: 0, toLine: Math.max(0, state.doc.lineCount - 1) };
+  const hasMissingHighlightCoverage = (viewport: EditorLineRange): boolean => {
+    for (let lineIndex = viewport.fromLine; lineIndex <= viewport.toLine; lineIndex += 1) {
+      if (!presentation.language.highlightCoverage.has(lineIndex)) {
+        return true;
+      }
     }
 
-    const fromRow = visualRows[Math.max(0, Math.min(visualRows.length - 1, viewport.fromLine))] ?? visualRows[0];
-    const toRow =
-      visualRows[Math.max(0, Math.min(visualRows.length - 1, viewport.toLine))] ?? visualRows[visualRows.length - 1];
-    const fromLine = Math.max(0, fromRow.docLine - 2);
-    const toLine = Math.min(state.doc.lineCount - 1, toRow.docLine + 2);
-    return { fromLine, toLine };
+    return false;
   };
 
   const getChangedHighlightViewport = (
@@ -971,11 +1172,24 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
     for (const spans of presentation.language.highlightCache.values()) {
       for (const span of spans) {
-        const mappedFrom = Math.max(0, Math.min(nextState.doc.length, mapOffsetThroughChanges(span.from, changes, "left")));
-        const mappedTo = Math.max(
+        const originalLength = Math.max(0, span.to - span.from);
+        const hasOverlappingChange = changes.some((change) => change.from < span.to && change.to > span.from);
+        const startAffinity = changes.some(
+          (change) => change.from === span.from && change.to === span.from && change.insert.length > 0
+        )
+          ? "right"
+          : "left";
+        const mappedFrom = Math.max(
+          0,
+          Math.min(nextState.doc.length, mapOffsetThroughChanges(span.from, changes, startAffinity))
+        );
+        const nextTo = Math.max(
           mappedFrom,
           Math.min(nextState.doc.length, mapOffsetThroughChanges(span.to, changes, "right"))
         );
+        const mappedTo = hasOverlappingChange
+          ? nextTo
+          : Math.max(mappedFrom, Math.min(nextState.doc.length, mappedFrom + originalLength));
 
         if (mappedTo <= mappedFrom) {
           continue;
@@ -1079,12 +1293,14 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       return;
     }
 
+    if (presentation.language.languageRevision !== state.revision) {
+      return;
+    }
+
     const needsViewportHighlights =
       force ||
       presentation.language.lastHighlightedRevision !== presentation.language.languageRevision ||
-      Array.from({ length: viewport.toLine - viewport.fromLine + 1 }, (_, index) => viewport.fromLine + index).some(
-        (lineIndex) => !presentation.language.highlightCoverage.has(lineIndex)
-      );
+      hasMissingHighlightCoverage(viewport);
 
     if (!needsViewportHighlights) {
       return;
@@ -1104,6 +1320,43 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     if (changed || visibleChanged) {
       emitPresentationUpdate("language.highlights");
     }
+  };
+
+  const ensureVisibleHighlightCoverage = (force = false): Promise<void> => {
+    const highlighter = getHighlighter();
+
+    if (!highlighter || presentation.language.languageRevision < 0) {
+      return Promise.resolve();
+    }
+
+    if (presentation.language.languageRevision !== state.revision) {
+      return Promise.resolve();
+    }
+
+    const viewport = getVisibleHighlightViewport();
+    const needsViewportHighlights =
+      force ||
+      presentation.language.lastHighlightedRevision !== presentation.language.languageRevision ||
+      hasMissingHighlightCoverage(viewport);
+
+    if (!needsViewportHighlights) {
+      return Promise.resolve();
+    }
+
+    const requestKey = `${presentation.language.languageRevision}:${viewport.fromLine}:${viewport.toLine}:${force ? 1 : 0}`;
+
+    if (inFlightVisibleHighlightRequestKey === requestKey) {
+      return inFlightVisibleHighlightRequest ?? Promise.resolve();
+    }
+
+    inFlightVisibleHighlightRequestKey = requestKey;
+    inFlightVisibleHighlightRequest = refreshHighlights(viewport, force).finally(() => {
+      if (inFlightVisibleHighlightRequestKey === requestKey) {
+        inFlightVisibleHighlightRequestKey = null;
+        inFlightVisibleHighlightRequest = null;
+      }
+    });
+    return inFlightVisibleHighlightRequest;
   };
 
   const refreshDiagnostics = async (): Promise<void> => {
@@ -1193,10 +1446,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     const shouldRefreshHighlights = options.refreshHighlights ?? true;
     const shouldRefreshDiagnostics = options.refreshDiagnostics ?? true;
     const shouldRefreshLineChanges = options.refreshLineChanges ?? true;
-    const highlightViewport = options.highlightViewport ?? getHighlightViewport({
-      fromLine: presentation.viewport.topVisualRow,
-      toLine: presentation.viewport.topVisualRow + presentation.viewport.visibleRowCapacity - 1
-    });
+    const highlightViewport = options.highlightViewport ?? getVisibleHighlightViewport();
 
     if (changes.length > 0) {
       invalidateHighlightViewport(highlightViewport);
@@ -1215,9 +1465,11 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         presentation.language.languageRevision = state.revision;
         presentation.language.lastHighlightedRevision = -1;
         await refreshHighlights(highlightViewport, true);
-      } else {
+      } else if (presentation.language.languageRevision === state.revision) {
         await refreshHighlights(highlightViewport, false);
       }
+
+      await ensureVisibleHighlightCoverage(false);
     }
 
     if (shouldRefreshDiagnostics) {
@@ -1255,7 +1507,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     return (await action.apply?.(getCodeActionContext())) ?? null;
   };
 
-  const revealSelectionWithinViewport = () => {
+  const revealSelectionWithinViewport = (): boolean => {
     rebuildViewportModel();
     const visual = getVisualRowForOffset(
       state,
@@ -1270,15 +1522,19 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     const maxTop = Math.max(0, presentation.viewport.visualRows.length - visibleCount);
     const minRow = presentation.viewport.topVisualRow + scrolloff;
     const maxRow = presentation.viewport.topVisualRow + visibleCount - 1 - scrolloff;
+    const previousTop = presentation.viewport.topVisualRow;
 
     if (visual.rowIndex < minRow) {
       presentation.viewport.topVisualRow = Math.max(0, visual.rowIndex - scrolloff);
-      return;
+      return presentation.viewport.topVisualRow !== previousTop;
     }
 
     if (visual.rowIndex > maxRow) {
       presentation.viewport.topVisualRow = Math.min(maxTop, Math.max(0, visual.rowIndex + scrolloff - visibleCount + 1));
+      return presentation.viewport.topVisualRow !== previousTop;
     }
+
+    return false;
   };
 
   const trimJumpTail = () => {
@@ -1306,6 +1562,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     return true;
   };
 
+  refreshSearchMatchCache();
   rebuildViewportModel();
   syncVisibleLanguageDecorations();
 
@@ -1324,9 +1581,12 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         revision: prevState.revision + 1
       };
       history?.clear();
+      refreshSearchMatchCache(state);
       presentation.language.languageRevision = -1;
       presentation.language.lastHighlightedRevision = -1;
       presentation.language.highlightRequestId = 0;
+      inFlightVisibleHighlightRequestKey = null;
+      inFlightVisibleHighlightRequest = null;
       presentation.language.diagnosticsRequestId = 0;
       presentation.language.lineChangesRequestId = 0;
       presentation.language.hoverRequestId = 0;
@@ -1359,12 +1619,16 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       if (typeof next.query === "string") {
         registers.search = next.query;
       }
+      refreshSearchMatchCache();
+      syncVisibleLanguageDecorations();
       emitPresentationUpdate("search.update");
     },
     clearSearchState() {
       searchState.query = "";
       searchState.direction = "forward";
       searchState.lastMatch = null;
+      refreshSearchMatchCache();
+      syncVisibleLanguageDecorations();
       emitPresentationUpdate("search.clear");
     },
     pushJump() {
@@ -1451,9 +1715,13 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       presentation.viewport.softWrap = metrics.softWrap;
       viewportModelRevision = -1;
       rebuildViewportModel();
-      revealSelectionWithinViewport();
+      const didReveal = revealSelectionWithinViewport();
+      const viewportChanged = syncVisibleViewportRows() || didReveal;
       syncVisibleLanguageDecorations();
       emitPresentationUpdate("viewport.metrics");
+      if (viewportChanged) {
+        ensureVisibleHighlightCoverage();
+      }
     },
     scrollViewportBy(rowsDelta) {
       if (rowsDelta === 0) {
@@ -1463,8 +1731,12 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       rebuildViewportModel();
       const maxTop = Math.max(0, presentation.viewport.visualRows.length - presentation.viewport.visibleRowCapacity);
       presentation.viewport.topVisualRow = Math.max(0, Math.min(maxTop, presentation.viewport.topVisualRow + rowsDelta));
+      const viewportChanged = syncVisibleViewportRows();
       syncVisibleLanguageDecorations();
       emitPresentationUpdate("viewport.scroll");
+      if (viewportChanged) {
+        ensureVisibleHighlightCoverage();
+      }
       return true;
     },
     alignViewportToSelection(position) {
@@ -1486,20 +1758,30 @@ export function createEditorController(options: CreateEditorControllerOptions = 
             ? visual.rowIndex - visibleCount + 1
             : visual.rowIndex - Math.floor(visibleCount / 2);
       presentation.viewport.topVisualRow = Math.max(0, Math.min(maxTop, nextTop));
+      const viewportChanged = syncVisibleViewportRows();
       syncVisibleLanguageDecorations();
       emitPresentationUpdate("viewport.align");
+      if (viewportChanged) {
+        ensureVisibleHighlightCoverage();
+      }
       return true;
     },
     revealSelection() {
-      revealSelectionWithinViewport();
+      const didReveal = revealSelectionWithinViewport();
+      const viewportChanged = syncVisibleViewportRows() || didReveal;
       syncVisibleLanguageDecorations();
       emitPresentationUpdate("viewport.reveal");
+      if (viewportChanged) {
+        ensureVisibleHighlightCoverage();
+      }
     },
     setLanguageServices(languageServices) {
       presentation.language.services = normalizeLanguageServices(languageServices);
       presentation.language.languageRevision = -1;
       presentation.language.lastHighlightedRevision = -1;
       presentation.language.highlightRequestId = 0;
+      inFlightVisibleHighlightRequestKey = null;
+      inFlightVisibleHighlightRequest = null;
       presentation.language.diagnosticsRequestId = 0;
       presentation.language.lineChangesRequestId = 0;
       presentation.language.hoverRequestId = 0;
@@ -1511,15 +1793,33 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       presentation.language.visibleHighlights = [];
       presentation.language.visibleDiagnostics = [];
       presentation.language.visibleLineChanges = [];
+      presentation.search.matches = [];
+      presentation.search.visibleMatchesByLine = new Map();
       emitPresentationUpdate("language.services");
+      void syncLanguage({
+        forceDocumentSync: true,
+        refreshHighlights: true,
+        refreshDiagnostics: true,
+        refreshLineChanges: true
+      });
     },
     setHostServices(host) {
       presentation.language.host = host;
       emitPresentationUpdate("host.services");
+      void syncLanguage({
+        refreshHighlights: false,
+        refreshDiagnostics: false,
+        refreshLineChanges: true
+      });
     },
     setFilePath(filePath) {
       presentation.filePath = filePath;
       emitPresentationUpdate("presentation.file-path");
+      void syncLanguage({
+        refreshHighlights: false,
+        refreshDiagnostics: false,
+        refreshLineChanges: true
+      });
     },
     setThemeName(themeName) {
       presentation.themeName = themeName;
