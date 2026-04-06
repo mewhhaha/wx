@@ -281,7 +281,7 @@ class ShaderPreview {
     });
 
     this.uniformBuffer = this.device.createBuffer({
-      size: 32,
+      size: 48,
       usage: (bufferUsage?.UNIFORM ?? 64) | (bufferUsage?.COPY_DST ?? 8)
     });
 
@@ -326,16 +326,16 @@ class ShaderPreview {
       return;
     }
 
-    const uniforms = new Float32Array([
-      timeSeconds,
-      0,
-      0,
-      0,
-      this.canvas.width,
-      this.canvas.height,
-      0,
-      0
-    ]);
+    // Match WGSL uniform layout:
+    // time: f32 @ 0
+    // 12 bytes padding
+    // _pad0: vec3f @ 16
+    // resolution: vec2f @ 32
+    // _pad1: vec2f @ 40
+    const uniforms = new Float32Array(12);
+    uniforms[0] = timeSeconds;
+    uniforms[8] = this.canvas.width;
+    uniforms[9] = this.canvas.height;
     this.device.queue.writeBuffer(this.uniformBuffer, 0, uniforms);
 
     const commandEncoder = this.device.createCommandEncoder();
