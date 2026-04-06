@@ -756,6 +756,44 @@ describe("createEditor", () => {
     expect(container.querySelector('[data-wx-editor-row="12"] .wx-role-keyword')).not.toBeNull();
   });
 
+  it("refreshes highlights for newly visible rows after controller viewport scrolling", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const value = Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n");
+    const doc = createTextDocument(value);
+    const controller = createEditorController({ value });
+
+    createEditor(container, {
+      controller,
+      language: {
+        async open() {},
+        async update() {},
+        async getHighlightRanges(viewport) {
+          const spans: HighlightSpan[] = [];
+
+          for (let line = viewport.fromLine; line <= viewport.toLine; line += 1) {
+            const lineInfo = doc.lineAt(line);
+            spans.push({ from: lineInfo.start, to: Math.min(lineInfo.end, lineInfo.start + 4), role: "keyword" });
+          }
+
+          return spans;
+        }
+      }
+    });
+
+    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
+    Object.defineProperty(surface, "clientHeight", { value: 80, configurable: true });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    controller.scrollViewportBy(11);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelector('[data-wx-editor-row="12"] .wx-role-keyword')).not.toBeNull();
+  });
+
   it("keeps existing highlights visible while a newline update is still in flight", async () => {
     const container = document.createElement("div");
     document.body.append(container);

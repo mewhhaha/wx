@@ -1,5 +1,5 @@
 {
-  "name": "@wx/editor-view-dom",
+  "name": "@wx/editor-layout",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -17,9 +17,6 @@
   },
   "dependencies": {
     "@wx/editor-core": "workspace:*",
-    "@wx/editor-controller": "workspace:*",
-    "@wx/editor-layout": "workspace:*",
-    "@wx/editor-language": "workspace:*",
-    "@wx/editor-theme": "workspace:*"
+    "@wx/editor-language": "workspace:*"
   }
 }

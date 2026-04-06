@@ -6,6 +6,7 @@ export default defineConfig({
       "packages/editor-core/vitest.config.ts",
       "packages/editor-controller/vitest.config.ts",
       "packages/editor-language/vitest.config.ts",
+      "packages/editor-layout/vitest.config.ts",
       "packages/editor-theme/vitest.config.ts",
       "packages/editor-tree-sitter/vitest.config.ts",
       "packages/editor-view-dom/vitest.config.ts",

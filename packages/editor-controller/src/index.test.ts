@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { enterInsertMode, enterNormalMode, insertText, moveRight } from "@wx/editor-core";
 
@@ -98,5 +98,79 @@ describe("editor controller", () => {
     expect(controller.getRegister("a")).toBe("alpha");
     expect(controller.getJumpList()).toHaveLength(1);
     expect(controller.jumpBackward()?.selection.ranges[0]?.head).toBe(0);
+  });
+
+  it("stores visible highlight slices in the controller presentation state", async () => {
+    const highlighter = {
+      open: vi.fn(async () => {}),
+      update: vi.fn(async () => {}),
+      getHighlights: vi.fn(async (viewport: { fromLine: number; toLine: number }) => {
+        if (viewport.fromLine === 0) {
+          return [{ from: 0, to: 5, role: "keyword" as const }];
+        }
+
+        return [{ from: 6, to: 10, role: "keyword" as const }];
+      })
+    };
+    const controller = createEditorController({ value: "alpha\nbeta" });
+
+    controller.setLanguageServices([{ highlighter }]);
+    controller.setViewportMetrics({ visibleRowCapacity: 1, wrapColumns: 80, softWrap: false });
+    await controller.refreshLanguage({
+      forceDocumentSync: true,
+      highlightViewport: { fromLine: 0, toLine: 0 },
+      refreshDiagnostics: false,
+      refreshLineChanges: false
+    });
+
+    expect(controller.getPresentationState().language.visibleHighlights).toEqual([
+      { from: 0, to: 5, role: "keyword" }
+    ]);
+
+    controller.scrollViewportBy(1);
+    expect(controller.getPresentationState().language.visibleHighlights).toEqual([]);
+
+    await controller.refreshLanguage({
+      highlightViewport: { fromLine: 1, toLine: 1 },
+      refreshDiagnostics: false,
+      refreshLineChanges: false
+    });
+
+    expect(controller.getPresentationState().language.visibleHighlights).toEqual([
+      { from: 6, to: 10, role: "keyword" }
+    ]);
+    expect(highlighter.open).toHaveBeenCalledTimes(1);
+    expect(highlighter.update).not.toHaveBeenCalled();
+  });
+
+  it("does not resync the language document for cursor-only movement", async () => {
+    const highlighter = {
+      open: vi.fn(async () => {}),
+      update: vi.fn(async () => {}),
+      getHighlights: vi.fn(async () => [{ from: 0, to: 5, role: "keyword" as const }])
+    };
+    const controller = createEditorController({ value: "alpha" });
+
+    controller.setLanguageServices([{ highlighter }]);
+    controller.setViewportMetrics({ visibleRowCapacity: 1, wrapColumns: 80, softWrap: false });
+    await controller.refreshLanguage({
+      forceDocumentSync: true,
+      highlightViewport: { fromLine: 0, toLine: 0 },
+      refreshDiagnostics: false,
+      refreshLineChanges: false
+    });
+
+    highlighter.open.mockClear();
+    highlighter.update.mockClear();
+
+    controller.execute(moveRight);
+    await controller.refreshLanguage({
+      highlightViewport: { fromLine: 0, toLine: 0 },
+      refreshDiagnostics: false,
+      refreshLineChanges: false
+    });
+
+    expect(highlighter.open).not.toHaveBeenCalled();
+    expect(highlighter.update).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,8 @@
     "build": "tsup src/index.ts --format esm --out-dir dist"
   },
   "dependencies": {
-    "@wx/editor-core": "workspace:*"
+    "@wx/editor-core": "workspace:*",
+    "@wx/editor-language": "workspace:*",
+    "@wx/editor-layout": "workspace:*"
   }
 }
