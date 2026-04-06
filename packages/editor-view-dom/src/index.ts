@@ -3882,8 +3882,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    refreshViewportMetricsIfNeeded();
-
     if (flashState.active) {
       const handled = handleFlashInput(event.key);
 
