@@ -2542,6 +2542,42 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     viewportRows.replaceChildren(fragment);
   }
 
+  function renderDirtyRows(dirtyLines: ReadonlySet<number>): boolean {
+    const visibleViewport = getVisibleViewport();
+
+    if (!viewportEquals(visibleViewport, renderedViewport)) {
+      return false;
+    }
+
+    const layout = buildLayoutModelForViewport(renderedViewport);
+    const nextRows = layout.document.rows;
+    const nextFillerCount = Math.max(0, getVisibleLineCapacity() - nextRows.length);
+
+    if (rowViews.length !== nextRows.length || viewportRows.children.length !== nextRows.length + nextFillerCount) {
+      return false;
+    }
+
+    let patchedAnyRow = false;
+
+    for (let index = 0; index < nextRows.length; index += 1) {
+      const view = rowViews[index];
+      const layoutRow = nextRows[index];
+
+      if (!view || !layoutRow) {
+        return false;
+      }
+
+      if (!dirtyLines.has(layoutRow.docLine)) {
+        continue;
+      }
+
+      patchRowView(view, layoutRow);
+      patchedAnyRow = true;
+    }
+
+    return patchedAnyRow;
+  }
+
   function patchStatus(): void {
     const layout = getRenderedLayout();
     statusMode.textContent = layout.statusBar.find((run) => run.part === "status-mode")?.text ?? "";
@@ -2647,6 +2683,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const isPresentationOnlyUpdate = !hasDocumentChanges && !update.selectionChanged && !update.modeChanged;
     const previousDigits = String(Math.max(1, previousState.doc.lineCount)).length;
     const nextDigits = String(Math.max(1, nextState.doc.lineCount)).length;
+    const dirtyLines =
+      !hasDocumentChanges && (update.selectionChanged || update.modeChanged)
+        ? getVisualDirtyLines(previousState, nextState)
+        : null;
 
     state = nextState;
     syncPresentationMirrors();
@@ -2684,9 +2724,19 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       }
     }
 
+    if (dirtyLines && renderDirtyRows(dirtyLines)) {
+      patchStatus();
+      if (update.modeChanged) {
+        patchBottomRow();
+      }
+      return;
+    }
+
     renderVisibleRows(true);
     patchStatus();
-    patchBottomRow();
+    if (update.modeChanged) {
+      patchBottomRow();
+    }
   }
 
   function openCommandLine(prompt: ":" | "/" | "?" = ":"): void {

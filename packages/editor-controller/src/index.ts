@@ -1037,10 +1037,11 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
   const getVisibleHighlightViewport = (): EditorLineRange => {
     const viewport = getVisibleLineViewport();
+    const contextLines = Math.max(4, presentation.viewport.visibleRowCapacity);
 
     return {
-      fromLine: Math.max(0, viewport.fromLine - 2),
-      toLine: Math.min(state.doc.lineCount - 1, viewport.toLine + 2)
+      fromLine: Math.max(0, viewport.fromLine - contextLines),
+      toLine: Math.min(state.doc.lineCount - 1, viewport.toLine + contextLines)
     };
   };
 
