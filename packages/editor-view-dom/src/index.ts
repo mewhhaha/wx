@@ -1658,6 +1658,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function syncPresentationMirrors(): void {
+    filePath = presentation.filePath;
     syncViewportMirrors();
     syncLanguageMirrors();
     syncUiMirrors();

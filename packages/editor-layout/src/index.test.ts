@@ -137,6 +137,7 @@ function createInput(value: string) {
         diagnosticsByLine: new Map(),
         lineChangesByLine: new Map(),
         visibleHighlights: [],
+        visibleHighlightsByLine: new Map(),
         visibleDiagnostics: [],
         visibleLineChanges: []
       },

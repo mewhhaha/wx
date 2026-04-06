@@ -183,7 +183,7 @@ describe("createEditor", () => {
     const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
     Object.defineProperty(surface, "clientWidth", { value: 120, configurable: true });
-    surface.dispatchEvent(new Event("scroll"));
+    editor.mount(container);
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
     const movedPosition = editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0);
@@ -275,7 +275,7 @@ describe("createEditor", () => {
     const container = document.createElement("div");
     document.body.append(container);
 
-    createEditor(container, {
+    const editor = createEditor(container, {
       value: Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n")
     });
 
@@ -283,6 +283,7 @@ describe("createEditor", () => {
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
     Object.defineProperty(surface, "clientHeight", { value: 240, configurable: true });
+    editor.mount(container);
 
     for (let index = 0; index < 5; index += 1) {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
