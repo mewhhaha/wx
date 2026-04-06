@@ -192,6 +192,7 @@ export interface EditorLanguagePresentationState {
   diagnosticsByLine: Map<number, EditorDiagnostic[]>;
   lineChangesByLine: Map<number, EditorLineChangeState>;
   visibleHighlights: readonly HighlightSpan[];
+  visibleHighlightsByLine: Map<number, HighlightSpan[]>;
   visibleDiagnostics: readonly EditorDiagnostic[];
   visibleLineChanges: readonly EditorLineChange[];
 }
@@ -388,6 +389,7 @@ function createPresentationState(state: EditorState, options: CreateEditorContro
       diagnosticsByLine: new Map(),
       lineChangesByLine: new Map(),
       visibleHighlights: [],
+      visibleHighlightsByLine: new Map(),
       visibleDiagnostics: [],
       visibleLineChanges: []
     },
@@ -523,6 +525,24 @@ function spansEqual(left: readonly HighlightSpan[], right: readonly HighlightSpa
     const other = right[index];
     return !!other && span.from === other.from && span.to === other.to && span.role === other.role;
   });
+}
+
+function highlightMapsEqual(
+  left: ReadonlyMap<number, readonly HighlightSpan[]>,
+  right: ReadonlyMap<number, readonly HighlightSpan[]>
+): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+
+  for (const [line, spans] of left) {
+    const other = right.get(line);
+    if (!other || !spansEqual(spans, other)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function buildDiagnosticsCache(doc: EditorState["doc"], diagnostics: readonly EditorDiagnostic[]): Map<number, EditorDiagnostic[]> {
@@ -870,6 +890,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       } else {
         presentation.language.highlightCoverage.clear();
         presentation.language.visibleHighlights = [];
+        presentation.language.visibleHighlightsByLine = new Map();
         presentation.language.visibleDiagnostics = [];
         presentation.language.visibleLineChanges = [];
       }
@@ -1048,6 +1069,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   const syncVisibleLanguageDecorations = (): boolean => {
     const viewport = getVisibleLineViewport();
     const visibleHighlights: HighlightSpan[] = [];
+    const visibleHighlightsByLine = new Map<number, HighlightSpan[]>();
     const visibleDiagnostics: EditorDiagnostic[] = [];
     const visibleLineChanges: EditorLineChange[] = [];
     const visibleSearchMatchesByLine = new Map<number, { from: number; to: number }[]>();
@@ -1056,6 +1078,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       const highlights = presentation.language.highlightCache.get(lineIndex);
       if (highlights && highlights.length > 0) {
         visibleHighlights.push(...highlights);
+        visibleHighlightsByLine.set(lineIndex, highlights);
       }
 
       const lineDiagnostics = presentation.language.diagnosticsByLine.get(lineIndex);
@@ -1098,16 +1121,21 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     }
 
     const highlightsChanged = !spansEqual(presentation.language.visibleHighlights, visibleHighlights);
+    const highlightsByLineChanged = !highlightMapsEqual(
+      presentation.language.visibleHighlightsByLine,
+      visibleHighlightsByLine
+    );
     const diagnosticsChanged = !diagnosticsEqual(presentation.language.visibleDiagnostics, visibleDiagnostics);
     const lineChangesChanged = !lineChangesEqual(presentation.language.visibleLineChanges, visibleLineChanges);
     const searchChanged = !searchMatchesByLineEqual(presentation.search.visibleMatchesByLine, visibleSearchMatchesByLine);
 
     presentation.language.visibleHighlights = visibleHighlights;
+    presentation.language.visibleHighlightsByLine = visibleHighlightsByLine;
     presentation.language.visibleDiagnostics = visibleDiagnostics;
     presentation.language.visibleLineChanges = visibleLineChanges;
     presentation.search.visibleMatchesByLine = visibleSearchMatchesByLine;
 
-    return highlightsChanged || diagnosticsChanged || lineChangesChanged || searchChanged;
+    return highlightsChanged || highlightsByLineChanged || diagnosticsChanged || lineChangesChanged || searchChanged;
   };
 
   const getSnapshot = () => ({
@@ -1310,6 +1338,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       if (presentation.language.highlightCache.size > 0) {
         presentation.language.highlightCache.clear();
         presentation.language.highlightCoverage.clear();
+        presentation.language.visibleHighlightsByLine.clear();
         syncVisibleLanguageDecorations();
         emitPresentationUpdate("language.highlights.clear");
       }
@@ -1615,6 +1644,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       presentation.language.hoverRequestId = 0;
       presentation.language.highlightCache.clear();
       presentation.language.highlightCoverage.clear();
+      presentation.language.visibleHighlightsByLine.clear();
       presentation.language.diagnostics = [];
       presentation.language.diagnosticsByLine.clear();
       presentation.language.lineChangesByLine.clear();
@@ -1814,10 +1844,12 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       presentation.language.hoverRequestId = 0;
       presentation.language.highlightCache.clear();
       presentation.language.highlightCoverage.clear();
+      presentation.language.visibleHighlightsByLine.clear();
       presentation.language.diagnostics = [];
       presentation.language.diagnosticsByLine.clear();
       presentation.language.lineChangesByLine.clear();
       presentation.language.visibleHighlights = [];
+      presentation.language.visibleHighlightsByLine = new Map();
       presentation.language.visibleDiagnostics = [];
       presentation.language.visibleLineChanges = [];
       presentation.search.matches = [];

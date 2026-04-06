@@ -253,7 +253,7 @@ describe("createEditor", () => {
     const container = document.createElement("div");
     document.body.append(container);
 
-    createEditor(container, {
+    const editor = createEditor(container, {
       value: Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n")
     });
 
@@ -261,6 +261,7 @@ describe("createEditor", () => {
     const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
 
     Object.defineProperty(surface, "clientHeight", { value: 80, configurable: true });
+    editor.mount(container);
 
     for (let index = 0; index < 11; index += 1) {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));

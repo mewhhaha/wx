@@ -788,9 +788,9 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
   const visualRows = input.presentation.viewport.visualRows;
   const visibleVisualRows = input.presentation.viewport.visibleVisualRows;
   const lineVisualRanges = input.presentation.viewport.lineVisualRanges;
-  const highlightCache = buildHighlightCache(input.state, input.presentation.language.visibleHighlights);
-  const diagnosticsByLine = buildDiagnosticsCache(input.state, input.presentation.language.visibleDiagnostics);
-  const lineChangesByLine = buildLineChangesMap(input.presentation.language.visibleLineChanges);
+  const highlightCache = input.presentation.language.visibleHighlightsByLine;
+  const diagnosticsByLine = input.presentation.language.diagnosticsByLine;
+  const lineChangesByLine = input.presentation.language.lineChangesByLine;
   const searchMatchesByLine = input.presentation.search.visibleMatchesByLine;
   const activeOffset = getActiveOffset(input.state);
   const activeRow = getVisualRowForOffset(

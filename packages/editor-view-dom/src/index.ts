@@ -1630,8 +1630,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     visibleLineCapacity = viewportState.visibleRowCapacity;
     wrapColumns = viewportState.wrapColumns;
     wrapRevision = viewportState.wrapRevision;
-    visualRows = [...viewportState.visualRows] as VisualRow[];
-    lineVisualRanges = [...viewportState.lineVisualRanges] as Array<{ from: number; to: number }>;
+    visualRows = viewportState.visualRows as VisualRow[];
+    lineVisualRanges = viewportState.lineVisualRanges as Array<{ from: number; to: number }>;
   }
 
   function syncLanguageMirrors(): void {
