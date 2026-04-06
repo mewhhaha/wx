@@ -1676,6 +1676,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function setCommandLineState(next: CommandLineState): void {
+    if (
+      commandLine.active === next.active &&
+      commandLine.value === next.value &&
+      commandLine.prompt === next.prompt
+    ) {
+      return;
+    }
     commandLine = next;
     currentLayoutModel = null;
     updateControllerUiPresentation((ui) => {
@@ -1684,6 +1691,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function setBottomMessageState(next: BottomMessageState | null): void {
+    if (
+      bottomMessage?.tone === next?.tone &&
+      bottomMessage?.text === next?.text &&
+      (!!bottomMessage === !!next)
+    ) {
+      return;
+    }
     bottomMessage = next;
     currentLayoutModel = null;
     updateControllerUiPresentation((ui) => {
@@ -1728,6 +1742,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function setCommandCompletionIndexState(next: number): void {
+    if (commandCompletionIndex === next) {
+      return;
+    }
     commandCompletionIndex = next;
     currentLayoutModel = null;
     updateControllerUiPresentation((ui) => {
@@ -1744,6 +1761,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function setPreviewThemeState(next: ThemeSpec | null): void {
+    if (previewTheme?.name === next?.name || (!previewTheme && !next)) {
+      return;
+    }
     previewTheme = next;
     currentLayoutModel = null;
     updateControllerUiPresentation((ui) => {
@@ -1752,6 +1772,21 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function setPickerPresentation(next: PickerState): void {
+    if (
+      pickerState.active === next.active &&
+      pickerState.loading === next.loading &&
+      pickerState.title === next.title &&
+      pickerState.selectedIndex === next.selectedIndex &&
+      pickerState.error === next.error &&
+      pickerState.items.length === next.items.length &&
+      pickerState.items.every(
+        (item, index) =>
+          item.label === next.items[index]?.label &&
+          item.detail === next.items[index]?.detail
+      )
+    ) {
+      return;
+    }
     pickerState = next;
     currentLayoutModel = null;
     updateControllerUiPresentation((ui) => {
@@ -2821,6 +2856,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function closePicker(): void {
+    if (!pickerState.active && !pickerState.loading && pickerState.items.length === 0 && !pickerState.error) {
+      return;
+    }
     setPickerPresentation({
       active: false,
       loading: false,
@@ -2834,6 +2872,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function setBottomMessage(message: BottomMessageState | null): void {
+    if (
+      bottomMessage?.tone === message?.tone &&
+      bottomMessage?.text === message?.text &&
+      (!!bottomMessage === !!message)
+    ) {
+      return;
+    }
     setBottomMessageState(message);
     patchBottomRow();
   }
