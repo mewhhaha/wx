@@ -25,5 +25,6 @@ dependencies = [
 name = "scene-lang-worker-core"
 version = "0.1.0"
 dependencies = [
+ "scene-lang-compiler",
  "scene-lang-core",
 ]

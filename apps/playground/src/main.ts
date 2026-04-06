@@ -4,45 +4,33 @@ import { phTheme } from "./phTheme";
 
 import { createCharacterSelection, createTextDocument } from "@wx/editor-core";
 import { createEditorController } from "@wx/editor-controller";
-import { createSceneLangWasm, renderCompiledScene, type ScenePreviewFrame } from "@wx/scene-lang-wasm";
+import {
+  createSceneLangWasm,
+  type SceneLangWasm,
+  type ShaderCompileResult
+} from "@wx/scene-lang-wasm";
 import { createSceneLangLanguageServices } from "@wx/scene-lang-worker";
 import { createEditor } from "@wx/editor-view-dom";
 
 import "./style.css";
 
-const fallbackSample = `source lines editor
-  8 "status file is owned by the status block"
-    info 0 eol "The status block renders once per frame"
+const shaderFilePath = "examples/demo.shader";
 
-  9 "const message = greet(user.name)"
-    guttr 9
-    warn 18 eol "Replace guttr with gutter"
+const fallbackSample = `shader
+uniform clock float builtin time
+uniform viewport vec2 builtin resolution
 
-  10 "return message"
-    error 0 below "expected number, got string"
+vertex
+  position fullscreen
 
-screen fill
-  status
-    left " NOR "
-    file "examples/editor.scene"
-    right "10:8"
-
-  for line in editor.lines
-    row line
-
-  cursor block 10:6
+fragment
+  color
+    r 0.5 + 0.5 * sin(clock + uv.x * 6.0)
+    g 0.5 + 0.5 * sin(clock * 0.7 + uv.y * 8.0)
+    b 0.35 + 0.65 * uv.x
+    a 1.0
+  clor
 `;
-
-const previewStyles = new Map<number, string>([
-  [0, "scene-preview__cell--text"],
-  [1, "scene-preview__cell--status"],
-  [2, "scene-preview__cell--gutter"],
-  [3, "scene-preview__cell--warning"],
-  [4, "scene-preview__cell--error"],
-  [5, "scene-preview__cell--info"],
-  [6, "scene-preview__cell--hint"],
-  [7, "scene-preview__cell--cursor"]
-]);
 
 type LineChangeKind = "added" | "modified";
 
@@ -109,77 +97,7 @@ function computeLineChanges(baseText: string, currentText: string): Array<{ line
 }
 
 function hasDevBridge(): boolean {
-  const host = window.location.hostname;
-  return host === "localhost" || host === "127.0.0.1" || host === "::1";
-}
-
-function renderPreviewFrame(mount: HTMLDivElement, frame: ScenePreviewFrame): void {
-  mount.replaceChildren();
-
-  const surface = document.createElement("div");
-  surface.className = "scene-preview__surface";
-  surface.style.setProperty("--scene-preview-columns", String(frame.width));
-
-  for (const row of frame.rows) {
-    const line = document.createElement("div");
-    line.className = "scene-preview__line";
-    line.style.setProperty("--scene-preview-columns", String(frame.width));
-
-    for (const cell of row) {
-      const span = document.createElement("span");
-      span.className = `scene-preview__cell ${previewStyles.get(cell.style) ?? "scene-preview__cell--text"}`;
-      span.textContent = cell.char === " " ? "\u00a0" : cell.char;
-      line.append(span);
-    }
-    surface.append(line);
-  }
-
-  mount.append(surface);
-}
-
-function renderPreviewError(mount: HTMLDivElement, error: unknown): void {
-  mount.innerHTML = "";
-  const panel = document.createElement("div");
-  panel.className = "scene-preview__error";
-  panel.textContent = error instanceof Error ? error.message : String(error);
-  mount.append(panel);
-}
-
-function measurePreviewGrid(preview: HTMLDivElement): { width: number; height: number } {
-  const surfaceProbe = document.createElement("div");
-  const probe = document.createElement("span");
-  surfaceProbe.className = "scene-preview__surface";
-  probe.className = "scene-preview__cell scene-preview__cell--text";
-  probe.textContent = "M";
-  surfaceProbe.style.position = "absolute";
-  surfaceProbe.style.visibility = "hidden";
-  surfaceProbe.style.pointerEvents = "none";
-  surfaceProbe.style.inset = "0 auto auto 0";
-  surfaceProbe.style.width = "auto";
-  surfaceProbe.style.height = "auto";
-  probe.style.position = "absolute";
-  probe.style.visibility = "hidden";
-  probe.style.pointerEvents = "none";
-  surfaceProbe.append(probe);
-  preview.append(surfaceProbe);
-
-  const rect = probe.getBoundingClientRect();
-  surfaceProbe.remove();
-
-  const cellWidth = rect.width > 0 ? rect.width : 9;
-  const cellHeight = rect.height > 0 ? rect.height : 20;
-  const computed = window.getComputedStyle(preview);
-  const paddingLeft = Number.parseFloat(computed.paddingLeft) || 0;
-  const paddingRight = Number.parseFloat(computed.paddingRight) || 0;
-  const paddingTop = Number.parseFloat(computed.paddingTop) || 0;
-  const paddingBottom = Number.parseFloat(computed.paddingBottom) || 0;
-  const availableWidth = Math.max(cellWidth, preview.clientWidth - paddingLeft - paddingRight);
-  const availableHeight = Math.max(cellHeight, preview.clientHeight - paddingTop - paddingBottom);
-
-  return {
-    width: Math.max(1, Math.floor(availableWidth / cellWidth)),
-    height: Math.max(1, Math.floor(availableHeight / cellHeight))
-  };
+  return Boolean(import.meta.env.DEV);
 }
 
 async function requestJson<T>(path: string, body: unknown): Promise<T> {
@@ -198,13 +116,13 @@ async function requestJson<T>(path: string, body: unknown): Promise<T> {
   return await response.json() as T;
 }
 
-async function loadInitialSceneSource(): Promise<string> {
+async function loadInitialShaderSource(): Promise<string> {
   if (!hasDevBridge()) {
     return fallbackSample;
   }
 
   try {
-    const response = await fetch("/__wx__/read?file=examples/editor.scene");
+    const response = await fetch(`/__wx__/read?file=${encodeURIComponent(shaderFilePath)}`);
 
     if (!response.ok) {
       throw new Error(await response.text());
@@ -214,6 +132,252 @@ async function loadInitialSceneSource(): Promise<string> {
     return typeof payload.text === "string" ? payload.text : fallbackSample;
   } catch {
     return fallbackSample;
+  }
+}
+
+class ShaderPreview {
+  private readonly mount: HTMLDivElement;
+  private readonly canvas: HTMLCanvasElement;
+  private readonly errorPanel: HTMLDivElement;
+  private readonly runtime: SceneLangWasm;
+  private readonly resizeObserver: ResizeObserver;
+
+  private adapter: any = null;
+  private device: any = null;
+  private context: any = null;
+  private format: string | null = null;
+  private bindGroupLayout: any = null;
+  private bindGroup: any = null;
+  private uniformBuffer: any = null;
+  private pipeline: any = null;
+  private currentCompile: ShaderCompileResult | null = null;
+  private animationFrame = 0;
+  private startedAt = 0;
+
+  constructor(mount: HTMLDivElement, runtime: SceneLangWasm) {
+    this.mount = mount;
+    this.runtime = runtime;
+    this.canvas = document.createElement("canvas");
+    this.canvas.className = "shader-preview__canvas";
+    this.canvas.dataset.shaderPreviewCanvas = "true";
+    this.errorPanel = document.createElement("div");
+    this.errorPanel.className = "shader-preview__error";
+    this.errorPanel.dataset.shaderPreviewError = "true";
+    this.mount.replaceChildren(this.canvas, this.errorPanel);
+    this.resizeObserver = new ResizeObserver(() => {
+      this.resizeCanvas();
+      if (this.currentCompile?.ok && !this.currentCompile.usesTime) {
+        this.drawFrame(0);
+      }
+    });
+    this.resizeObserver.observe(this.mount);
+  }
+
+  async renderSource(source: string): Promise<void> {
+    const compiled = this.runtime.compile(source);
+    this.currentCompile = compiled;
+
+    if (!compiled.ok || !compiled.wgsl) {
+      this.stopAnimation();
+      this.showError(compiled.error ?? "Shader compile failed.");
+      return;
+    }
+
+    const ready = await this.ensureContext();
+    if (!ready) {
+      this.showError("WebGPU is unavailable in this browser.");
+      return;
+    }
+
+    this.resizeCanvas();
+
+    try {
+      const shaderModule = this.device.createShaderModule({ code: compiled.wgsl });
+      if (typeof shaderModule.getCompilationInfo === "function") {
+        const info = await shaderModule.getCompilationInfo();
+        const shaderErrors = info.messages.filter((message: { type: string }) => message.type === "error");
+        if (shaderErrors.length > 0) {
+          this.stopAnimation();
+          this.showError(shaderErrors.map((message: { message: string }) => message.message).join("\n"));
+          return;
+        }
+      }
+
+      const pipelineLayout = this.device.createPipelineLayout({
+        bindGroupLayouts: [this.bindGroupLayout]
+      });
+      this.pipeline = this.device.createRenderPipeline({
+        layout: pipelineLayout,
+        vertex: {
+          module: shaderModule,
+          entryPoint: "vs_main"
+        },
+        fragment: {
+          module: shaderModule,
+          entryPoint: "fs_main",
+          targets: [{ format: this.format }]
+        },
+        primitive: {
+          topology: "triangle-list"
+        }
+      });
+    } catch (error) {
+      this.stopAnimation();
+      this.showError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+
+    this.mount.dataset.shaderPreviewState = "ready";
+    this.canvas.hidden = false;
+    this.errorPanel.hidden = true;
+    this.startedAt = performance.now();
+
+    if (compiled.usesTime) {
+      this.startAnimation();
+    } else {
+      this.stopAnimation();
+      this.drawFrame(0);
+    }
+  }
+
+  destroy(): void {
+    this.stopAnimation();
+    this.resizeObserver.disconnect();
+  }
+
+  private async ensureContext(): Promise<boolean> {
+    if (this.device && this.context) {
+      return true;
+    }
+
+    const gpu = (navigator as Navigator & { gpu?: any }).gpu;
+    if (!gpu) {
+      return false;
+    }
+
+    this.adapter = await gpu.requestAdapter();
+    if (!this.adapter) {
+      return false;
+    }
+
+    this.device = await this.adapter.requestDevice();
+    this.context = this.canvas.getContext("webgpu");
+    if (!this.device || !this.context) {
+      return false;
+    }
+
+    this.format = typeof gpu.getPreferredCanvasFormat === "function" ? gpu.getPreferredCanvasFormat() : "bgra8unorm";
+    const shaderStage = (globalThis as { GPUShaderStage?: { VERTEX: number; FRAGMENT: number } }).GPUShaderStage;
+    const bufferUsage = (globalThis as { GPUBufferUsage?: { UNIFORM: number; COPY_DST: number } }).GPUBufferUsage;
+
+    this.bindGroupLayout = this.device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: (shaderStage?.VERTEX ?? 1) | (shaderStage?.FRAGMENT ?? 2),
+          buffer: { type: "uniform" }
+        }
+      ]
+    });
+
+    this.uniformBuffer = this.device.createBuffer({
+      size: 32,
+      usage: (bufferUsage?.UNIFORM ?? 64) | (bufferUsage?.COPY_DST ?? 8)
+    });
+
+    this.bindGroup = this.device.createBindGroup({
+      layout: this.bindGroupLayout,
+      entries: [
+        {
+          binding: 0,
+          resource: { buffer: this.uniformBuffer }
+        }
+      ]
+    });
+
+    return true;
+  }
+
+  private resizeCanvas(): void {
+    if (!this.device || !this.context || !this.format) {
+      return;
+    }
+
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const nextWidth = Math.max(1, Math.floor(this.mount.clientWidth * devicePixelRatio));
+    const nextHeight = Math.max(1, Math.floor(this.mount.clientHeight * devicePixelRatio));
+
+    if (this.canvas.width !== nextWidth) {
+      this.canvas.width = nextWidth;
+    }
+    if (this.canvas.height !== nextHeight) {
+      this.canvas.height = nextHeight;
+    }
+
+    this.context.configure({
+      device: this.device,
+      format: this.format,
+      alphaMode: "opaque"
+    });
+  }
+
+  private drawFrame(timeSeconds: number): void {
+    if (!this.device || !this.context || !this.pipeline || !this.bindGroup || !this.uniformBuffer) {
+      return;
+    }
+
+    const uniforms = new Float32Array([
+      timeSeconds,
+      0,
+      0,
+      0,
+      this.canvas.width,
+      this.canvas.height,
+      0,
+      0
+    ]);
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, uniforms);
+
+    const commandEncoder = this.device.createCommandEncoder();
+    const renderPass = commandEncoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: this.context.getCurrentTexture().createView(),
+          clearValue: { r: 0.02, g: 0.02, b: 0.03, a: 1 },
+          loadOp: "clear",
+          storeOp: "store"
+        }
+      ]
+    });
+
+    renderPass.setPipeline(this.pipeline);
+    renderPass.setBindGroup(0, this.bindGroup);
+    renderPass.draw(3);
+    renderPass.end();
+    this.device.queue.submit([commandEncoder.finish()]);
+  }
+
+  private startAnimation(): void {
+    this.stopAnimation();
+    const tick = (now: number) => {
+      this.animationFrame = window.requestAnimationFrame(tick);
+      this.drawFrame((now - this.startedAt) / 1000);
+    };
+    this.animationFrame = window.requestAnimationFrame(tick);
+  }
+
+  private stopAnimation(): void {
+    if (this.animationFrame !== 0) {
+      cancelAnimationFrame(this.animationFrame);
+      this.animationFrame = 0;
+    }
+  }
+
+  private showError(message: string): void {
+    this.mount.dataset.shaderPreviewState = "error";
+    this.errorPanel.textContent = message;
+    this.errorPanel.hidden = false;
+    this.canvas.hidden = true;
   }
 }
 
@@ -233,8 +397,8 @@ async function main(): Promise<void> {
     wasmUrl: sceneLangWasmUrl
   });
   const sceneRuntime = await createSceneLangWasm({ wasmUrl: sceneLangWasmUrl });
-  const sample = await loadInitialSceneSource();
-  const initialSelectionOffset = Math.max(0, sample.indexOf("guttr"));
+  const sample = await loadInitialShaderSource();
+  const initialSelectionOffset = Math.max(0, sample.indexOf("clor"));
   const controller = createEditorController({
     value: sample,
     selection: createCharacterSelection(createTextDocument(sample), initialSelectionOffset)
@@ -244,66 +408,22 @@ async function main(): Promise<void> {
     <main class="workspace">
       <div id="mount-editor" class="workspace__editor"></div>
       <aside class="workspace__preview">
-        <div id="mount-preview" class="scene-preview" data-scene-preview="true"></div>
+        <div id="mount-preview" class="shader-preview" data-shader-preview="true"></div>
       </aside>
     </main>
   `;
 
   const mount = app.querySelector<HTMLDivElement>("#mount-editor");
-  const preview = app.querySelector<HTMLDivElement>("#mount-preview");
+  const previewMount = app.querySelector<HTMLDivElement>("#mount-preview");
 
-  if (mount && preview) {
+  if (mount && previewMount) {
+    const preview = new ShaderPreview(previewMount, sceneRuntime);
     const devBridgeEnabled = hasDevBridge();
-    const memoryFiles = new Map<string, string>([["examples/editor.scene", sample]]);
-    let renderRunId = 0;
-    let lastRenderedSource = controller.getState().doc.text;
-    let resizeFrame = 0;
-
-    const renderPreview = async (source: string) => {
-      const runId = ++renderRunId;
-      lastRenderedSource = source;
-
-      preview.dataset.scenePreviewState = "running";
-
-      try {
-        const terminalSize = measurePreviewGrid(preview);
-        const compiled = sceneRuntime.compile(source);
-        const frame = await renderCompiledScene(compiled, {
-          width: terminalSize.width,
-          height: terminalSize.height
-        });
-
-        if (runId !== renderRunId) {
-          return;
-        }
-
-        preview.dataset.scenePreviewState = "ready";
-        renderPreviewFrame(preview, frame);
-      } catch (error) {
-        if (runId !== renderRunId) {
-          return;
-        }
-
-        preview.dataset.scenePreviewState = "error";
-        renderPreviewError(preview, error);
-      }
-    };
-
-    const resizeObserver = new ResizeObserver(() => {
-      if (resizeFrame !== 0) {
-        cancelAnimationFrame(resizeFrame);
-      }
-
-      resizeFrame = window.requestAnimationFrame(() => {
-        resizeFrame = 0;
-        void renderPreview(lastRenderedSource);
-      });
-    });
-    resizeObserver.observe(preview);
+    const memoryFiles = new Map<string, string>([[shaderFilePath, sample]]);
 
     const editor = createEditor(mount, {
       controller,
-      filePath: "examples/editor.scene",
+      filePath: shaderFilePath,
       languageServices: sceneLanguageServices,
       host: devBridgeEnabled
         ? {
@@ -311,10 +431,10 @@ async function main(): Promise<void> {
               await requestJson("/__wx__/write", context);
             },
             async didWriteFile(context) {
-              await renderPreview(context.text);
+              await preview.renderSource(context.text);
             },
             async getLineChanges(context) {
-              const payload = await requestJson<{ changes: Array<{ line: number; kind: "added" | "modified" }> }>(
+              const payload = await requestJson<{ changes: Array<{ line: number; kind: "added" | "modified" | "deleted" }> }>(
                 "/__wx__/line-changes",
                 context
               );
@@ -326,7 +446,7 @@ async function main(): Promise<void> {
               memoryFiles.set(context.filePath, context.text);
             },
             async didWriteFile(context) {
-              await renderPreview(context.text);
+              await preview.renderSource(context.text);
             },
             async getLineChanges(context) {
               return computeLineChanges(memoryFiles.get(context.filePath) ?? "", context.text);
@@ -341,15 +461,12 @@ async function main(): Promise<void> {
       }
     });
 
-    void renderPreview(controller.getState().doc.text);
+    void preview.renderSource(controller.getState().doc.text);
     editor.focus();
     window.addEventListener(
       "beforeunload",
       () => {
-        resizeObserver.disconnect();
-        if (resizeFrame !== 0) {
-          cancelAnimationFrame(resizeFrame);
-        }
+        preview.destroy();
       },
       { once: true }
     );

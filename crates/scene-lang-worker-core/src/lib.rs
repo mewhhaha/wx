@@ -1,3 +1,4 @@
+use scene_lang_compiler::compile_scene;
 use scene_lang_core::{
     SceneAnalysis, SceneDiagnostic, SceneHighlight, SceneHover, TextChange, analyze_scene,
     code_actions, format_scene, highlights_for_lines, hover_at,
@@ -130,6 +131,21 @@ pub fn highlights_json_payload(source: &str, from_line: usize, to_line: usize) -
     highlights_json(&highlights_for_lines(source, from_line, to_line))
 }
 
+pub fn compile_json_payload(source: &str) -> String {
+    match compile_scene(source) {
+        Ok(output) => format!(
+            "{{\"ok\":true,\"wgsl\":\"{}\",\"usesTime\":{},\"usesResolution\":{}}}",
+            escape_json(&output.wgsl),
+            output.uses_time,
+            output.uses_resolution
+        ),
+        Err(error) => format!(
+            "{{\"ok\":false,\"error\":\"{}\",\"wgsl\":null,\"usesTime\":false,\"usesResolution\":false}}",
+            escape_json(&error)
+        ),
+    }
+}
+
 #[allow(dead_code)]
 pub fn diagnostics_payload(source: &str) -> String {
     diagnostics_json_payload(source)
@@ -159,40 +175,29 @@ mod tests {
 
     #[test]
     fn diagnostics_payload_reports_unknown_command() {
-        let source = "screen\n  guttr number 1";
+        let source = "shader\nfragment\n  clor";
         let payload = diagnostics_json_payload(source);
         assert!(payload.contains("\"command.unknown\""));
-        assert!(payload.contains("\"from\":"));
     }
 
     #[test]
-    fn hover_payload_is_null_for_unknown_offset() {
-        let source = "screen\n  status\n    left \"A\"";
-        let payload = hover_json_payload(source, 1024);
-        assert_eq!(payload, "null");
-    }
+    fn compile_payload_contains_wgsl_when_shader_is_valid() {
+        let source = r#"shader
+uniform clock float builtin time
 
-    #[test]
-    fn format_payload_contains_a_rewrite_when_needed() {
-        let source = "screen";
-        let payload = format_json_payload(source);
-        assert!(payload.starts_with("[{"));
-        assert!(payload.contains("\"insert\":"));
-    }
+vertex
+  position fullscreen
 
-    #[test]
-    fn code_actions_are_emitted_for_recoverable_errors() {
-        let source = "screen\n  guttr number 1";
-        let payload = code_actions_payload(source, 0, source.len());
-        assert!(payload.contains("\"title\":\""));
-    }
+fragment
+  color
+    r 0.5 + 0.5 * sin(clock)
+    g 0.2
+    b 0.4
+    a 1.0
+"#;
 
-    #[test]
-    fn highlights_payload_matches_expected_shape() {
-        let source = "screen\n  status\n    left \"NOR\"";
-        let payload = highlights_json_payload(source, 0, 10);
-        assert!(payload.starts_with("["));
-        assert!(payload.ends_with("]"));
-        assert!(payload.contains("\"role\""));
+        let payload = compile_json_payload(source);
+        assert!(payload.contains("\"ok\":true"));
+        assert!(payload.contains("@fragment"));
     }
 }

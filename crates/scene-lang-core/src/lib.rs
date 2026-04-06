@@ -1,4 +1,4 @@
-use std::cmp::min;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Severity {
@@ -26,7 +26,10 @@ pub enum HighlightRole {
     Number,
     Type,
     Function,
+    Operator,
+    Punctuation,
     Text,
+    Comment,
 }
 
 impl HighlightRole {
@@ -37,57 +40,12 @@ impl HighlightRole {
             Self::Number => "number",
             Self::Type => "type",
             Self::Function => "function",
+            Self::Operator => "operator",
+            Self::Punctuation => "punctuation",
             Self::Text => "text",
+            Self::Comment => "comment",
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-    pub line: usize,
-    pub column: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TokenKind {
-    Word,
-    String,
-    Number,
-    Reference,
-    Range,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Token {
-    pub kind: TokenKind,
-    pub text: String,
-    pub span: Span,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ParsedLine {
-    pub indent: usize,
-    pub line_index: usize,
-    pub start: usize,
-    pub end: usize,
-    pub raw: String,
-    pub command: String,
-    pub command_span: Span,
-    pub tokens: Vec<Token>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Node {
-    pub line: ParsedLine,
-    pub children: Vec<Node>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ParseResult {
-    pub nodes: Vec<Node>,
-    pub diagnostics: Vec<SceneDiagnostic>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,7 +69,6 @@ pub struct SceneDiagnostic {
     pub message: String,
     pub source: &'static str,
     pub code: &'static str,
-    pub replacement: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -127,1163 +84,1600 @@ pub struct SceneHover {
     pub source: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShaderType {
+    Float,
+    Vec2,
+    Vec3,
+    Vec4,
+}
+
+impl ShaderType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Float => "float",
+            Self::Vec2 => "vec2",
+            Self::Vec3 => "vec3",
+            Self::Vec4 => "vec4",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "float" => Some(Self::Float),
+            "vec2" => Some(Self::Vec2),
+            "vec3" => Some(Self::Vec3),
+            "vec4" => Some(Self::Vec4),
+            _ => None,
+        }
+    }
+
+    pub fn wgsl_name(self) -> &'static str {
+        match self {
+            Self::Float => "f32",
+            Self::Vec2 => "vec2f",
+            Self::Vec3 => "vec3f",
+            Self::Vec4 => "vec4f",
+        }
+    }
+
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BuiltinUniform {
+    Time,
+    Resolution,
+}
+
+impl BuiltinUniform {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Time => "time",
+            Self::Resolution => "resolution",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "time" => Some(Self::Time),
+            "resolution" => Some(Self::Resolution),
+            _ => None,
+        }
+    }
+
+    fn expected_type(self) -> ShaderType {
+        match self {
+            Self::Time => ShaderType::Float,
+            Self::Resolution => ShaderType::Vec2,
+        }
+    }
+
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShaderUniform {
+    pub name: String,
+    pub ty: ShaderType,
+    pub builtin: BuiltinUniform,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Expr {
+    Number(String),
+    Identifier(String),
+    Unary {
+        op: char,
+        expr: Box<Expr>,
+    },
+    Binary {
+        op: char,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct ShaderProgram {
+    pub uniforms: Vec<ShaderUniform>,
+    pub r: Expr,
+    pub g: Expr,
+    pub b: Expr,
+    pub a: Expr,
+    pub uses_time: bool,
+    pub uses_resolution: bool,
+}
+
+#[derive(Clone, Debug)]
+struct HoverEntry {
+    from: usize,
+    to: usize,
+    content: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct SceneAnalysis {
     pub diagnostics: Vec<SceneDiagnostic>,
     pub highlights: Vec<SceneHighlight>,
+    pub program: Option<ShaderProgram>,
+    hover_entries: Vec<HoverEntry>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SceneProgram {
-    pub nodes: Vec<Node>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TopBlock {
+    None,
+    Vertex,
+    Fragment,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SceneTextLine {
-    pub number: i32,
-    pub gutter: Option<i32>,
-    pub text: String,
-    pub eol_diagnostic: Option<(Severity, String, i32)>,
-    pub below_diagnostic: Option<(Severity, String, i32)>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExprType {
+    Scalar,
+    Vec2,
+    Vec3,
+    Vec4,
+    Invalid,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
-pub struct SceneStatus {
-    pub left: Option<String>,
-    pub file: Option<String>,
-    pub right: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SceneCursor {
-    pub kind: String,
-    pub line: i32,
-    pub col: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
-pub struct SceneRenderModel {
-    pub fill_screen: bool,
-    pub status: SceneStatus,
-    pub lines: Vec<SceneTextLine>,
-    pub cursor: Option<SceneCursor>,
-}
-
-#[derive(Clone, Copy)]
-struct CommandSpec {
-    name: &'static str,
-    docs: &'static str,
-    allowed_children: &'static [&'static str],
-}
-
-const ROOT_CHILDREN: &[&str] = &["screen", "source"];
-const SCREEN_CHILDREN: &[&str] = &[
-    "size",
-    "status",
-    "line",
-    "cursor",
-    "selection",
-    "row",
-    "span",
-    "repeat",
-    "when",
-    "for",
-];
-const SOURCE_CHILDREN: &[&str] = &[];
-const STATUS_CHILDREN: &[&str] = &["left", "file", "right"];
-const LINE_CHILDREN: &[&str] = &["gutter", "text", "diagnostic"];
-const DIAGNOSTIC_CHILDREN: &[&str] = &["eol", "below"];
-const FOR_CHILDREN: &[&str] = &[
-    "row",
-    "line",
-    "status",
-    "span",
-    "text",
-    "gutter",
-    "diagnostic",
-    "cursor",
-    "selection",
-];
-const ROW_CHILDREN: &[&str] = &["gutter", "text", "diagnostic", "span"];
-
-const COMMAND_SPECS: &[CommandSpec] = &[
-    CommandSpec {
-        name: "screen",
-        docs: "Root scene node for a terminal or editor frame.",
-        allowed_children: SCREEN_CHILDREN,
-    },
-    CommandSpec {
-        name: "source",
-        docs: "Declare a named editor data source that can be projected later.",
-        allowed_children: SOURCE_CHILDREN,
-    },
-    CommandSpec {
-        name: "size",
-        docs: "Declare how the scene uses the available viewport size.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "status",
-        docs: "Create a status bar container.",
-        allowed_children: STATUS_CHILDREN,
-    },
-    CommandSpec {
-        name: "left",
-        docs: "Render left-aligned status text.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "file",
-        docs: "Render the current file segment in the status bar.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "right",
-        docs: "Render right-aligned status text.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "line",
-        docs: "Describe a rendered editor line in the preview.",
-        allowed_children: LINE_CHILDREN,
-    },
-    CommandSpec {
-        name: "gutter",
-        docs: "Render gutter content for a line.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "text",
-        docs: "Render text content for the current row.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "diagnostic",
-        docs: "Attach a diagnostic with inline or end-of-line rendering.",
-        allowed_children: DIAGNOSTIC_CHILDREN,
-    },
-    CommandSpec {
-        name: "eol",
-        docs: "Render a diagnostic at the end of the current line.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "below",
-        docs: "Render a diagnostic beneath the current line.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "cursor",
-        docs: "Render a cursor marker in the preview.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "selection",
-        docs: "Describe a selected range.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "row",
-        docs: "Define a reusable rendered row.",
-        allowed_children: ROW_CHILDREN,
-    },
-    CommandSpec {
-        name: "span",
-        docs: "Render a styled span of text.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "repeat",
-        docs: "Repeat a child scene fragment.",
-        allowed_children: &[],
-    },
-    CommandSpec {
-        name: "when",
-        docs: "Conditionally render child nodes from a simple state check.",
-        allowed_children: SCREEN_CHILDREN,
-    },
-    CommandSpec {
-        name: "for",
-        docs: "Iterate over a simple built-in collection such as visible-lines.",
-        allowed_children: FOR_CHILDREN,
-    },
-];
-
-fn command_spec(name: &str) -> Option<&'static CommandSpec> {
-    COMMAND_SPECS.iter().find(|spec| spec.name == name)
-}
-
-fn known_commands() -> impl Iterator<Item = &'static str> {
-    COMMAND_SPECS.iter().map(|spec| spec.name)
-}
-
-fn allowed_children(parent: Option<&str>) -> &'static [&'static str] {
-    match parent {
-        None => ROOT_CHILDREN,
-        Some("screen") => SCREEN_CHILDREN,
-        Some("source") => SOURCE_CHILDREN,
-        Some("status") => STATUS_CHILDREN,
-        Some("line") => LINE_CHILDREN,
-        Some("diagnostic") => DIAGNOSTIC_CHILDREN,
-        Some("for") => FOR_CHILDREN,
-        Some("row") => ROW_CHILDREN,
-        _ => &[],
+impl ExprType {
+    fn from_shader_type(value: ShaderType) -> Self {
+        match value {
+            ShaderType::Float => Self::Scalar,
+            ShaderType::Vec2 => Self::Vec2,
+            ShaderType::Vec3 => Self::Vec3,
+            ShaderType::Vec4 => Self::Vec4,
+        }
     }
 }
 
-fn make_span(start: usize, end: usize, line: usize, column: usize) -> Span {
-    Span {
-        start,
-        end,
-        line,
-        column,
-    }
-}
-
-fn is_word_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':')
-}
-
-fn tokenize_line(
-    content: &str,
-    absolute_start: usize,
-    line_index: usize,
-    indent_spaces: usize,
-) -> Vec<Token> {
-    let mut tokens = Vec::new();
-    let mut cursor = 0usize;
-    let chars: Vec<char> = content.chars().collect();
-
-    while cursor < chars.len() {
-        while cursor < chars.len() && chars[cursor].is_whitespace() {
-            cursor += 1;
-        }
-        if cursor >= chars.len() {
-            break;
-        }
-
-        let token_start = cursor;
-        let token_column = indent_spaces + cursor;
-
-        if chars[cursor] == '"' {
-            cursor += 1;
-            let mut value = String::new();
-            while cursor < chars.len() {
-                let ch = chars[cursor];
-                cursor += 1;
-                if ch == '"' {
-                    break;
-                }
-                if ch == '\\' && cursor < chars.len() {
-                    value.push(chars[cursor]);
-                    cursor += 1;
-                } else {
-                    value.push(ch);
-                }
-            }
-            let start = absolute_start + token_start;
-            let end = absolute_start + cursor;
-            tokens.push(Token {
-                kind: TokenKind::String,
-                text: value,
-                span: make_span(start, end, line_index, token_column),
-            });
-            continue;
-        }
-
-        while cursor < chars.len() && !chars[cursor].is_whitespace() && is_word_char(chars[cursor])
-        {
-            cursor += 1;
-        }
-
-        if cursor == token_start {
-            cursor += 1;
-        }
-
-        let text: String = chars[token_start..cursor].iter().collect();
-        let kind = if text.contains("..") {
-            TokenKind::Range
-        } else if text.chars().all(|ch| ch.is_ascii_digit()) {
-            TokenKind::Number
-        } else if text.contains('.') || text == "fill" || text == "visible-lines" {
-            TokenKind::Reference
-        } else {
-            TokenKind::Word
-        };
-        let start = absolute_start + token_start;
-        let end = absolute_start + cursor;
-        tokens.push(Token {
-            kind,
-            text,
-            span: make_span(start, end, line_index, token_column),
-        });
-    }
-
-    tokens
-}
-
-fn parse_lines(source: &str) -> (Vec<ParsedLine>, Vec<SceneDiagnostic>) {
-    let mut lines = Vec::new();
-    let mut diagnostics = Vec::new();
-    let mut offset = 0usize;
-
-    for (line_index, raw_line) in source.split('\n').enumerate() {
-        let indent_spaces = raw_line.chars().take_while(|ch| *ch == ' ').count();
-        let trimmed = raw_line[indent_spaces..].trim_end();
-        let start = offset;
-        let end = offset + raw_line.len();
-
-        if trimmed.is_empty() {
-            offset = end + 1;
-            continue;
-        }
-
-        if indent_spaces % 2 != 0 {
-            diagnostics.push(SceneDiagnostic {
-                from: start,
-                to: min(end, start + indent_spaces),
-                severity: Severity::Error,
-                message: "Indentation must use multiples of two spaces.".to_string(),
-                source: "scene-lang",
-                code: "indent.multiple",
-                replacement: None,
-            });
-        }
-
-        let tokens = tokenize_line(trimmed, start + indent_spaces, line_index, indent_spaces);
-        if tokens.is_empty() {
-            offset = end + 1;
-            continue;
-        }
-
-        let command = tokens[0].text.clone();
-        lines.push(ParsedLine {
-            indent: indent_spaces / 2,
-            line_index,
-            start,
-            end,
-            raw: raw_line.to_string(),
-            command_span: tokens[0].span.clone(),
-            command,
-            tokens,
-        });
-
-        offset = end + 1;
-    }
-
-    (lines, diagnostics)
-}
-
-fn build_nodes(
-    lines: &[ParsedLine],
-    index: &mut usize,
+#[derive(Clone, Debug)]
+struct ParsedLine<'a> {
+    start: usize,
     indent: usize,
-    diagnostics: &mut Vec<SceneDiagnostic>,
-) -> Vec<Node> {
-    let mut nodes = Vec::new();
+    trimmed: &'a str,
+}
 
-    while *index < lines.len() {
-        let line = &lines[*index];
+#[derive(Clone, Debug)]
+struct AnalysisBuilder {
+    diagnostics: Vec<SceneDiagnostic>,
+    highlights: Vec<SceneHighlight>,
+    hover_entries: Vec<HoverEntry>,
+    uniforms: Vec<ShaderUniform>,
+    uniform_spans: HashMap<String, (usize, usize)>,
+    used_uniforms: HashSet<String>,
+    has_shader_root: bool,
+    has_vertex: bool,
+    has_fragment: bool,
+    has_fullscreen_position: bool,
+    has_color_block: bool,
+    channels: HashMap<char, Expr>,
+}
 
-        if line.indent < indent {
-            break;
+impl AnalysisBuilder {
+    fn new() -> Self {
+        Self {
+            diagnostics: Vec::new(),
+            highlights: Vec::new(),
+            hover_entries: Vec::new(),
+            uniforms: Vec::new(),
+            uniform_spans: HashMap::new(),
+            used_uniforms: HashSet::new(),
+            has_shader_root: false,
+            has_vertex: false,
+            has_fragment: false,
+            has_fullscreen_position: false,
+            has_color_block: false,
+            channels: HashMap::new(),
         }
+    }
 
-        if line.indent > indent {
-            diagnostics.push(SceneDiagnostic {
-                from: line.start,
-                to: line.end,
-                severity: Severity::Error,
-                message: "Unexpected indentation level.".to_string(),
-                source: "scene-lang",
-                code: "indent.unexpected",
-                replacement: None,
-            });
-            *index += 1;
-            continue;
-        }
-
-        let current = line.clone();
-        *index += 1;
-        let children = build_nodes(lines, index, indent + 1, diagnostics);
-        nodes.push(Node {
-            line: current,
-            children,
+    fn push_diagnostic(
+        &mut self,
+        from: usize,
+        to: usize,
+        severity: Severity,
+        code: &'static str,
+        message: impl Into<String>,
+    ) {
+        self.diagnostics.push(SceneDiagnostic {
+            from,
+            to,
+            severity,
+            message: message.into(),
+            source: "shader-lang",
+            code,
         });
     }
 
-    nodes
-}
-
-pub fn parse_scene(source: &str) -> ParseResult {
-    let (lines, mut diagnostics) = parse_lines(source);
-    let mut index = 0usize;
-    let nodes = build_nodes(&lines, &mut index, 0, &mut diagnostics);
-    ParseResult { nodes, diagnostics }
-}
-
-fn levenshtein(left: &str, right: &str) -> usize {
-    let left_chars: Vec<char> = left.chars().collect();
-    let right_chars: Vec<char> = right.chars().collect();
-    let mut prev: Vec<usize> = (0..=right_chars.len()).collect();
-    let mut next = vec![0usize; right_chars.len() + 1];
-
-    for (i, left_ch) in left_chars.iter().enumerate() {
-        next[0] = i + 1;
-        for (j, right_ch) in right_chars.iter().enumerate() {
-            let cost = if left_ch == right_ch { 0 } else { 1 };
-            next[j + 1] = min(min(next[j] + 1, prev[j + 1] + 1), prev[j] + cost);
+    fn push_highlight(&mut self, from: usize, to: usize, role: HighlightRole) {
+        if from < to {
+            self.highlights.push(SceneHighlight { from, to, role });
         }
-        prev.clone_from_slice(&next);
     }
 
-    prev[right_chars.len()]
-}
-
-fn nearest_command(name: &str, parent: Option<&str>) -> Option<&'static str> {
-    allowed_children(parent)
-        .iter()
-        .copied()
-        .chain(known_commands())
-        .min_by_key(|candidate| levenshtein(name, candidate))
-}
-
-fn push_highlights_from_line(line: &ParsedLine, highlights: &mut Vec<SceneHighlight>) {
-    for (index, token) in line.tokens.iter().enumerate() {
-        let role = if index == 0 {
-            HighlightRole::Keyword
-        } else {
-            match token.kind {
-                TokenKind::String => HighlightRole::String,
-                TokenKind::Number | TokenKind::Range => HighlightRole::Number,
-                TokenKind::Reference => HighlightRole::Type,
-                TokenKind::Word => HighlightRole::Function,
-            }
-        };
-
-        highlights.push(SceneHighlight {
-            from: token.span.start,
-            to: token.span.end,
-            role,
-        });
-    }
-}
-
-fn validate_line(node: &Node, parent: Option<&str>, diagnostics: &mut Vec<SceneDiagnostic>) {
-    let command = node.line.command.as_str();
-    let allowed = allowed_children(parent);
-    push_specific_diagnostics(node, diagnostics);
-
-    if is_compact_source_line(node) {
-        if parent != Some("source") && parent != Some("screen") {
-            diagnostics.push(SceneDiagnostic {
-                from: node.line.command_span.start,
-                to: node.line.end,
-                severity: Severity::Error,
-                message: "Compact row syntax is only allowed inside `source` or `screen`.".to_string(),
-                source: "scene-lang",
-                code: "line.compact-parent",
-                replacement: None,
+    fn push_hover(&mut self, from: usize, to: usize, content: impl Into<String>) {
+        if from < to {
+            self.hover_entries.push(HoverEntry {
+                from,
+                to,
+                content: content.into(),
             });
         }
-        return;
-    }
-
-    if is_compact_diagnostic(node) {
-        if !matches!(parent, Some("line") | Some("source-row")) {
-            diagnostics.push(SceneDiagnostic {
-                from: node.line.command_span.start,
-                to: node.line.end,
-                severity: Severity::Error,
-                message: "Compact diagnostics only attach to rendered rows.".to_string(),
-                source: "scene-lang",
-                code: "diagnostic.compact-parent",
-                replacement: None,
-            });
-        }
-        return;
-    }
-
-    if command_spec(command).is_none() {
-        diagnostics.push(SceneDiagnostic {
-            from: node.line.command_span.start,
-            to: node.line.command_span.end,
-            severity: Severity::Error,
-            message: format!("Unknown command `{command}`."),
-            source: "scene-lang",
-            code: "command.unknown",
-            replacement: nearest_command(command, parent).map(str::to_string),
-        });
-        return;
-    }
-
-    if !allowed.contains(&command) {
-        diagnostics.push(SceneDiagnostic {
-            from: node.line.command_span.start,
-            to: node.line.command_span.end,
-            severity: Severity::Error,
-            message: match parent {
-                Some(parent_name) => format!("`{command}` is not allowed inside `{parent_name}`."),
-                None => format!("`{command}` is not allowed at the root level."),
-            },
-            source: "scene-lang",
-            code: "command.illegal-child",
-            replacement: None,
-        });
-    }
-}
-
-fn token_text<'a>(tokens: &'a [Token], index: usize) -> Option<&'a str> {
-    tokens.get(index).map(|token| token.text.as_str())
-}
-
-fn push_specific_diagnostics(node: &Node, diagnostics: &mut Vec<SceneDiagnostic>) {
-    let tokens = &node.line.tokens;
-    let command = node.line.command.as_str();
-
-    if is_compact_source_line(node) {
-        return;
-    }
-
-    if is_compact_diagnostic(node) {
-        let okay = tokens.len() >= 4
-            && matches!(tokens.get(1).map(|token| &token.kind), Some(TokenKind::Number))
-            && matches!(token_text(tokens, 2), Some("eol" | "below"))
-            && matches!(tokens.get(3).map(|token| &token.kind), Some(TokenKind::String));
-
-        if !okay {
-            diagnostics.push(SceneDiagnostic {
-                from: node.line.command_span.start,
-                to: node.line.end,
-                severity: Severity::Error,
-                message: "Use `<severity> <column> <eol|below> \"message\"`.".to_string(),
-                source: "scene-lang",
-                code: "diagnostic.compact-shape",
-                replacement: Some("warn 0 eol \"message\"".to_string()),
-            });
-        }
-        return;
-    }
-
-    match command {
-        "screen" => {
-            if tokens.len() > 1 && token_text(tokens, 1) != Some("fill") {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Warning,
-                    message: "Use `screen fill` or a child `size fill`.".to_string(),
-                    source: "scene-lang",
-                    code: "screen.fill",
-                    replacement: Some("screen fill".to_string()),
-                });
-            }
-        }
-        "source" => {
-            let okay = token_text(tokens, 1) == Some("lines") && tokens.len() >= 3;
-            if !okay {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Error,
-                    message: "Use `source lines <name>`.".to_string(),
-                    source: "scene-lang",
-                    code: "source.shape",
-                    replacement: Some("source lines preview".to_string()),
-                });
-            }
-        }
-        "size" => {
-            if token_text(tokens, 1) != Some("fill") {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Warning,
-                    message: "Use `size fill` to bind the scene to the viewport.".to_string(),
-                    source: "scene-lang",
-                    code: "size.fill",
-                    replacement: Some("size fill".to_string()),
-                });
-            }
-        }
-        "left" | "file" | "right" | "text" | "eol" | "below" => {
-            if tokens.get(1).map(|token| &token.kind) != Some(&TokenKind::String) {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Error,
-                    message: format!("`{command}` expects a quoted string literal."),
-                    source: "scene-lang",
-                    code: "string.expected",
-                    replacement: None,
-                });
-            }
-        }
-        "line" => {
-            if tokens.len() < 2 {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Error,
-                    message: "`line` expects a line number or reference.".to_string(),
-                    source: "scene-lang",
-                    code: "line.number",
-                    replacement: None,
-                });
-            }
-        }
-        "gutter" => {
-            if token_text(tokens, 1) != Some("number") || tokens.len() < 3 {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Error,
-                    message: "Use `gutter number <value>`.".to_string(),
-                    source: "scene-lang",
-                    code: "gutter.shape",
-                    replacement: Some("gutter number 1".to_string()),
-                });
-            }
-        }
-        "diagnostic" => {
-            let severity = token_text(tokens, 1);
-            let at_keyword = token_text(tokens, 2);
-            let position = token_text(tokens, 3);
-            if !matches!(severity, Some("error" | "warning" | "info" | "hint"))
-                || at_keyword != Some("at")
-                || position.is_none()
-            {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Error,
-                    message: "Use `diagnostic <severity> at <column>`.".to_string(),
-                    source: "scene-lang",
-                    code: "diagnostic.shape",
-                    replacement: Some("diagnostic warning at 0".to_string()),
-                });
-            }
-        }
-        "cursor" => {
-            let legacy = matches!(token_text(tokens, 1), Some("block" | "line"))
-                && token_text(tokens, 2) == Some("at")
-                && token_text(tokens, 3) == Some("line")
-                && token_text(tokens, 5) == Some("col")
-                && tokens.len() >= 7;
-            let compact = matches!(token_text(tokens, 1), Some("block" | "line"))
-                && parse_line_col_token(tokens.get(2)).is_some();
-            if !legacy && !compact {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Error,
-                    message: "Use `cursor <block|line> <line>:<col>` or `cursor <block|line> at line <n> col <n>`.".to_string(),
-                    source: "scene-lang",
-                    code: "cursor.shape",
-                    replacement: Some("cursor block 1:0".to_string()),
-                });
-            }
-        }
-        "selection" => {
-            let okay =
-                token_text(tokens, 1) == Some("line") && token_text(tokens, 3) == Some("cols");
-            if !okay || tokens.len() < 5 {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Error,
-                    message: "Use `selection line <n> cols <a..b>`.".to_string(),
-                    source: "scene-lang",
-                    code: "selection.shape",
-                    replacement: Some("selection line 1 cols 0..1".to_string()),
-                });
-            }
-        }
-        "when" => {
-            let okay = token_text(tokens, 1) == Some("mode")
-                && token_text(tokens, 2) == Some("is")
-                && tokens.len() >= 4;
-            if !okay {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Error,
-                    message: "Use `when mode is <value>`.".to_string(),
-                    source: "scene-lang",
-                    code: "when.shape",
-                    replacement: Some("when mode is insert".to_string()),
-                });
-            }
-        }
-        "for" => {
-            let okay = token_text(tokens, 1) == Some("line")
-                && token_text(tokens, 2) == Some("in")
-                && token_text(tokens, 3)
-                    .map(|reference| reference == "visible-lines" || reference.ends_with(".lines"))
-                    .unwrap_or(false);
-            if !okay {
-                diagnostics.push(SceneDiagnostic {
-                    from: node.line.command_span.start,
-                    to: node.line.end,
-                    severity: Severity::Error,
-                    message: "Use `for line in visible-lines` or `for line in <source>.lines`.".to_string(),
-                    source: "scene-lang",
-                    code: "for.shape",
-                    replacement: Some("for line in visible-lines".to_string()),
-                });
-            }
-        }
-        _ => {}
-    }
-}
-
-fn walk(
-    node: &Node,
-    parent: Option<&str>,
-    diagnostics: &mut Vec<SceneDiagnostic>,
-    highlights: &mut Vec<SceneHighlight>,
-) {
-    validate_line(node, parent, diagnostics);
-    push_highlights_from_line(&node.line, highlights);
-    let child_parent = if is_compact_source_line(node) {
-        Some("source-row")
-    } else {
-        Some(node.line.command.as_str())
-    };
-    for child in &node.children {
-        walk(child, child_parent, diagnostics, highlights);
     }
 }
 
 pub fn analyze_scene(source: &str) -> SceneAnalysis {
-    let parsed = parse_scene(source);
-    let mut diagnostics = parsed.diagnostics;
-    let mut highlights = Vec::new();
+    let parsed_lines = collect_lines(source);
+    let mut builder = AnalysisBuilder::new();
+    let mut block = TopBlock::None;
+    let mut in_color_block = false;
 
-    for node in &parsed.nodes {
-        walk(node, None, &mut diagnostics, &mut highlights);
+    for line in &parsed_lines {
+        if line.trimmed.is_empty() {
+            continue;
+        }
+
+        if line.trimmed.starts_with('#') {
+            builder.push_highlight(line.start + line.indent, line.start + line.trimmed.len(), HighlightRole::Comment);
+            continue;
+        }
+
+        if line.indent == 0 {
+            in_color_block = false;
+            let token_end = first_token_end(line.trimmed);
+            let keyword = &line.trimmed[..token_end];
+            let keyword_from = line.start + line.indent;
+            let keyword_to = keyword_from + keyword.len();
+            builder.push_highlight(keyword_from, keyword_to, HighlightRole::Keyword);
+            builder.push_hover(keyword_from, keyword_to, hover_for_keyword(keyword));
+
+            match keyword {
+                "shader" => {
+                    builder.has_shader_root = true;
+                    block = TopBlock::None;
+                }
+                "uniform" => {
+                    parse_uniform_line(line, &mut builder);
+                    block = TopBlock::None;
+                }
+                "vertex" => {
+                    builder.has_vertex = true;
+                    block = TopBlock::Vertex;
+                }
+                "fragment" => {
+                    builder.has_fragment = true;
+                    block = TopBlock::Fragment;
+                }
+                _ => {
+                    builder.push_diagnostic(
+                        keyword_from,
+                        keyword_to,
+                        Severity::Error,
+                        "command.unknown",
+                        format!("Unknown root command `{keyword}`."),
+                    );
+                }
+            }
+            continue;
+        }
+
+        if line.indent == 2 {
+            let token_end = first_token_end(line.trimmed);
+            let keyword = &line.trimmed[..token_end];
+            let keyword_from = line.start + line.indent;
+            let keyword_to = keyword_from + keyword.len();
+            builder.push_highlight(keyword_from, keyword_to, HighlightRole::Keyword);
+            builder.push_hover(keyword_from, keyword_to, hover_for_keyword(keyword));
+
+            match block {
+                TopBlock::Vertex => {
+                    parse_vertex_line(line, &mut builder, keyword, keyword_from, keyword_to);
+                }
+                TopBlock::Fragment => {
+                    if keyword == "color" {
+                        builder.has_color_block = true;
+                        in_color_block = true;
+                    } else {
+                        builder.push_diagnostic(
+                            keyword_from,
+                            keyword_to,
+                            Severity::Error,
+                            "command.unknown",
+                            format!("Unknown fragment command `{keyword}`."),
+                        );
+                        in_color_block = false;
+                    }
+                }
+                TopBlock::None => {
+                    builder.push_diagnostic(
+                        keyword_from,
+                        keyword_to,
+                        Severity::Error,
+                        "indent.unexpected",
+                        "Indented command is only valid inside a vertex or fragment block.",
+                    );
+                }
+            }
+            continue;
+        }
+
+        if line.indent == 4 && block == TopBlock::Fragment && in_color_block {
+            parse_channel_line(line, &mut builder);
+            continue;
+        }
+
+        builder.push_diagnostic(
+            line.start + line.indent,
+            line.start + line.trimmed.len(),
+            Severity::Error,
+            "indent.unexpected",
+            "This line is indented in a place the shader DSL does not understand.",
+        );
     }
+
+    if !builder.has_shader_root {
+        builder.push_diagnostic(0, 0, Severity::Error, "shader.missing", "Shader file must start with a `shader` root.");
+    }
+
+    if !builder.has_vertex {
+        builder.push_diagnostic(0, 0, Severity::Error, "vertex.missing", "Shader is missing a `vertex` block.");
+    }
+
+    if !builder.has_fragment {
+        builder.push_diagnostic(0, 0, Severity::Error, "fragment.missing", "Shader is missing a `fragment` block.");
+    }
+
+    if builder.has_vertex && !builder.has_fullscreen_position {
+        builder.push_diagnostic(
+            0,
+            0,
+            Severity::Error,
+            "vertex.position.missing",
+            "Vertex block must declare `position fullscreen` in v1.",
+        );
+    }
+
+    if builder.has_fragment && !builder.has_color_block {
+        builder.push_diagnostic(
+            0,
+            0,
+            Severity::Error,
+            "fragment.color.missing",
+            "Fragment block must declare a `color` block.",
+        );
+    }
+
+    for channel in ['r', 'g', 'b', 'a'] {
+        if builder.has_color_block && !builder.channels.contains_key(&channel) {
+            builder.push_diagnostic(
+                0,
+                0,
+                Severity::Error,
+                "fragment.channel.missing",
+                format!("Fragment color is missing the `{channel}` channel."),
+            );
+        }
+    }
+
+    for uniform in builder.uniforms.clone() {
+        if !builder.used_uniforms.contains(&uniform.name) {
+            let span = builder.uniform_spans.get(&uniform.name).copied().unwrap_or((0, 0));
+            builder.push_diagnostic(
+                span.0,
+                span.1,
+                Severity::Warning,
+                "uniform.unused",
+                format!("Uniform `{}` is declared but not used.", uniform.name),
+            );
+        }
+    }
+
+    let has_fatal = builder
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error && is_fatal_code(diagnostic.code));
+
+    let program = if has_fatal {
+        None
+    } else {
+        let r = builder.channels.get(&'r').cloned();
+        let g = builder.channels.get(&'g').cloned();
+        let b = builder.channels.get(&'b').cloned();
+        let a = builder.channels.get(&'a').cloned();
+
+        match (r, g, b, a) {
+            (Some(r), Some(g), Some(b), Some(a)) => {
+                let uses_time = builder.uniforms.iter().any(|uniform| {
+                    uniform.builtin == BuiltinUniform::Time && builder.used_uniforms.contains(&uniform.name)
+                });
+                let uses_resolution = builder.uniforms.iter().any(|uniform| {
+                    uniform.builtin == BuiltinUniform::Resolution && builder.used_uniforms.contains(&uniform.name)
+                });
+
+                Some(ShaderProgram {
+                    uniforms: builder.uniforms.clone(),
+                    r,
+                    g,
+                    b,
+                    a,
+                    uses_time,
+                    uses_resolution,
+                })
+            }
+            _ => None,
+        }
+    };
 
     SceneAnalysis {
-        diagnostics,
-        highlights,
+        diagnostics: builder.diagnostics,
+        highlights: builder.highlights,
+        program,
+        hover_entries: builder.hover_entries,
     }
-}
-
-fn escape_string(input: &str) -> String {
-    let mut output = String::with_capacity(input.len() + 4);
-    for ch in input.chars() {
-        match ch {
-            '\\' => output.push_str("\\\\"),
-            '"' => output.push_str("\\\""),
-            '\n' => output.push_str("\\n"),
-            '\r' => output.push_str("\\r"),
-            '\t' => output.push_str("\\t"),
-            _ => output.push(ch),
-        }
-    }
-    output
-}
-
-fn format_tokens(tokens: &[Token]) -> String {
-    let mut parts = Vec::with_capacity(tokens.len());
-    for token in tokens {
-        match token.kind {
-            TokenKind::String => parts.push(format!("\"{}\"", escape_string(&token.text))),
-            _ => parts.push(token.text.clone()),
-        }
-    }
-    parts.join(" ")
-}
-
-fn write_node(node: &Node, out: &mut String) {
-    out.push_str(&"  ".repeat(node.line.indent));
-    out.push_str(&format_tokens(&node.line.tokens));
-    out.push('\n');
-    for child in &node.children {
-        write_node(child, out);
-    }
-}
-
-pub fn format_scene(source: &str) -> String {
-    let parsed = parse_scene(source);
-    let mut output = String::new();
-    for node in &parsed.nodes {
-        write_node(node, &mut output);
-    }
-    output
-}
-
-fn token_at<'a>(nodes: &'a [Node], offset: usize) -> Option<(&'a Token, &'static str)> {
-    for node in nodes {
-        if node.line.command_span.start <= offset && offset < node.line.command_span.end {
-            if is_compact_source_line(node) {
-                return Some((&node.line.tokens[0], "Compact editor row. The line number and text define one rendered buffer row."));
-            }
-            if is_compact_diagnostic(node) {
-                return Some((&node.line.tokens[0], "Compact diagnostic attached to the current row."));
-            }
-            if let Some(spec) = command_spec(node.line.command.as_str()) {
-                return Some((&node.line.tokens[0], spec.docs));
-            }
-        }
-        for token in node.line.tokens.iter().skip(1) {
-            if token.span.start <= offset && offset < token.span.end {
-                let docs = match token.text.as_str() {
-                    "lines" => "A named collection of editor rows that can be rendered later.",
-                    "left" => "Left status segment.",
-                    "file" => "File status segment.",
-                    "right" => "Right status segment.",
-                    "number" => "Number the line gutter with this value.",
-                    "warning" | "warn" | "error" | "info" | "hint" => "Diagnostic severity.",
-                    "block" | "line" => "Cursor presentation mode.",
-                    "visible-lines" => "The currently visible logical lines in the host editor.",
-                    "fill" => "Fill the current scene to the viewport bounds.",
-                    _ if token.text.ends_with(".lines") => "Project the named line source into rendered rows.",
-                    _ if token.kind == TokenKind::String => "String literal rendered by the scene.",
-                    _ if token.kind == TokenKind::Number || token.kind == TokenKind::Range => {
-                        "Numeric literal used in layout."
-                    }
-                    _ if token.kind == TokenKind::Reference => "Built-in scene reference.",
-                    _ => continue,
-                };
-                return Some((token, docs));
-            }
-        }
-        if let Some(found) = token_at(&node.children, offset) {
-            return Some(found);
-        }
-    }
-    None
 }
 
 pub fn hover_at(source: &str, offset: usize) -> Option<SceneHover> {
-    let parsed = parse_scene(source);
-    token_at(&parsed.nodes, offset).map(|(_, docs)| SceneHover {
-        content: docs.to_string(),
-        source: "scene-lang",
-    })
+    let analysis = analyze_scene(source);
+    analysis
+        .hover_entries
+        .into_iter()
+        .find(|entry| offset >= entry.from && offset < entry.to)
+        .map(|entry| SceneHover {
+            content: entry.content,
+            source: "shader-lang",
+        })
 }
 
-fn collect_code_actions(
-    node: &Node,
-    selection_from: usize,
-    selection_to: usize,
-    out: &mut Vec<CodeAction>,
-) {
-    if node.line.command_span.end > selection_from && node.line.command_span.start < selection_to {
-        if command_spec(node.line.command.as_str()).is_none() {
-            if let Some(replacement) = nearest_command(node.line.command.as_str(), None) {
-                out.push(CodeAction {
-                    title: format!("Replace `{}` with `{replacement}`", node.line.command),
+pub fn format_scene(source: &str) -> String {
+    let lines = collect_lines(source);
+    let mut block = TopBlock::None;
+    let mut in_color = false;
+    let mut output = Vec::with_capacity(lines.len());
+
+    for line in lines {
+        if line.trimmed.is_empty() {
+            output.push(String::new());
+            continue;
+        }
+
+        if line.trimmed.starts_with('#') {
+            output.push(line.trimmed.to_string());
+            continue;
+        }
+
+        if line.indent == 0 {
+            in_color = false;
+            let token_end = first_token_end(line.trimmed);
+            let keyword = &line.trimmed[..token_end];
+            block = match keyword {
+                "vertex" => TopBlock::Vertex,
+                "fragment" => TopBlock::Fragment,
+                _ => TopBlock::None,
+            };
+            output.push(collapse_spaces(line.trimmed));
+            continue;
+        }
+
+        if line.indent == 2 {
+            let token_end = first_token_end(line.trimmed);
+            let keyword = &line.trimmed[..token_end];
+            in_color = block == TopBlock::Fragment && keyword == "color";
+            output.push(format!("  {}", collapse_spaces(line.trimmed)));
+            continue;
+        }
+
+        if line.indent >= 4 && in_color {
+            let token_end = first_token_end(line.trimmed);
+            let keyword = &line.trimmed[..token_end];
+            let rest = line.trimmed[token_end..].trim();
+            if rest.is_empty() {
+                output.push(format!("    {keyword}"));
+            } else {
+                output.push(format!("    {keyword} {}", collapse_spaces_preserving_punctuation(rest)));
+            }
+            continue;
+        }
+
+        output.push(collapse_spaces(line.trimmed));
+    }
+
+    output.join("\n")
+}
+
+pub fn code_actions(source: &str, from: usize, to: usize) -> Vec<CodeAction> {
+    let lines = collect_lines(source);
+    let mut block = TopBlock::None;
+    let mut in_color = false;
+    let mut actions = Vec::new();
+    let normalized_from = from.min(source.len());
+    let normalized_to = to.min(source.len());
+
+    for line in lines {
+        if line.trimmed.is_empty() || line.trimmed.starts_with('#') {
+            continue;
+        }
+
+        let line_from = line.start + line.indent;
+        let line_to = line.start + line.trimmed.len();
+
+        if line_to < normalized_from || line_from > normalized_to {
+            if line.indent == 0 {
+                let token_end = first_token_end(line.trimmed);
+                let keyword = &line.trimmed[..token_end];
+                block = match keyword {
+                    "vertex" => TopBlock::Vertex,
+                    "fragment" => TopBlock::Fragment,
+                    _ => TopBlock::None,
+                };
+                in_color = false;
+            } else if line.indent == 2 {
+                let token_end = first_token_end(line.trimmed);
+                let keyword = &line.trimmed[..token_end];
+                in_color = block == TopBlock::Fragment && keyword == "color";
+            }
+            continue;
+        }
+
+        if line.indent == 0 {
+            let token_end = first_token_end(line.trimmed);
+            let keyword = &line.trimmed[..token_end];
+            let suggestions = ["shader", "uniform", "vertex", "fragment"];
+            if !suggestions.contains(&keyword) {
+                if let Some(replacement) = nearest(keyword, &suggestions) {
+                    actions.push(replace_token_action(
+                        source,
+                        line.start + line.indent,
+                        line.start + line.indent + keyword.len(),
+                        replacement,
+                    ));
+                }
+            }
+
+            if keyword == "fragment" {
+                actions.push(CodeAction {
+                    title: "Insert default `color` block".to_string(),
                     changes: vec![TextChange {
-                        from: node.line.command_span.start,
-                        to: node.line.command_span.end,
-                        insert: replacement.to_string(),
+                        from: line_to,
+                        to: line_to,
+                        insert: "\n  color\n    r 0.5\n    g 0.5\n    b 0.5\n    a 1.0".to_string(),
                     }],
                 });
             }
-        }
-    }
-    for child in &node.children {
-        collect_code_actions(child, selection_from, selection_to, out);
-    }
-}
 
-pub fn code_actions(source: &str, selection_from: usize, selection_to: usize) -> Vec<CodeAction> {
-    let parsed = parse_scene(source);
-    let mut actions = Vec::new();
-    for node in &parsed.nodes {
-        collect_code_actions(node, selection_from, selection_to, &mut actions);
-    }
-    actions
-}
-
-fn parse_int_token(token: Option<&Token>) -> Option<i32> {
-    token.and_then(|token| token.text.parse::<i32>().ok())
-}
-
-fn parse_string_token(token: Option<&Token>) -> Option<String> {
-    token.map(|token| token.text.clone())
-}
-
-fn parse_severity(token: Option<&Token>) -> Option<Severity> {
-    match token.map(|token| token.text.as_str()) {
-        Some("error") => Some(Severity::Error),
-        Some("warning" | "warn") => Some(Severity::Warning),
-        Some("info") => Some(Severity::Info),
-        Some("hint") => Some(Severity::Hint),
-        _ => None,
-    }
-}
-
-fn is_compact_source_line(node: &Node) -> bool {
-    matches!(
-        (node.line.tokens.first(), node.line.tokens.get(1)),
-        (
-            Some(Token {
-                kind: TokenKind::Number,
-                ..
-            }),
-            Some(Token {
-                kind: TokenKind::String,
-                ..
-            })
-        )
-    )
-}
-
-fn is_compact_diagnostic(node: &Node) -> bool {
-    matches!(node.line.command.as_str(), "error" | "warning" | "warn" | "info" | "hint")
-}
-
-fn parse_line_col_token(token: Option<&Token>) -> Option<(i32, i32)> {
-    let text = token?.text.as_str();
-    let (line, col) = text.split_once(':')?;
-    Some((line.parse().ok()?, col.parse().ok()?))
-}
-
-fn build_explicit_line_model(node: &Node) -> Option<SceneTextLine> {
-    let number = parse_int_token(node.line.tokens.get(1))?;
-    let mut model = SceneTextLine {
-        number,
-        gutter: None,
-        text: String::new(),
-        eol_diagnostic: None,
-        below_diagnostic: None,
-    };
-
-    for child in &node.children {
-        match child.line.command.as_str() {
-            "gutter" => model.gutter = parse_int_token(child.line.tokens.get(2)),
-            "text" => model.text = parse_string_token(child.line.tokens.get(1)).unwrap_or_default(),
-            "diagnostic" => {
-                let severity = parse_severity(child.line.tokens.get(1));
-                let at = parse_int_token(child.line.tokens.get(3)).unwrap_or_default();
-                for grandchild in &child.children {
-                    match grandchild.line.command.as_str() {
-                        "eol" => {
-                            if let (Some(severity), Some(message)) =
-                                (severity, parse_string_token(grandchild.line.tokens.get(1)))
-                            {
-                                model.eol_diagnostic = Some((severity, message, at));
-                            }
-                        }
-                        "below" => {
-                            if let (Some(severity), Some(message)) =
-                                (severity, parse_string_token(grandchild.line.tokens.get(1)))
-                            {
-                                model.below_diagnostic = Some((severity, message, at));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Some(model)
-}
-
-fn build_compact_line_model(node: &Node) -> Option<SceneTextLine> {
-    let number = parse_int_token(node.line.tokens.first())?;
-    let mut model = SceneTextLine {
-        number,
-        gutter: Some(number),
-        text: parse_string_token(node.line.tokens.get(1)).unwrap_or_default(),
-        eol_diagnostic: None,
-        below_diagnostic: None,
-    };
-
-    for child in &node.children {
-        if !is_compact_diagnostic(child) {
+            block = match keyword {
+                "vertex" => TopBlock::Vertex,
+                "fragment" => TopBlock::Fragment,
+                _ => TopBlock::None,
+            };
+            in_color = false;
             continue;
         }
 
-        let severity = parse_severity(child.line.tokens.first());
-        let at = parse_int_token(child.line.tokens.get(1)).unwrap_or_default();
-        let placement = token_text(&child.line.tokens, 2);
-        let message = parse_string_token(child.line.tokens.get(3));
+        if line.indent == 2 {
+            let token_end = first_token_end(line.trimmed);
+            let keyword = &line.trimmed[..token_end];
 
-        if let (Some(severity), Some(message)) = (severity, message) {
-            match placement {
-                Some("eol") => model.eol_diagnostic = Some((severity, message, at)),
-                Some("below") => model.below_diagnostic = Some((severity, message, at)),
-                _ => {}
-            }
-        }
-    }
-
-    Some(model)
-}
-
-fn parse_source_name(node: &Node) -> Option<&str> {
-    if node.line.command != "source" || token_text(&node.line.tokens, 1) != Some("lines") {
-        return None;
-    }
-
-    token_text(&node.line.tokens, 2)
-}
-
-pub fn build_render_model(source: &str) -> SceneRenderModel {
-    let parsed = parse_scene(source);
-    let mut model = SceneRenderModel::default();
-    let mut sources = std::collections::BTreeMap::<String, Vec<SceneTextLine>>::new();
-
-    for node in &parsed.nodes {
-        let Some(source_name) = parse_source_name(node) else {
-            continue;
-        };
-
-        let mut lines = Vec::new();
-        for child in &node.children {
-            if child.line.command == "line" {
-                if let Some(line) = build_explicit_line_model(child) {
-                    lines.push(line);
-                }
-            } else if is_compact_source_line(child) {
-                if let Some(line) = build_compact_line_model(child) {
-                    lines.push(line);
-                }
-            }
-        }
-        lines.sort_by_key(|line| line.number);
-        sources.insert(source_name.to_string(), lines);
-    }
-
-    for node in parsed.nodes {
-        if node.line.command != "screen" {
-            continue;
-        }
-
-        model.fill_screen = token_text(&node.line.tokens, 1) == Some("fill");
-
-        for child in node.children {
-            match child.line.command.as_str() {
-                "size" => {
-                    model.fill_screen = token_text(&child.line.tokens, 1) == Some("fill");
-                }
-                "status" => {
-                    for entry in child.children {
-                        match entry.line.command.as_str() {
-                            "left" => {
-                                model.status.left = parse_string_token(entry.line.tokens.get(1))
-                            }
-                            "file" => {
-                                model.status.file = parse_string_token(entry.line.tokens.get(1))
-                            }
-                            "right" => {
-                                model.status.right = parse_string_token(entry.line.tokens.get(1))
-                            }
-                            _ => {}
+            match block {
+                TopBlock::Vertex => {
+                    let suggestions = ["position"];
+                    if !suggestions.contains(&keyword) {
+                        if let Some(replacement) = nearest(keyword, &suggestions) {
+                            actions.push(replace_token_action(
+                                source,
+                                line.start + line.indent,
+                                line.start + line.indent + keyword.len(),
+                                replacement,
+                            ));
                         }
                     }
                 }
-                "line" => {
-                    if let Some(line) = build_explicit_line_model(&child) {
-                        model.lines.push(line);
+                TopBlock::Fragment => {
+                    let suggestions = ["color"];
+                    if !suggestions.contains(&keyword) {
+                        if let Some(replacement) = nearest(keyword, &suggestions) {
+                            actions.push(replace_token_action(
+                                source,
+                                line.start + line.indent,
+                                line.start + line.indent + keyword.len(),
+                                replacement,
+                            ));
+                        }
                     }
+                    in_color = keyword == "color";
                 }
-                _ if is_compact_source_line(&child) => {
-                    if let Some(line) = build_compact_line_model(&child) {
-                        model.lines.push(line);
-                    }
+                TopBlock::None => {}
+            }
+            continue;
+        }
+
+        if line.indent == 4 && in_color {
+            let token_end = first_token_end(line.trimmed);
+            let keyword = &line.trimmed[..token_end];
+            let suggestions = ["r", "g", "b", "a"];
+            if !suggestions.contains(&keyword) {
+                if let Some(replacement) = nearest(keyword, &suggestions) {
+                    actions.push(replace_token_action(
+                        source,
+                        line.start + line.indent,
+                        line.start + line.indent + keyword.len(),
+                        replacement,
+                    ));
                 }
-                "for" => {
-                    let Some(reference) = token_text(&child.line.tokens, 3) else {
-                        continue;
-                    };
-                    let Some(source_name) = reference.strip_suffix(".lines") else {
-                        continue;
-                    };
-                    let renders_rows = child.children.iter().any(|entry| {
-                        entry.line.command == "row" && token_text(&entry.line.tokens, 1) == Some("line")
-                    });
-                    if !renders_rows {
-                        continue;
-                    }
-                    if let Some(lines) = sources.get(source_name) {
-                        model.lines.extend(lines.iter().cloned());
-                    }
-                }
-                "cursor" => {
-                    let (line, col) = parse_line_col_token(child.line.tokens.get(2)).unwrap_or_else(|| {
-                        (
-                            parse_int_token(child.line.tokens.get(4)).unwrap_or(1),
-                            parse_int_token(child.line.tokens.get(6)).unwrap_or_default(),
-                        )
-                    });
-                    model.cursor = Some(SceneCursor {
-                        kind: token_text(&child.line.tokens, 1)
-                            .unwrap_or("block")
-                            .to_string(),
-                        line,
-                        col,
-                    });
-                }
-                _ => {}
             }
         }
     }
 
-    model.lines.sort_by_key(|line| line.number);
-    model
+    dedupe_actions(actions)
 }
 
 pub fn highlights_for_lines(source: &str, from_line: usize, to_line: usize) -> Vec<SceneHighlight> {
     let analysis = analyze_scene(source);
+    let line_starts = line_starts(source);
+    let start_offset = *line_starts.get(from_line).unwrap_or(&source.len());
+    let end_offset = if to_line + 1 < line_starts.len() {
+        line_starts[to_line + 1]
+    } else {
+        source.len()
+    };
+
     analysis
         .highlights
         .into_iter()
-        .filter(|highlight| {
-            let line = source[..min(source.len(), highlight.from)]
-                .bytes()
-                .filter(|byte| *byte == b'\n')
-                .count();
-            line >= from_line && line <= to_line
-        })
+        .filter(|span| span.to > start_offset && span.from < end_offset)
         .collect()
+}
+
+fn parse_uniform_line(line: &ParsedLine<'_>, builder: &mut AnalysisBuilder) {
+    let parts = split_parts_with_spans(line.trimmed);
+    if parts.len() < 5 {
+        builder.push_diagnostic(
+            line.start + line.indent,
+            line.start + line.trimmed.len(),
+            Severity::Error,
+            "uniform.syntax",
+            "Uniform syntax is `uniform <name> <type> builtin <time|resolution>`.",
+        );
+        return;
+    }
+
+    let name = parts[1].0;
+    let ty = parts[2].0;
+    let builtin_keyword = parts[3].0;
+    let builtin_value = parts[4].0;
+
+    let name_from = line.start + line.indent + parts[1].1;
+    let name_to = name_from + name.len();
+    builder.push_hover(
+        name_from,
+        name_to,
+        format!("Uniform alias for the `{builtin_value}` built-in."),
+    );
+
+    builder.push_highlight(name_from, name_to, HighlightRole::Text);
+
+    let type_from = line.start + line.indent + parts[2].1;
+    let type_to = type_from + ty.len();
+    builder.push_highlight(type_from, type_to, HighlightRole::Type);
+    builder.push_hover(type_from, type_to, format!("Shader type `{ty}`."));
+
+    let builtin_keyword_from = line.start + line.indent + parts[3].1;
+    let builtin_keyword_to = builtin_keyword_from + builtin_keyword.len();
+    builder.push_highlight(builtin_keyword_from, builtin_keyword_to, HighlightRole::Keyword);
+    builder.push_hover(
+        builtin_keyword_from,
+        builtin_keyword_to,
+        "Declares which editor-provided uniform value this alias binds to.",
+    );
+
+    let builtin_value_from = line.start + line.indent + parts[4].1;
+    let builtin_value_to = builtin_value_from + builtin_value.len();
+    builder.push_highlight(builtin_value_from, builtin_value_to, HighlightRole::Keyword);
+    builder.push_hover(
+        builtin_value_from,
+        builtin_value_to,
+        hover_for_builtin(builtin_value).to_string(),
+    );
+
+    if builtin_keyword != "builtin" {
+        builder.push_diagnostic(
+            builtin_keyword_from,
+            builtin_keyword_to,
+            Severity::Error,
+            "uniform.syntax",
+            "Uniform declarations must use the `builtin` keyword.",
+        );
+    }
+
+    if !is_valid_identifier(name) {
+        builder.push_diagnostic(
+            name_from,
+            name_to,
+            Severity::Error,
+            "uniform.name.invalid",
+            format!("`{name}` is not a valid uniform name."),
+        );
+    }
+
+    let Some(shader_type) = ShaderType::from_str(ty) else {
+        builder.push_diagnostic(
+            type_from,
+            type_to,
+            Severity::Error,
+            "type.unknown",
+            format!("Unsupported shader type `{ty}`."),
+        );
+        return;
+    };
+
+    let Some(builtin) = BuiltinUniform::from_str(builtin_value) else {
+        builder.push_diagnostic(
+            builtin_value_from,
+            builtin_value_to,
+            Severity::Error,
+            "builtin.unknown",
+            format!("Unsupported built-in `{builtin_value}`."),
+        );
+        return;
+    };
+
+    if shader_type != builtin.expected_type() {
+        builder.push_diagnostic(
+            type_from,
+            builtin_value_to,
+            Severity::Error,
+            "type.mismatch",
+            format!(
+                "`{}` uniforms must use `{}`.",
+                builtin.as_str(),
+                builtin.expected_type().as_str()
+            ),
+        );
+        return;
+    }
+
+    if builder.uniforms.iter().any(|uniform| uniform.name == name) {
+        builder.push_diagnostic(
+            name_from,
+            name_to,
+            Severity::Error,
+            "uniform.duplicate",
+            format!("Uniform `{name}` is already declared."),
+        );
+        return;
+    }
+
+    builder.uniform_spans.insert(name.to_string(), (name_from, name_to));
+    builder.uniforms.push(ShaderUniform {
+        name: name.to_string(),
+        ty: shader_type,
+        builtin,
+    });
+}
+
+fn parse_vertex_line(
+    line: &ParsedLine<'_>,
+    builder: &mut AnalysisBuilder,
+    keyword: &str,
+    keyword_from: usize,
+    keyword_to: usize,
+) {
+    if keyword != "position" {
+        builder.push_diagnostic(
+            keyword_from,
+            keyword_to,
+            Severity::Error,
+            "command.unknown",
+            format!("Unknown vertex command `{keyword}`."),
+        );
+        return;
+    }
+
+    let rest = line.trimmed[keyword.len()..].trim();
+    let rest_from = line.start + line.indent + line.trimmed.find(rest).unwrap_or(keyword.len());
+    let rest_to = rest_from + rest.len();
+    builder.push_highlight(rest_from, rest_to, HighlightRole::Keyword);
+    builder.push_hover(rest_from, rest_to, "The v1 shader DSL only supports a fullscreen triangle vertex path.");
+
+    if rest == "fullscreen" {
+        builder.has_fullscreen_position = true;
+    } else {
+        builder.push_diagnostic(
+            rest_from,
+            rest_to,
+            Severity::Error,
+            "vertex.position.invalid",
+            "Vertex position must be `fullscreen` in v1.",
+        );
+    }
+}
+
+fn parse_channel_line(line: &ParsedLine<'_>, builder: &mut AnalysisBuilder) {
+    let token_end = first_token_end(line.trimmed);
+    let channel = &line.trimmed[..token_end];
+    let channel_from = line.start + line.indent;
+    let channel_to = channel_from + channel.len();
+    builder.push_highlight(channel_from, channel_to, HighlightRole::Keyword);
+    builder.push_hover(channel_from, channel_to, hover_for_keyword(channel));
+
+    if !["r", "g", "b", "a"].contains(&channel) {
+        builder.push_diagnostic(
+            channel_from,
+            channel_to,
+            Severity::Error,
+            "channel.unknown",
+            format!("Unknown color channel `{channel}`."),
+        );
+        return;
+    }
+
+    let expr_text = line.trimmed[token_end..].trim();
+    if expr_text.is_empty() {
+        builder.push_diagnostic(
+            channel_from,
+            channel_to,
+            Severity::Error,
+            "expr.missing",
+            format!("Channel `{channel}` needs a scalar expression."),
+        );
+        return;
+    }
+
+    let expr_start_in_line = line.trimmed.find(expr_text).unwrap_or(token_end);
+    let expr_start = line.start + line.indent + expr_start_in_line;
+    let mut parser = ExpressionParser::new(expr_text, expr_start);
+    let expr = parser.parse_expression();
+    parser.finish(builder);
+
+    let Some(expr) = expr else {
+        return;
+    };
+
+    let symbols = builder.uniforms.clone();
+    let expr_type = infer_expr_type(&expr, &symbols, builder, expr_start);
+    if expr_type != ExprType::Scalar {
+        builder.push_diagnostic(
+            expr_start,
+            expr_start + expr_text.len(),
+            Severity::Error,
+            "expr.type.invalid",
+            format!("Channel `{channel}` must resolve to a scalar float."),
+        );
+        return;
+    }
+
+    builder.channels.insert(channel.chars().next().unwrap_or('r'), expr);
+}
+
+fn infer_expr_type(
+    expr: &Expr,
+    uniforms: &[ShaderUniform],
+    builder: &mut AnalysisBuilder,
+    base_offset: usize,
+) -> ExprType {
+    match expr {
+        Expr::Number(_) => ExprType::Scalar,
+        Expr::Identifier(value) => resolve_identifier_type(value, uniforms, builder),
+        Expr::Unary { expr, .. } => infer_expr_type(expr, uniforms, builder, base_offset),
+        Expr::Binary { left, right, .. } => {
+            let left_ty = infer_expr_type(left, uniforms, builder, base_offset);
+            let right_ty = infer_expr_type(right, uniforms, builder, base_offset);
+
+            if left_ty == ExprType::Invalid || right_ty == ExprType::Invalid {
+                return ExprType::Invalid;
+            }
+
+            if left_ty == right_ty {
+                return left_ty;
+            }
+
+            if left_ty == ExprType::Scalar {
+                return right_ty;
+            }
+
+            if right_ty == ExprType::Scalar {
+                return left_ty;
+            }
+
+            builder.push_diagnostic(
+                base_offset,
+                base_offset + 1,
+                Severity::Error,
+                "expr.type.mismatch",
+                "Vector operations need matching shapes or a scalar companion.",
+            );
+            ExprType::Invalid
+        }
+        Expr::Call { name, args } => infer_call_type(name, args, uniforms, builder, base_offset),
+    }
+}
+
+fn resolve_identifier_type(
+    value: &str,
+    uniforms: &[ShaderUniform],
+    builder: &mut AnalysisBuilder,
+) -> ExprType {
+    if value == "pi" {
+        return ExprType::Scalar;
+    }
+
+    if value == "uv" {
+        return ExprType::Vec2;
+    }
+
+    if let Some(field) = value.strip_prefix("uv.") {
+        return if matches!(field, "x" | "y") {
+            ExprType::Scalar
+        } else {
+            builder.push_diagnostic(0, 0, Severity::Error, "field.unknown", format!("`uv.{field}` is not supported."));
+            ExprType::Invalid
+        };
+    }
+
+    if let Some((name, field)) = value.split_once('.') {
+        if let Some(uniform) = uniforms.iter().find(|uniform| uniform.name == name) {
+            builder.used_uniforms.insert(name.to_string());
+            return match (uniform.ty, field) {
+                (ShaderType::Vec2, "x" | "y") => ExprType::Scalar,
+                (ShaderType::Vec3, "x" | "y" | "z") => ExprType::Scalar,
+                (ShaderType::Vec4, "x" | "y" | "z" | "w") => ExprType::Scalar,
+                _ => {
+                    builder.push_diagnostic(
+                        0,
+                        0,
+                        Severity::Error,
+                        "field.unknown",
+                        format!("`{value}` is not a valid swizzle for `{}`.", uniform.ty.as_str()),
+                    );
+                    ExprType::Invalid
+                }
+            };
+        }
+    }
+
+    if let Some(uniform) = uniforms.iter().find(|uniform| uniform.name == value) {
+        builder.used_uniforms.insert(value.to_string());
+        return ExprType::from_shader_type(uniform.ty);
+    }
+
+    builder.push_diagnostic(
+        0,
+        0,
+        Severity::Error,
+        "symbol.unknown",
+        format!("Unknown shader value `{value}`."),
+    );
+    ExprType::Invalid
+}
+
+fn infer_call_type(
+    name: &str,
+    args: &[Expr],
+    uniforms: &[ShaderUniform],
+    builder: &mut AnalysisBuilder,
+    base_offset: usize,
+) -> ExprType {
+    let argument_types = args
+        .iter()
+        .map(|arg| infer_expr_type(arg, uniforms, builder, base_offset))
+        .collect::<Vec<_>>();
+
+    match name {
+        "sin" | "cos" | "abs" | "floor" | "fract" => argument_types.first().copied().unwrap_or(ExprType::Invalid),
+        "length" => ExprType::Scalar,
+        "min" | "max" => argument_types.first().copied().unwrap_or(ExprType::Invalid),
+        "mix" | "clamp" => argument_types.first().copied().unwrap_or(ExprType::Invalid),
+        "vec2" => ExprType::Vec2,
+        "vec3" => ExprType::Vec3,
+        "vec4" => ExprType::Vec4,
+        _ => {
+            builder.push_diagnostic(
+                base_offset,
+                base_offset + name.len(),
+                Severity::Error,
+                "function.unknown",
+                format!("Unsupported shader helper `{name}`."),
+            );
+            ExprType::Invalid
+        }
+    }
+}
+
+fn collect_lines(source: &str) -> Vec<ParsedLine<'_>> {
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+
+    for raw_line in source.split('\n') {
+        let indent = raw_line.chars().take_while(|ch| *ch == ' ').count();
+        let trimmed = raw_line.trim_end();
+        lines.push(ParsedLine { start, indent, trimmed: &trimmed[indent.min(trimmed.len())..] });
+        start += raw_line.len() + 1;
+    }
+
+    lines
+}
+
+fn line_starts(source: &str) -> Vec<usize> {
+    let mut starts = vec![0usize];
+    for (index, byte) in source.bytes().enumerate() {
+        if byte == b'\n' && index + 1 <= source.len() {
+            starts.push(index + 1);
+        }
+    }
+    starts
+}
+
+fn first_token_end(line: &str) -> usize {
+    line.find(char::is_whitespace).unwrap_or(line.len())
+}
+
+fn is_valid_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
+        _ => return false,
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn split_parts_with_spans(input: &str) -> Vec<(&str, usize)> {
+    let mut parts = Vec::new();
+    let mut start = None;
+
+    for (index, ch) in input.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(part_start) = start.take() {
+                parts.push((&input[part_start..index], part_start));
+            }
+        } else if start.is_none() {
+            start = Some(index);
+        }
+    }
+
+    if let Some(part_start) = start {
+        parts.push((&input[part_start..], part_start));
+    }
+
+    parts
+}
+
+fn hover_for_keyword(keyword: &str) -> &'static str {
+    match keyword {
+        "shader" => "Root shader node. Everything in the file hangs off this declaration.",
+        "uniform" => "Declares a named shader input that maps to an editor-provided builtin value.",
+        "vertex" => "Vertex stage block. In v1 this only supports a fullscreen triangle.",
+        "fragment" => "Fragment stage block. This stage computes the final pixel color.",
+        "position" => "Declares the vertex output position path.",
+        "fullscreen" => "Emits a fullscreen triangle so the fragment stage can shade the whole canvas.",
+        "color" => "Opens the fragment color block. Supply r, g, b, and a channel expressions below it.",
+        "r" => "Red channel expression.",
+        "g" => "Green channel expression.",
+        "b" => "Blue channel expression.",
+        "a" => "Alpha channel expression.",
+        _ => "Shader DSL token.",
+    }
+}
+
+fn hover_for_builtin(value: &str) -> &'static str {
+    match value {
+        "time" => "Animated seconds since the preview started rendering.",
+        "resolution" => "Current preview canvas size as a vec2.",
+        _ => "Shader builtin value.",
+    }
+}
+
+fn collapse_spaces(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn collapse_spaces_preserving_punctuation(input: &str) -> String {
+    let mut output = String::new();
+    let mut prev_space = false;
+
+    for ch in input.chars() {
+        if ch.is_whitespace() {
+            if !prev_space {
+                output.push(' ');
+                prev_space = true;
+            }
+            continue;
+        }
+
+        if matches!(ch, ',' | ')' | '(') && output.ends_with(' ') {
+            output.pop();
+        }
+
+        output.push(ch);
+
+        if ch == ',' {
+            output.push(' ');
+            prev_space = true;
+        } else {
+            prev_space = false;
+        }
+    }
+
+    output.trim().to_string()
+}
+
+fn nearest<'a>(value: &str, candidates: &'a [&str]) -> Option<&'a str> {
+    candidates
+        .iter()
+        .copied()
+        .map(|candidate| (candidate, levenshtein(value, candidate)))
+        .filter(|(_, distance)| *distance <= 3)
+        .min_by_key(|(_, distance)| *distance)
+        .map(|(candidate, _)| candidate)
+}
+
+fn replace_token_action(source: &str, from: usize, to: usize, replacement: &str) -> CodeAction {
+    let original = source.get(from..to).unwrap_or_default();
+    CodeAction {
+        title: format!("Replace `{original}` with `{replacement}`"),
+        changes: vec![TextChange {
+            from,
+            to,
+            insert: replacement.to_string(),
+        }],
+    }
+}
+
+fn dedupe_actions(actions: Vec<CodeAction>) -> Vec<CodeAction> {
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+
+    for action in actions {
+        if seen.insert(action.title.clone()) {
+            unique.push(action);
+        }
+    }
+
+    unique
+}
+
+fn levenshtein(left: &str, right: &str) -> usize {
+    if left == right {
+        return 0;
+    }
+
+    if left.is_empty() {
+        return right.chars().count();
+    }
+
+    if right.is_empty() {
+        return left.chars().count();
+    }
+
+    let right_chars = right.chars().collect::<Vec<_>>();
+    let mut previous = (0..=right_chars.len()).collect::<Vec<_>>();
+
+    for (row, left_char) in left.chars().enumerate() {
+        let mut current = vec![row + 1];
+
+        for (column, right_char) in right_chars.iter().enumerate() {
+            let insertion = current[column] + 1;
+            let deletion = previous[column + 1] + 1;
+            let substitution = previous[column] + usize::from(left_char != *right_char);
+            current.push(insertion.min(deletion).min(substitution));
+        }
+
+        previous = current;
+    }
+
+    *previous.last().unwrap_or(&0)
+}
+
+fn is_fatal_code(code: &str) -> bool {
+    matches!(
+        code,
+        "shader.missing"
+            | "vertex.missing"
+            | "fragment.missing"
+            | "vertex.position.missing"
+            | "fragment.color.missing"
+            | "fragment.channel.missing"
+            | "expr.missing"
+            | "expr.type.invalid"
+            | "expr.type.mismatch"
+            | "type.unknown"
+            | "builtin.unknown"
+            | "type.mismatch"
+            | "vertex.position.invalid"
+    )
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum TokenKind {
+    Number(String),
+    Identifier(String),
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    LeftParen,
+    RightParen,
+    Comma,
+}
+
+#[derive(Clone, Debug)]
+struct Token {
+    kind: TokenKind,
+    from: usize,
+    to: usize,
+}
+
+struct ExpressionParser<'a> {
+    source: &'a str,
+    absolute_start: usize,
+    tokens: Vec<Token>,
+    cursor: usize,
+    diagnostics: Vec<SceneDiagnostic>,
+    highlights: Vec<SceneHighlight>,
+    hovers: Vec<HoverEntry>,
+}
+
+impl<'a> ExpressionParser<'a> {
+    fn new(source: &'a str, absolute_start: usize) -> Self {
+        let mut parser = Self {
+            source,
+            absolute_start,
+            tokens: Vec::new(),
+            cursor: 0,
+            diagnostics: Vec::new(),
+            highlights: Vec::new(),
+            hovers: Vec::new(),
+        };
+        parser.tokenize();
+        parser
+    }
+
+    fn tokenize(&mut self) {
+        let mut index = 0usize;
+        let bytes = self.source.as_bytes();
+
+        while index < bytes.len() {
+            let ch = self.source[index..].chars().next().unwrap_or(' ');
+            let width = ch.len_utf8();
+
+            if ch.is_whitespace() {
+                index += width;
+                continue;
+            }
+
+            let from = self.absolute_start + index;
+            match ch {
+                '0'..='9' => {
+                    let start = index;
+                    index += width;
+                    while index < bytes.len() {
+                        let next = self.source[index..].chars().next().unwrap_or(' ');
+                        if next.is_ascii_digit() || next == '.' {
+                            index += next.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
+                    let value = self.source[start..index].to_string();
+                    let to = self.absolute_start + index;
+                    self.highlights.push(SceneHighlight {
+                        from,
+                        to,
+                        role: HighlightRole::Number,
+                    });
+                    self.tokens.push(Token {
+                        kind: TokenKind::Number(value),
+                        from,
+                        to,
+                    });
+                }
+                'a'..='z' | 'A'..='Z' | '_' => {
+                    let start = index;
+                    index += width;
+                    while index < bytes.len() {
+                        let next = self.source[index..].chars().next().unwrap_or(' ');
+                        if next.is_ascii_alphanumeric() || matches!(next, '_' | '.') {
+                            index += next.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
+                    let value = self.source[start..index].to_string();
+                    let to = self.absolute_start + index;
+                    let role = if is_function_name(&value) {
+                        HighlightRole::Function
+                    } else {
+                        HighlightRole::Text
+                    };
+                    self.highlights.push(SceneHighlight { from, to, role });
+                    self.hovers.push(HoverEntry {
+                        from,
+                        to,
+                        content: hover_for_expression_symbol(&value).to_string(),
+                    });
+                    self.tokens.push(Token {
+                        kind: TokenKind::Identifier(value),
+                        from,
+                        to,
+                    });
+                }
+                '+' => {
+                    self.push_single_token(TokenKind::Plus, from, width);
+                    index += width;
+                }
+                '-' => {
+                    self.push_single_token(TokenKind::Minus, from, width);
+                    index += width;
+                }
+                '*' => {
+                    self.push_single_token(TokenKind::Star, from, width);
+                    index += width;
+                }
+                '/' => {
+                    self.push_single_token(TokenKind::Slash, from, width);
+                    index += width;
+                }
+                '(' => {
+                    self.push_single_token(TokenKind::LeftParen, from, width);
+                    index += width;
+                }
+                ')' => {
+                    self.push_single_token(TokenKind::RightParen, from, width);
+                    index += width;
+                }
+                ',' => {
+                    self.push_single_token(TokenKind::Comma, from, width);
+                    index += width;
+                }
+                _ => {
+                    self.diagnostics.push(SceneDiagnostic {
+                        from,
+                        to: from + width,
+                        severity: Severity::Error,
+                        message: format!("Unexpected character `{ch}` in shader expression."),
+                        source: "shader-lang",
+                        code: "expr.token.invalid",
+                    });
+                    index += width;
+                }
+            }
+        }
+    }
+
+    fn push_single_token(&mut self, kind: TokenKind, from: usize, width: usize) {
+        let to = from + width;
+        let role = if matches!(kind, TokenKind::LeftParen | TokenKind::RightParen | TokenKind::Comma) {
+            HighlightRole::Punctuation
+        } else {
+            HighlightRole::Operator
+        };
+        self.highlights.push(SceneHighlight { from, to, role });
+        self.tokens.push(Token { kind, from, to });
+        self.cursor = self.tokens.len().saturating_sub(1).min(self.cursor);
+    }
+
+    fn parse_expression(&mut self) -> Option<Expr> {
+        self.parse_additive()
+    }
+
+    fn parse_additive(&mut self) -> Option<Expr> {
+        let mut expr = self.parse_multiplicative()?;
+
+        loop {
+            let op = match self.peek_kind() {
+                Some(TokenKind::Plus) => '+',
+                Some(TokenKind::Minus) => '-',
+                _ => break,
+            };
+            self.cursor += 1;
+            let right = self.parse_multiplicative()?;
+            expr = Expr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+
+        Some(expr)
+    }
+
+    fn parse_multiplicative(&mut self) -> Option<Expr> {
+        let mut expr = self.parse_unary()?;
+
+        loop {
+            let op = match self.peek_kind() {
+                Some(TokenKind::Star) => '*',
+                Some(TokenKind::Slash) => '/',
+                _ => break,
+            };
+            self.cursor += 1;
+            let right = self.parse_unary()?;
+            expr = Expr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+
+        Some(expr)
+    }
+
+    fn parse_unary(&mut self) -> Option<Expr> {
+        match self.peek_kind() {
+            Some(TokenKind::Plus) => {
+                self.cursor += 1;
+                self.parse_unary()
+            }
+            Some(TokenKind::Minus) => {
+                self.cursor += 1;
+                Some(Expr::Unary {
+                    op: '-',
+                    expr: Box::new(self.parse_unary()?),
+                })
+            }
+            _ => self.parse_primary(),
+        }
+    }
+
+    fn parse_primary(&mut self) -> Option<Expr> {
+        let token = self.tokens.get(self.cursor)?.clone();
+        self.cursor += 1;
+
+        match token.kind {
+            TokenKind::Number(value) => Some(Expr::Number(value)),
+            TokenKind::Identifier(value) => {
+                if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
+                    self.cursor += 1;
+                    let mut args = Vec::new();
+
+                    if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                        loop {
+                            args.push(self.parse_expression()?);
+                            if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                                self.cursor += 1;
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+
+                    if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                        self.diagnostics.push(SceneDiagnostic {
+                            from: token.from,
+                            to: token.to,
+                            severity: Severity::Error,
+                            message: format!("Function `{value}` is missing a closing `)`."),
+                            source: "shader-lang",
+                            code: "expr.call.unclosed",
+                        });
+                        return None;
+                    }
+
+                    self.cursor += 1;
+                    Some(Expr::Call { name: value, args })
+                } else {
+                    Some(Expr::Identifier(value))
+                }
+            }
+            TokenKind::LeftParen => {
+                let expr = self.parse_expression()?;
+                if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                    self.diagnostics.push(SceneDiagnostic {
+                        from: token.from,
+                        to: token.to,
+                        severity: Severity::Error,
+                        message: "Expression is missing a closing `)`.".to_string(),
+                        source: "shader-lang",
+                        code: "expr.group.unclosed",
+                    });
+                    return None;
+                }
+                self.cursor += 1;
+                Some(expr)
+            }
+            _ => {
+                self.diagnostics.push(SceneDiagnostic {
+                    from: token.from,
+                    to: token.to,
+                    severity: Severity::Error,
+                    message: "Expected a number, name, or function call here.".to_string(),
+                    source: "shader-lang",
+                    code: "expr.primary.invalid",
+                });
+                None
+            }
+        }
+    }
+
+    fn peek_kind(&self) -> Option<&TokenKind> {
+        self.tokens.get(self.cursor).map(|token| &token.kind)
+    }
+
+    fn finish(self, builder: &mut AnalysisBuilder) {
+        builder.diagnostics.extend(self.diagnostics);
+        builder.highlights.extend(self.highlights);
+        builder.hover_entries.extend(self.hovers);
+    }
+}
+
+fn is_function_name(value: &str) -> bool {
+    matches!(
+        value,
+        "sin" | "cos" | "abs" | "floor" | "fract" | "length" | "min" | "max" | "mix" | "clamp" | "vec2" | "vec3" | "vec4"
+    )
+}
+
+fn hover_for_expression_symbol(value: &str) -> &'static str {
+    match value {
+        "uv" => "Normalized fragment coordinates from 0.0 to 1.0 across the preview canvas.",
+        "uv.x" => "Horizontal fragment coordinate across the preview canvas.",
+        "uv.y" => "Vertical fragment coordinate across the preview canvas.",
+        "pi" => "Pi as a built-in scalar constant.",
+        "sin" => "Sine helper.",
+        "cos" => "Cosine helper.",
+        "mix" => "Linear interpolation helper.",
+        "clamp" => "Clamps a value into a min/max range.",
+        "vec2" => "Constructs a vec2 value.",
+        "vec3" => "Constructs a vec3 value.",
+        "vec4" => "Constructs a vec4 value.",
+        _ => "Shader expression symbol.",
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = "source lines preview\n  9 \"const message = greet(user.name)\"\n    warn 18 eol \"Replace gutter with gutter\"\n  10 \"return message\"\n    error 0 below \"expected number, got string\"\nscreen fill\n  status\n    left \" NOR \"\n    file \"demo.scene\"\n  for line in preview.lines\n    row line\n  cursor block 10:6\n";
+    const SAMPLE: &str = r#"shader
+uniform clock float builtin time
+uniform viewport vec2 builtin resolution
+
+vertex
+  position fullscreen
+
+fragment
+  color
+    r 0.5 + 0.5 * sin(clock + uv.x * 6.0)
+    g 0.5 + 0.5 * sin(clock * 0.7 + uv.y * 8.0)
+    b 0.35 + 0.65 * uv.x
+    a 1.0
+  clor
+"#;
 
     #[test]
-    fn parses_and_formats() {
-        let parsed = parse_scene(SAMPLE);
-        assert!(parsed.diagnostics.is_empty());
-        assert_eq!(parsed.nodes.len(), 2);
-        assert_eq!(format_scene(SAMPLE), SAMPLE);
+    fn analysis_reports_warning_and_recoverable_error() {
+        let analysis = analyze_scene(SAMPLE);
+        assert!(analysis.program.is_some());
+        assert!(analysis.diagnostics.iter().any(|diagnostic| diagnostic.code == "uniform.unused"));
+        assert!(analysis.diagnostics.iter().any(|diagnostic| diagnostic.code == "command.unknown"));
     }
 
     #[test]
-    fn diagnoses_unknown_command() {
-        let analysis = analyze_scene("screen\n  guttr number 1\n");
-        assert!(
-            analysis
-                .diagnostics
-                .iter()
-                .any(|diag| diag.code == "command.unknown")
-        );
+    fn hover_finds_shader_root() {
+        let offset = SAMPLE.find("shader").unwrap_or(0);
+        let hover = hover_at(SAMPLE, offset + 1).expect("hover");
+        assert!(hover.content.contains("Root shader node"));
     }
 
     #[test]
-    fn builds_render_model() {
-        let model = build_render_model(SAMPLE);
-        assert!(model.fill_screen);
-        assert_eq!(model.lines.len(), 2);
-        assert_eq!(model.lines[0].text, "const message = greet(user.name)");
-        assert_eq!(model.lines[1].gutter, Some(10));
+    fn formatter_normalizes_basic_spacing() {
+        let formatted = format_scene("shader\nuniform clock float builtin time\nfragment\n  color\n    r 1");
+        assert!(formatted.contains("uniform clock float builtin time"));
+        assert!(formatted.contains("    r 1"));
     }
 
     #[test]
-    fn keeps_compact_syntax_stable_in_formatter() {
-        let formatted = format_scene(SAMPLE);
-        assert_eq!(formatted, SAMPLE);
+    fn code_actions_suggest_replacing_typos() {
+        let selection = SAMPLE.find("clor").unwrap_or(0);
+        let actions = code_actions(SAMPLE, selection, selection + 4);
+        assert!(actions.iter().any(|action| action.title.contains("color")));
+    }
+
+    #[test]
+    fn highlights_include_numbers_and_keywords() {
+        let highlights = highlights_for_lines(SAMPLE, 0, 20);
+        assert!(highlights.iter().any(|span| span.role == HighlightRole::Keyword));
+        assert!(highlights.iter().any(|span| span.role == HighlightRole::Number));
     }
 }

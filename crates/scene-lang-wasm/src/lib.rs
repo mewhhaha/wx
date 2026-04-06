@@ -1,10 +1,9 @@
 use std::cell::RefCell;
 use std::str;
 
-use scene_lang_compiler::compile_scene_to_wasm;
 use scene_lang_worker_core::{
-    code_actions_payload, diagnostics_json_payload, format_json_payload, highlights_json_payload,
-    hover_json_payload,
+    code_actions_payload, compile_json_payload, diagnostics_json_payload, format_json_payload,
+    highlights_json_payload, hover_json_payload,
 };
 
 thread_local! {
@@ -35,7 +34,6 @@ fn read_input(source_ptr: *const u8, source_len: usize) -> Option<String> {
         return Some(String::new());
     }
 
-    // SAFETY: caller promises source_ptr/source_len reference a UTF-8 byte slice.
     let bytes = unsafe { std::slice::from_raw_parts(source_ptr, source_len) };
     match str::from_utf8(bytes) {
         Ok(text) => Some(text.to_string()),
@@ -64,14 +62,12 @@ pub extern "C" fn dealloc(ptr: *mut u8, len: usize) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn scene_compile(source_ptr: *const u8, source_len: usize) -> i32 {
-    let source = read_input(source_ptr, source_len);
-    if source.is_none() {
-        return -1;
-    }
+    let source = match read_input(source_ptr, source_len) {
+        Some(value) => value,
+        None => return -1,
+    };
 
-    let source = source.unwrap_or_default();
-    let result = compile_scene_to_wasm(&source);
-    set_last_result(result);
+    set_last_json(compile_json_payload(&source));
     0
 }
 
@@ -170,27 +166,25 @@ mod tests {
     }
 
     #[test]
-    fn scene_compile_populates_last_result() {
-        let (ptr, len) = copy_to_wasm_memory("screen\n  size fill\n");
-        let status = scene_compile(ptr, len);
-        dealloc(ptr as *mut u8, len);
-        assert_eq!(status, 0);
-        assert!(last_result_len() > 32);
-        let wasm = unsafe { std::slice::from_raw_parts(last_result_ptr(), last_result_len()) };
-        assert!(wasm.starts_with(b"\0asm"));
-    }
-
-    #[test]
-    fn scene_diagnostics_json_exports_json() {
-        let source = "screen\n  unknown\n";
+    fn scene_compile_populates_last_result_with_json() {
+        let source = r#"shader
+vertex
+  position fullscreen
+fragment
+  color
+    r 0.5
+    g 0.5
+    b 0.5
+    a 1.0
+"#;
         let (ptr, len) = copy_to_wasm_memory(source);
-        let status = scene_diagnostics_json(ptr, len);
+        let status = scene_compile(ptr, len);
         dealloc(ptr as *mut u8, len);
         assert_eq!(status, 0);
         let payload = unsafe {
             let bytes = std::slice::from_raw_parts(last_result_ptr(), last_result_len());
-            std::str::from_utf8(bytes).expect("utf8 diagnostics payload")
+            std::str::from_utf8(bytes).expect("utf8 compile payload")
         };
-        assert!(payload.contains("\"command.unknown\""));
+        assert!(payload.contains("\"ok\":true"));
     }
 }

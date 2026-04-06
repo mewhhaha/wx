@@ -7,4 +7,5 @@ edition = "2024"
 path = "src/lib.rs"
 
 [dependencies]
+scene-lang-compiler = { path = "../scene-lang-compiler" }
 scene-lang-core = { path = "../scene-lang-core" }
