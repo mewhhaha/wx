@@ -388,6 +388,21 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("NOR");
   });
 
+  it("shows the line cursor when append enters insert mode at the end of a line", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, { value: "abc" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+
+    expect(container.querySelector("[data-wx-editor-cursor='true']")?.getAttribute("data-wx-editor-cursor-kind")).toBe("line");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("INS");
+  });
+
   it("inserts indentation spaces in insert mode when tab is pressed", () => {
     const container = document.createElement("div");
     document.body.append(container);

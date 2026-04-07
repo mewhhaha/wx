@@ -2749,10 +2749,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const changes = update.transaction.changes ?? [];
     const hasDocumentChanges = update.docChanged || changes.length > 0;
     const isPresentationOnlyUpdate = !hasDocumentChanges && !update.selectionChanged && !update.modeChanged;
+    const insertModeTransition =
+      update.modeChanged && (previousState.mode === "insert" || nextState.mode === "insert");
     const previousDigits = String(Math.max(1, previousState.doc.lineCount)).length;
     const nextDigits = String(Math.max(1, nextState.doc.lineCount)).length;
     const dirtyLines =
-      !hasDocumentChanges && (update.selectionChanged || update.modeChanged)
+      !hasDocumentChanges && (update.selectionChanged || update.modeChanged) && !insertModeTransition
         ? getVisualDirtyLines(previousState, nextState)
         : null;
 

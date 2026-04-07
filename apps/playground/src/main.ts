@@ -161,6 +161,22 @@ function hasDevBridge(): boolean {
   return Boolean(import.meta.env.DEV);
 }
 
+function getSourceFromUrl(locationHref: string): string | null {
+  const url = new URL(locationHref);
+
+  if (!url.searchParams.has("src")) {
+    return null;
+  }
+
+  return url.searchParams.get("src") ?? "";
+}
+
+function setSourceInUrl(source: string): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("src", source);
+  window.history.replaceState({}, "", url);
+}
+
 async function requestJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
@@ -178,6 +194,12 @@ async function requestJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function loadInitialShaderSource(): Promise<string> {
+  const sourceFromUrl = getSourceFromUrl(window.location.href);
+
+  if (sourceFromUrl !== null) {
+    return sourceFromUrl;
+  }
+
   if (!hasDevBridge()) {
     return fallbackSample;
   }
@@ -577,6 +599,7 @@ async function main(): Promise<void> {
               await requestJson("/__wx__/write", context);
             },
             didWriteFile(context) {
+              setSourceInUrl(context.text);
               preview.scheduleRenderSource(context.text);
             },
             async getLineChanges(context) {
@@ -592,6 +615,7 @@ async function main(): Promise<void> {
               memoryFiles.set(context.filePath, context.text);
             },
             didWriteFile(context) {
+              setSourceInUrl(context.text);
               preview.scheduleRenderSource(context.text);
             },
             async getLineChanges(context) {

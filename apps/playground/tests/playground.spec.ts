@@ -60,3 +60,13 @@ test("keeps syntax highlighting when the viewport moves and visible code updates
   await expect(page.locator("[data-wx-editor-row='45']").first()).toBeVisible();
   await expect(page.locator(".wx-role-keyword").filter({ hasText: "@fragment" }).first()).toBeVisible();
 });
+
+test("loads url-provided source before the default sample", async ({ page }) => {
+  const source = "const value = 42;\n@fragment";
+  await page.goto(`/?src=${encodeURIComponent(source)}`);
+
+  const editor = page.locator("[data-wx-editor='root']").first();
+
+  await expect(editor).toContainText("const value = 42;");
+  await expect(editor).toContainText("@fragment");
+});
