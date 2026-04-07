@@ -1950,18 +1950,82 @@ describe("createEditor", () => {
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    for (const key of "beta") {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 6, to: 10 });
+    expect(container.querySelector("[data-wx-editor-cursor='true']")?.textContent).toBe("a");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 6, to: 10 });
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "N", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 6, to: 10 });
+    expect(container.querySelector(".wx-search-current")).not.toBeNull();
+  });
+
+  it("previews the first / match while typing and restores on escape", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "alpha beta alpha" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    for (const key of "beta") {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 6, to: 10 });
+    expect(container.querySelector("[data-wx-editor-cursor='true']")?.textContent).toBe("a");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 1 });
+  });
+
+  it("restores the previous cursor position while typing when the / preview has no matches", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "alpha beta alpha" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 6, to: 7 });
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "z", bubbles: true }));
+
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 1 });
+  });
+
+  it("restores the previous active search when a new / query has no matches", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "alpha beta alpha" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
     for (const key of "alpha") {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
     }
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 5 });
 
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    for (const key of "zzz") {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 5 });
+    expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("No matches for zzz");
+
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
     expect(getSelectionOffsets(editor.getState())).toEqual({ from: 11, to: 16 });
-
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "N", bubbles: true }));
-    expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 5 });
-    expect(container.querySelector(".wx-search-current")).not.toBeNull();
   });
 
   it("navigates diagnostics and opens the diagnostics picker", async () => {

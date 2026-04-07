@@ -158,6 +158,15 @@ interface CommandLineState {
   prompt: ":" | "/" | "?";
 }
 
+interface SearchPreviewState {
+  active: boolean;
+  direction: "forward" | "backward";
+  selection: EditorState["selection"];
+  mode: EditorState["mode"];
+  search: ReturnType<EditorController["getSearchState"]>;
+  startOffset: number;
+}
+
 interface CommandCompletionItem {
   label: string;
   detail?: string;
@@ -1619,6 +1628,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let mountedContainer: HTMLElement | null = container;
   let unsubscribeController = () => {};
   let currentLayoutModel: EditorLayoutModel | null = null;
+  let searchPreviewState: SearchPreviewState | null = null;
   let pendingMountFrame = 0;
   let resizeObserver: ResizeObserver | null = null;
   let availableCommandThemes = normalizeCommandThemes(options.commandThemes, options.theme ?? defaultTheme);
@@ -3023,6 +3033,18 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     clearFlash();
     clearHover();
     setCommandCompletionIndexState(0);
+    if (prompt === "/" || prompt === "?") {
+      searchPreviewState = {
+        active: true,
+        direction: prompt === "/" ? "forward" : "backward",
+        selection: state.selection,
+        mode: state.mode,
+        search: { ...controller.getSearchState() },
+        startOffset: state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state)
+      };
+    } else {
+      searchPreviewState = null;
+    }
     setCommandLineState({ active: true, value: "", prompt });
     patchBottomRow();
   }
@@ -3061,6 +3083,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function closeCommandLine(restorePreview = true): void {
     if (restorePreview) {
       previewThemeByName(null);
+      restoreSearchPreview();
     }
     setCommandCompletionIndexState(0);
     setCommandLineState({ active: false, value: "", prompt: ":" });
@@ -3103,7 +3126,100 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       ...commandLine,
       value
     });
+    if (commandLine.prompt === "/" || commandLine.prompt === "?") {
+      previewSearch(value, commandLine.prompt === "/" ? "forward" : "backward");
+    }
     patchBottomRow();
+  }
+
+  function restoreSearchPreview(): void {
+    if (!searchPreviewState?.active) {
+      searchPreviewState = null;
+      return;
+    }
+
+    controller.setSearchState(searchPreviewState.search);
+    controller.dispatch({
+      selection: searchPreviewState.selection,
+      mode: searchPreviewState.mode
+    });
+    revealCursor();
+    renderVisibleRows(true);
+    searchPreviewState = null;
+  }
+
+  function findSearchMatch(
+    matches: readonly { from: number; to: number }[],
+    offset: number,
+    direction: "forward" | "backward",
+    reverse = false
+  ): { from: number; to: number } | null {
+    const forward = reverse ? direction === "backward" : direction === "forward";
+
+    return forward
+      ? matches.find((entry) => entry.from > offset || (entry.from <= offset && offset < entry.to)) ?? matches[0] ?? null
+      : [...matches].reverse().find((entry) => entry.to - 1 < offset || (entry.from <= offset && offset < entry.to)) ??
+          matches[matches.length - 1] ??
+          null;
+  }
+
+  function previewSearch(rawQuery: string, direction: "forward" | "backward"): void {
+    if (!searchPreviewState?.active) {
+      return;
+    }
+
+    const query = rawQuery.trim();
+
+    if (!query) {
+      controller.setSearchState(searchPreviewState.search);
+      controller.dispatch({
+        selection: searchPreviewState.selection,
+        mode: searchPreviewState.mode
+      });
+      revealCursor();
+      renderVisibleRows(true);
+      return;
+    }
+
+    controller.setSearchState({
+      query,
+      direction,
+      lastMatch: null
+    });
+    const matches = controller.getPresentationState().search.matches;
+
+    if (matches.length === 0) {
+      controller.setSearchState(searchPreviewState.search);
+      controller.dispatch({
+        selection: searchPreviewState.selection,
+        mode: searchPreviewState.mode
+      });
+      revealCursor();
+      renderVisibleRows(true);
+      return;
+    }
+
+    const match = findSearchMatch(matches, searchPreviewState.startOffset, direction);
+
+    if (!match) {
+      controller.setSearchState(searchPreviewState.search);
+      controller.dispatch({
+        selection: searchPreviewState.selection,
+        mode: searchPreviewState.mode
+      });
+      revealCursor();
+      renderVisibleRows(true);
+      return;
+    }
+
+    controller.setSearchState({
+      query,
+      direction,
+      lastMatch: match
+    });
+    applySelectionRange(match.from, match.to);
+    revealCursor();
+    renderVisibleRows(true);
   }
 
   function setThemeByName(name: string): boolean {
@@ -3543,6 +3659,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function runSearch(query: string, direction: "forward" | "backward", reverse = false, startOffset?: number): boolean {
+    const previousSearch = { ...controller.getSearchState() };
     controller.setSearchState({
       query,
       direction,
@@ -3551,20 +3668,17 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const nextMatches = controller.getPresentationState().search.matches;
 
     if (nextMatches.length === 0) {
+      controller.setSearchState(previousSearch);
       setBottomMessage({ tone: "warning", text: `No matches for ${query}` });
       renderVisibleRows(true);
       return false;
     }
 
     const offset = startOffset ?? (state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state));
-    const forward = reverse ? direction === "backward" : direction === "forward";
-    const match =
-      forward
-        ? nextMatches.find((entry) => entry.from > offset || (entry.from <= offset && offset < entry.to)) ?? nextMatches[0]
-        : [...nextMatches].reverse().find((entry) => entry.to - 1 < offset || (entry.from <= offset && offset < entry.to)) ??
-          nextMatches[nextMatches.length - 1];
+    const match = findSearchMatch(nextMatches, offset, direction, reverse);
 
     if (!match) {
+      controller.setSearchState(previousSearch);
       return false;
     }
 
@@ -3794,12 +3908,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const value = commandName.toLowerCase();
     const commandArgument = argumentParts.join(" ").trim();
 
-    closeCommandLine();
-
     if (prompt === "/" || prompt === "?") {
+      closeCommandLine(false);
+      searchPreviewState = null;
       void runSearch(trimmed, prompt === "/" ? "forward" : "backward");
       return;
     }
+
+    closeCommandLine();
 
     if (!value) {
       return;
