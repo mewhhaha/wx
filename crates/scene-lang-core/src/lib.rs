@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Severity {
@@ -84,111 +84,12 @@ pub struct SceneHover {
     pub source: &'static str,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ShaderType {
-    Float,
-    Vec2,
-    Vec3,
-    Vec4,
-}
-
-impl ShaderType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Float => "float",
-            Self::Vec2 => "vec2",
-            Self::Vec3 => "vec3",
-            Self::Vec4 => "vec4",
-        }
-    }
-
-    fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "float" => Some(Self::Float),
-            "vec2" => Some(Self::Vec2),
-            "vec3" => Some(Self::Vec3),
-            "vec4" => Some(Self::Vec4),
-            _ => None,
-        }
-    }
-
-    pub fn wgsl_name(self) -> &'static str {
-        match self {
-            Self::Float => "f32",
-            Self::Vec2 => "vec2f",
-            Self::Vec3 => "vec3f",
-            Self::Vec4 => "vec4f",
-        }
-    }
-
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BuiltinUniform {
-    Time,
-    Resolution,
-}
-
-impl BuiltinUniform {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Time => "time",
-            Self::Resolution => "resolution",
-        }
-    }
-
-    fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "time" => Some(Self::Time),
-            "resolution" => Some(Self::Resolution),
-            _ => None,
-        }
-    }
-
-    fn expected_type(self) -> ShaderType {
-        match self {
-            Self::Time => ShaderType::Float,
-            Self::Resolution => ShaderType::Vec2,
-        }
-    }
-
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ShaderUniform {
-    pub name: String,
-    pub ty: ShaderType,
-    pub builtin: BuiltinUniform,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Expr {
-    Number(String),
-    Identifier(String),
-    Unary {
-        op: char,
-        expr: Box<Expr>,
-    },
-    Binary {
-        op: char,
-        left: Box<Expr>,
-        right: Box<Expr>,
-    },
-    Call {
-        name: String,
-        args: Vec<Expr>,
-    },
-}
-
-#[derive(Clone, Debug)]
 pub struct ShaderProgram {
-    pub uniforms: Vec<ShaderUniform>,
-    pub r: Expr,
-    pub g: Expr,
-    pub b: Expr,
-    pub a: Expr,
+    pub wgsl: String,
     pub uses_time: bool,
     pub uses_resolution: bool,
+    pub uses_noise: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -206,316 +107,148 @@ pub struct SceneAnalysis {
     hover_entries: Vec<HoverEntry>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TopBlock {
-    None,
-    Vertex,
-    Fragment,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ExprType {
-    Scalar,
-    Vec2,
-    Vec3,
-    Vec4,
-    Invalid,
-}
-
-impl ExprType {
-    fn from_shader_type(value: ShaderType) -> Self {
-        match value {
-            ShaderType::Float => Self::Scalar,
-            ShaderType::Vec2 => Self::Vec2,
-            ShaderType::Vec3 => Self::Vec3,
-            ShaderType::Vec4 => Self::Vec4,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 struct ParsedLine<'a> {
-    start: usize,
-    indent: usize,
     trimmed: &'a str,
 }
 
 #[derive(Clone, Debug)]
-struct AnalysisBuilder {
-    diagnostics: Vec<SceneDiagnostic>,
-    highlights: Vec<SceneHighlight>,
-    hover_entries: Vec<HoverEntry>,
-    uniforms: Vec<ShaderUniform>,
-    uniform_spans: HashMap<String, (usize, usize)>,
-    used_uniforms: HashSet<String>,
-    has_shader_root: bool,
-    has_vertex: bool,
-    has_fragment: bool,
-    has_fullscreen_position: bool,
-    has_color_block: bool,
-    channels: HashMap<char, Expr>,
+struct Token {
+    from: usize,
+    to: usize,
+    text: String,
+    role: HighlightRole,
 }
 
-impl AnalysisBuilder {
-    fn new() -> Self {
-        Self {
-            diagnostics: Vec::new(),
-            highlights: Vec::new(),
-            hover_entries: Vec::new(),
-            uniforms: Vec::new(),
-            uniform_spans: HashMap::new(),
-            used_uniforms: HashSet::new(),
-            has_shader_root: false,
-            has_vertex: false,
-            has_fragment: false,
-            has_fullscreen_position: false,
-            has_color_block: false,
-            channels: HashMap::new(),
-        }
-    }
+const KEYWORDS: &[&str] = &[
+    "struct",
+    "fn",
+    "var",
+    "let",
+    "return",
+    "if",
+    "else",
+    "for",
+    "while",
+    "loop",
+    "break",
+    "continue",
+    "continuing",
+    "discard",
+    "const",
+    "override",
+    "alias",
+    "enable",
+    "diagnostic",
+    "switch",
+    "case",
+    "default",
+];
 
-    fn push_diagnostic(
-        &mut self,
-        from: usize,
-        to: usize,
-        severity: Severity,
-        code: &'static str,
-        message: impl Into<String>,
-    ) {
-        self.diagnostics.push(SceneDiagnostic {
-            from,
-            to,
-            severity,
-            message: message.into(),
-            source: "shader-lang",
-            code,
+const ATTRIBUTES: &[&str] = &[
+    "@vertex",
+    "@fragment",
+    "@group",
+    "@binding",
+    "@builtin",
+    "@location",
+    "@interpolate",
+    "@workgroup_size",
+];
+
+const TYPES: &[&str] = &[
+    "f32",
+    "i32",
+    "u32",
+    "bool",
+    "vec2f",
+    "vec3f",
+    "vec4f",
+    "vec2i",
+    "vec3i",
+    "vec4i",
+    "vec2u",
+    "vec3u",
+    "vec4u",
+    "mat2x2f",
+    "mat3x3f",
+    "mat4x4f",
+    "texture_2d",
+    "sampler",
+    "sampler_comparison",
+    "array",
+];
+
+const BUILTIN_TOKENS: &[&str] = &[
+    "sin",
+    "cos",
+    "tan",
+    "abs",
+    "floor",
+    "ceil",
+    "fract",
+    "length",
+    "min",
+    "max",
+    "mix",
+    "clamp",
+    "smoothstep",
+    "normalize",
+    "dot",
+    "cross",
+    "textureSample",
+    "textureSampleLevel",
+    "textureDimensions",
+    "uniforms",
+    "noise_texture",
+    "noise_sampler",
+    "vs_main",
+    "fs_main",
+];
+
+pub fn analyze_scene(source: &str) -> SceneAnalysis {
+    let mut diagnostics = Vec::new();
+    let mut highlights = Vec::new();
+    let mut hover_entries = Vec::new();
+
+    collect_diagnostics(source, &mut diagnostics);
+
+    for token in tokenize(source) {
+        highlights.push(SceneHighlight {
+            from: token.from,
+            to: token.to,
+            role: token.role,
         });
-    }
 
-    fn push_highlight(&mut self, from: usize, to: usize, role: HighlightRole) {
-        if from < to {
-            self.highlights.push(SceneHighlight { from, to, role });
-        }
-    }
-
-    fn push_hover(&mut self, from: usize, to: usize, content: impl Into<String>) {
-        if from < to {
-            self.hover_entries.push(HoverEntry {
-                from,
-                to,
-                content: content.into(),
+        if let Some(content) = hover_for_token(&token.text) {
+            hover_entries.push(HoverEntry {
+                from: token.from,
+                to: token.to,
+                content: content.to_string(),
             });
         }
     }
-}
 
-pub fn analyze_scene(source: &str) -> SceneAnalysis {
-    let parsed_lines = collect_lines(source);
-    let mut builder = AnalysisBuilder::new();
-    let mut block = TopBlock::None;
-    let mut in_color_block = false;
-
-    for line in &parsed_lines {
-        if line.trimmed.is_empty() {
-            continue;
-        }
-
-        if line.trimmed.starts_with('#') {
-            builder.push_highlight(line.start + line.indent, line.start + line.trimmed.len(), HighlightRole::Comment);
-            continue;
-        }
-
-        if line.indent == 0 {
-            in_color_block = false;
-            let token_end = first_token_end(line.trimmed);
-            let keyword = &line.trimmed[..token_end];
-            let keyword_from = line.start + line.indent;
-            let keyword_to = keyword_from + keyword.len();
-            builder.push_highlight(keyword_from, keyword_to, HighlightRole::Keyword);
-            builder.push_hover(keyword_from, keyword_to, hover_for_keyword(keyword));
-
-            match keyword {
-                "shader" => {
-                    builder.has_shader_root = true;
-                    block = TopBlock::None;
-                }
-                "uniform" => {
-                    parse_uniform_line(line, &mut builder);
-                    block = TopBlock::None;
-                }
-                "vertex" => {
-                    builder.has_vertex = true;
-                    block = TopBlock::Vertex;
-                }
-                "fragment" => {
-                    builder.has_fragment = true;
-                    block = TopBlock::Fragment;
-                }
-                _ => {
-                    builder.push_diagnostic(
-                        keyword_from,
-                        keyword_to,
-                        Severity::Error,
-                        "command.unknown",
-                        format!("Unknown root command `{keyword}`."),
-                    );
-                }
-            }
-            continue;
-        }
-
-        if line.indent == 2 {
-            let token_end = first_token_end(line.trimmed);
-            let keyword = &line.trimmed[..token_end];
-            let keyword_from = line.start + line.indent;
-            let keyword_to = keyword_from + keyword.len();
-            builder.push_highlight(keyword_from, keyword_to, HighlightRole::Keyword);
-            builder.push_hover(keyword_from, keyword_to, hover_for_keyword(keyword));
-
-            match block {
-                TopBlock::Vertex => {
-                    parse_vertex_line(line, &mut builder, keyword, keyword_from, keyword_to);
-                }
-                TopBlock::Fragment => {
-                    if keyword == "color" {
-                        builder.has_color_block = true;
-                        in_color_block = true;
-                    } else {
-                        builder.push_diagnostic(
-                            keyword_from,
-                            keyword_to,
-                            Severity::Error,
-                            "command.unknown",
-                            format!("Unknown fragment command `{keyword}`."),
-                        );
-                        in_color_block = false;
-                    }
-                }
-                TopBlock::None => {
-                    builder.push_diagnostic(
-                        keyword_from,
-                        keyword_to,
-                        Severity::Error,
-                        "indent.unexpected",
-                        "Indented command is only valid inside a vertex or fragment block.",
-                    );
-                }
-            }
-            continue;
-        }
-
-        if line.indent == 4 && block == TopBlock::Fragment && in_color_block {
-            parse_channel_line(line, &mut builder);
-            continue;
-        }
-
-        builder.push_diagnostic(
-            line.start + line.indent,
-            line.start + line.trimmed.len(),
-            Severity::Error,
-            "indent.unexpected",
-            "This line is indented in a place the shader DSL does not understand.",
-        );
-    }
-
-    if !builder.has_shader_root {
-        builder.push_diagnostic(0, 0, Severity::Error, "shader.missing", "Shader file must start with a `shader` root.");
-    }
-
-    if !builder.has_vertex {
-        builder.push_diagnostic(0, 0, Severity::Error, "vertex.missing", "Shader is missing a `vertex` block.");
-    }
-
-    if !builder.has_fragment {
-        builder.push_diagnostic(0, 0, Severity::Error, "fragment.missing", "Shader is missing a `fragment` block.");
-    }
-
-    if builder.has_vertex && !builder.has_fullscreen_position {
-        builder.push_diagnostic(
-            0,
-            0,
-            Severity::Error,
-            "vertex.position.missing",
-            "Vertex block must declare `position fullscreen` in v1.",
-        );
-    }
-
-    if builder.has_fragment && !builder.has_color_block {
-        builder.push_diagnostic(
-            0,
-            0,
-            Severity::Error,
-            "fragment.color.missing",
-            "Fragment block must declare a `color` block.",
-        );
-    }
-
-    for channel in ['r', 'g', 'b', 'a'] {
-        if builder.has_color_block && !builder.channels.contains_key(&channel) {
-            builder.push_diagnostic(
-                0,
-                0,
-                Severity::Error,
-                "fragment.channel.missing",
-                format!("Fragment color is missing the `{channel}` channel."),
-            );
-        }
-    }
-
-    for uniform in builder.uniforms.clone() {
-        if !builder.used_uniforms.contains(&uniform.name) {
-            let span = builder.uniform_spans.get(&uniform.name).copied().unwrap_or((0, 0));
-            builder.push_diagnostic(
-                span.0,
-                span.1,
-                Severity::Warning,
-                "uniform.unused",
-                format!("Uniform `{}` is declared but not used.", uniform.name),
-            );
-        }
-    }
-
-    let has_fatal = builder
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == Severity::Error && is_fatal_code(diagnostic.code));
-
+    let has_fatal = diagnostics.iter().any(|diagnostic| diagnostic.severity == Severity::Error);
     let program = if has_fatal {
         None
     } else {
-        let r = builder.channels.get(&'r').cloned();
-        let g = builder.channels.get(&'g').cloned();
-        let b = builder.channels.get(&'b').cloned();
-        let a = builder.channels.get(&'a').cloned();
-
-        match (r, g, b, a) {
-            (Some(r), Some(g), Some(b), Some(a)) => {
-                let uses_time = builder.uniforms.iter().any(|uniform| {
-                    uniform.builtin == BuiltinUniform::Time && builder.used_uniforms.contains(&uniform.name)
-                });
-                let uses_resolution = builder.uniforms.iter().any(|uniform| {
-                    uniform.builtin == BuiltinUniform::Resolution && builder.used_uniforms.contains(&uniform.name)
-                });
-
-                Some(ShaderProgram {
-                    uniforms: builder.uniforms.clone(),
-                    r,
-                    g,
-                    b,
-                    a,
-                    uses_time,
-                    uses_resolution,
-                })
-            }
-            _ => None,
-        }
+        Some(ShaderProgram {
+            wgsl: source.to_string(),
+            uses_time: source.contains("uniforms.time"),
+            uses_resolution: source.contains("uniforms.resolution"),
+            uses_noise: source.contains("noise_texture")
+                || source.contains("noise_sampler")
+                || source.contains("textureSample(")
+                || source.contains("textureSampleLevel("),
+        })
     };
 
     SceneAnalysis {
-        diagnostics: builder.diagnostics,
-        highlights: builder.highlights,
+        diagnostics,
+        highlights,
+        hover_entries,
         program,
-        hover_entries: builder.hover_entries,
     }
 }
 
@@ -527,185 +260,87 @@ pub fn hover_at(source: &str, offset: usize) -> Option<SceneHover> {
         .find(|entry| offset >= entry.from && offset < entry.to)
         .map(|entry| SceneHover {
             content: entry.content,
-            source: "shader-lang",
+            source: "wgsl",
         })
 }
 
 pub fn format_scene(source: &str) -> String {
     let lines = collect_lines(source);
-    let mut block = TopBlock::None;
-    let mut in_color = false;
+    let mut indent = 0usize;
     let mut output = Vec::with_capacity(lines.len());
 
     for line in lines {
-        if line.trimmed.is_empty() {
+        let trimmed = line.trimmed.trim();
+        if trimmed.is_empty() {
             output.push(String::new());
             continue;
         }
 
-        if line.trimmed.starts_with('#') {
-            output.push(line.trimmed.to_string());
+        if trimmed.starts_with("//") {
+            output.push(format!("{}{}", "  ".repeat(indent), trimmed));
             continue;
         }
 
-        if line.indent == 0 {
-            in_color = false;
-            let token_end = first_token_end(line.trimmed);
-            let keyword = &line.trimmed[..token_end];
-            block = match keyword {
-                "vertex" => TopBlock::Vertex,
-                "fragment" => TopBlock::Fragment,
-                _ => TopBlock::None,
-            };
-            output.push(collapse_spaces(line.trimmed));
-            continue;
+        let starts_with_close = trimmed.starts_with('}');
+        if starts_with_close {
+            indent = indent.saturating_sub(1);
         }
 
-        if line.indent == 2 {
-            let token_end = first_token_end(line.trimmed);
-            let keyword = &line.trimmed[..token_end];
-            in_color = block == TopBlock::Fragment && keyword == "color";
-            output.push(format!("  {}", collapse_spaces(line.trimmed)));
-            continue;
-        }
+        output.push(format!("{}{}", "  ".repeat(indent), trimmed));
 
-        if line.indent >= 4 && in_color {
-            let token_end = first_token_end(line.trimmed);
-            let keyword = &line.trimmed[..token_end];
-            let rest = line.trimmed[token_end..].trim();
-            if rest.is_empty() {
-                output.push(format!("    {keyword}"));
-            } else {
-                output.push(format!("    {keyword} {}", collapse_spaces_preserving_punctuation(rest)));
+        let mut opens = 0usize;
+        let mut closes = 0usize;
+        for ch in trimmed.chars() {
+            if ch == '{' {
+                opens += 1;
+            } else if ch == '}' {
+                closes += 1;
             }
-            continue;
         }
-
-        output.push(collapse_spaces(line.trimmed));
+        if opens > closes {
+            indent += opens - closes;
+        } else {
+            indent = indent.saturating_sub(closes - opens);
+        }
     }
 
     output.join("\n")
 }
 
 pub fn code_actions(source: &str, from: usize, to: usize) -> Vec<CodeAction> {
-    let lines = collect_lines(source);
-    let mut block = TopBlock::None;
-    let mut in_color = false;
-    let mut actions = Vec::new();
+    let tokens = tokenize(source);
     let normalized_from = from.min(source.len());
     let normalized_to = to.min(source.len());
+    let suggestions = [
+        "@fragment",
+        "@vertex",
+        "textureSample",
+        "textureSampleLevel",
+        "vec2f",
+        "vec3f",
+        "vec4f",
+        "sampler",
+        "texture_2d",
+        "struct",
+        "return",
+    ];
 
-    for line in lines {
-        if line.trimmed.is_empty() || line.trimmed.starts_with('#') {
+    let mut actions = Vec::new();
+    for token in tokens {
+        if token.to < normalized_from || token.from > normalized_to {
             continue;
         }
 
-        let line_from = line.start + line.indent;
-        let line_to = line.start + line.trimmed.len();
-
-        if line_to < normalized_from || line_from > normalized_to {
-            if line.indent == 0 {
-                let token_end = first_token_end(line.trimmed);
-                let keyword = &line.trimmed[..token_end];
-                block = match keyword {
-                    "vertex" => TopBlock::Vertex,
-                    "fragment" => TopBlock::Fragment,
-                    _ => TopBlock::None,
-                };
-                in_color = false;
-            } else if line.indent == 2 {
-                let token_end = first_token_end(line.trimmed);
-                let keyword = &line.trimmed[..token_end];
-                in_color = block == TopBlock::Fragment && keyword == "color";
-            }
-            continue;
-        }
-
-        if line.indent == 0 {
-            let token_end = first_token_end(line.trimmed);
-            let keyword = &line.trimmed[..token_end];
-            let suggestions = ["shader", "uniform", "vertex", "fragment"];
-            if !suggestions.contains(&keyword) {
-                if let Some(replacement) = nearest(keyword, &suggestions) {
-                    actions.push(replace_token_action(
-                        source,
-                        line.start + line.indent,
-                        line.start + line.indent + keyword.len(),
-                        replacement,
-                    ));
-                }
-            }
-
-            if keyword == "fragment" {
+        if let Some(replacement) = nearest(&token.text, &suggestions) {
+            if replacement != token.text {
                 actions.push(CodeAction {
-                    title: "Insert default `color` block".to_string(),
+                    title: format!("Replace `{}` with `{replacement}`", token.text),
                     changes: vec![TextChange {
-                        from: line_to,
-                        to: line_to,
-                        insert: "\n  color\n    r 0.5\n    g 0.5\n    b 0.5\n    a 1.0".to_string(),
+                        from: token.from,
+                        to: token.to,
+                        insert: replacement.to_string(),
                     }],
                 });
-            }
-
-            block = match keyword {
-                "vertex" => TopBlock::Vertex,
-                "fragment" => TopBlock::Fragment,
-                _ => TopBlock::None,
-            };
-            in_color = false;
-            continue;
-        }
-
-        if line.indent == 2 {
-            let token_end = first_token_end(line.trimmed);
-            let keyword = &line.trimmed[..token_end];
-
-            match block {
-                TopBlock::Vertex => {
-                    let suggestions = ["position"];
-                    if !suggestions.contains(&keyword) {
-                        if let Some(replacement) = nearest(keyword, &suggestions) {
-                            actions.push(replace_token_action(
-                                source,
-                                line.start + line.indent,
-                                line.start + line.indent + keyword.len(),
-                                replacement,
-                            ));
-                        }
-                    }
-                }
-                TopBlock::Fragment => {
-                    let suggestions = ["color"];
-                    if !suggestions.contains(&keyword) {
-                        if let Some(replacement) = nearest(keyword, &suggestions) {
-                            actions.push(replace_token_action(
-                                source,
-                                line.start + line.indent,
-                                line.start + line.indent + keyword.len(),
-                                replacement,
-                            ));
-                        }
-                    }
-                    in_color = keyword == "color";
-                }
-                TopBlock::None => {}
-            }
-            continue;
-        }
-
-        if line.indent == 4 && in_color {
-            let token_end = first_token_end(line.trimmed);
-            let keyword = &line.trimmed[..token_end];
-            let suggestions = ["r", "g", "b", "a"];
-            if !suggestions.contains(&keyword) {
-                if let Some(replacement) = nearest(keyword, &suggestions) {
-                    actions.push(replace_token_action(
-                        source,
-                        line.start + line.indent,
-                        line.start + line.indent + keyword.len(),
-                        replacement,
-                    ));
-                }
             }
         }
     }
@@ -715,10 +350,10 @@ pub fn code_actions(source: &str, from: usize, to: usize) -> Vec<CodeAction> {
 
 pub fn highlights_for_lines(source: &str, from_line: usize, to_line: usize) -> Vec<SceneHighlight> {
     let analysis = analyze_scene(source);
-    let line_starts = line_starts(source);
-    let start_offset = *line_starts.get(from_line).unwrap_or(&source.len());
-    let end_offset = if to_line + 1 < line_starts.len() {
-        line_starts[to_line + 1]
+    let starts = line_starts(source);
+    let start_offset = *starts.get(from_line).unwrap_or(&source.len());
+    let end_offset = if to_line + 1 < starts.len() {
+        starts[to_line + 1]
     } else {
         source.len()
     };
@@ -730,372 +365,226 @@ pub fn highlights_for_lines(source: &str, from_line: usize, to_line: usize) -> V
         .collect()
 }
 
-fn parse_uniform_line(line: &ParsedLine<'_>, builder: &mut AnalysisBuilder) {
-    let parts = split_parts_with_spans(line.trimmed);
-    if parts.len() < 5 {
-        builder.push_diagnostic(
-            line.start + line.indent,
-            line.start + line.trimmed.len(),
-            Severity::Error,
-            "uniform.syntax",
-            "Uniform syntax is `uniform <name> <type> builtin <time|resolution>`.",
-        );
-        return;
+fn collect_diagnostics(source: &str, diagnostics: &mut Vec<SceneDiagnostic>) {
+    if !source.contains("@vertex") {
+        diagnostics.push(SceneDiagnostic {
+            from: 0,
+            to: 0,
+            severity: Severity::Error,
+            message: "WGSL preview expects an `@vertex` entrypoint.".to_string(),
+            source: "wgsl",
+            code: "vertex.missing",
+        });
     }
 
-    let name = parts[1].0;
-    let ty = parts[2].0;
-    let builtin_keyword = parts[3].0;
-    let builtin_value = parts[4].0;
-
-    let name_from = line.start + line.indent + parts[1].1;
-    let name_to = name_from + name.len();
-    builder.push_hover(
-        name_from,
-        name_to,
-        format!("Uniform alias for the `{builtin_value}` built-in."),
-    );
-
-    builder.push_highlight(name_from, name_to, HighlightRole::Text);
-
-    let type_from = line.start + line.indent + parts[2].1;
-    let type_to = type_from + ty.len();
-    builder.push_highlight(type_from, type_to, HighlightRole::Type);
-    builder.push_hover(type_from, type_to, format!("Shader type `{ty}`."));
-
-    let builtin_keyword_from = line.start + line.indent + parts[3].1;
-    let builtin_keyword_to = builtin_keyword_from + builtin_keyword.len();
-    builder.push_highlight(builtin_keyword_from, builtin_keyword_to, HighlightRole::Keyword);
-    builder.push_hover(
-        builtin_keyword_from,
-        builtin_keyword_to,
-        "Declares which editor-provided uniform value this alias binds to.",
-    );
-
-    let builtin_value_from = line.start + line.indent + parts[4].1;
-    let builtin_value_to = builtin_value_from + builtin_value.len();
-    builder.push_highlight(builtin_value_from, builtin_value_to, HighlightRole::Keyword);
-    builder.push_hover(
-        builtin_value_from,
-        builtin_value_to,
-        hover_for_builtin(builtin_value).to_string(),
-    );
-
-    if builtin_keyword != "builtin" {
-        builder.push_diagnostic(
-            builtin_keyword_from,
-            builtin_keyword_to,
-            Severity::Error,
-            "uniform.syntax",
-            "Uniform declarations must use the `builtin` keyword.",
-        );
+    if !source.contains("@fragment") {
+        diagnostics.push(SceneDiagnostic {
+            from: 0,
+            to: 0,
+            severity: Severity::Error,
+            message: "WGSL preview expects an `@fragment` entrypoint.".to_string(),
+            source: "wgsl",
+            code: "fragment.missing",
+        });
     }
 
-    if !is_valid_identifier(name) {
-        builder.push_diagnostic(
-            name_from,
-            name_to,
-            Severity::Error,
-            "uniform.name.invalid",
-            format!("`{name}` is not a valid uniform name."),
-        );
+    if !source.contains("fn vs_main") {
+        diagnostics.push(SceneDiagnostic {
+            from: 0,
+            to: 0,
+            severity: Severity::Error,
+            message: "WGSL preview expects a `fn vs_main` vertex entrypoint.".to_string(),
+            source: "wgsl",
+            code: "vertex.entry.missing",
+        });
     }
 
-    let Some(shader_type) = ShaderType::from_str(ty) else {
-        builder.push_diagnostic(
-            type_from,
-            type_to,
-            Severity::Error,
-            "type.unknown",
-            format!("Unsupported shader type `{ty}`."),
-        );
-        return;
-    };
-
-    let Some(builtin) = BuiltinUniform::from_str(builtin_value) else {
-        builder.push_diagnostic(
-            builtin_value_from,
-            builtin_value_to,
-            Severity::Error,
-            "builtin.unknown",
-            format!("Unsupported built-in `{builtin_value}`."),
-        );
-        return;
-    };
-
-    if shader_type != builtin.expected_type() {
-        builder.push_diagnostic(
-            type_from,
-            builtin_value_to,
-            Severity::Error,
-            "type.mismatch",
-            format!(
-                "`{}` uniforms must use `{}`.",
-                builtin.as_str(),
-                builtin.expected_type().as_str()
-            ),
-        );
-        return;
-    }
-
-    if builder.uniforms.iter().any(|uniform| uniform.name == name) {
-        builder.push_diagnostic(
-            name_from,
-            name_to,
-            Severity::Error,
-            "uniform.duplicate",
-            format!("Uniform `{name}` is already declared."),
-        );
-        return;
-    }
-
-    builder.uniform_spans.insert(name.to_string(), (name_from, name_to));
-    builder.uniforms.push(ShaderUniform {
-        name: name.to_string(),
-        ty: shader_type,
-        builtin,
-    });
-}
-
-fn parse_vertex_line(
-    line: &ParsedLine<'_>,
-    builder: &mut AnalysisBuilder,
-    keyword: &str,
-    keyword_from: usize,
-    keyword_to: usize,
-) {
-    if keyword != "position" {
-        builder.push_diagnostic(
-            keyword_from,
-            keyword_to,
-            Severity::Error,
-            "command.unknown",
-            format!("Unknown vertex command `{keyword}`."),
-        );
-        return;
-    }
-
-    let rest = line.trimmed[keyword.len()..].trim();
-    let rest_from = line.start + line.indent + line.trimmed.find(rest).unwrap_or(keyword.len());
-    let rest_to = rest_from + rest.len();
-    builder.push_highlight(rest_from, rest_to, HighlightRole::Keyword);
-    builder.push_hover(rest_from, rest_to, "The v1 shader DSL only supports a fullscreen triangle vertex path.");
-
-    if rest == "fullscreen" {
-        builder.has_fullscreen_position = true;
-    } else {
-        builder.push_diagnostic(
-            rest_from,
-            rest_to,
-            Severity::Error,
-            "vertex.position.invalid",
-            "Vertex position must be `fullscreen` in v1.",
-        );
+    if !source.contains("fn fs_main") {
+        diagnostics.push(SceneDiagnostic {
+            from: 0,
+            to: 0,
+            severity: Severity::Error,
+            message: "WGSL preview expects a `fn fs_main` fragment entrypoint.".to_string(),
+            source: "wgsl",
+            code: "fragment.entry.missing",
+        });
     }
 }
 
-fn parse_channel_line(line: &ParsedLine<'_>, builder: &mut AnalysisBuilder) {
-    let token_end = first_token_end(line.trimmed);
-    let channel = &line.trimmed[..token_end];
-    let channel_from = line.start + line.indent;
-    let channel_to = channel_from + channel.len();
-    builder.push_highlight(channel_from, channel_to, HighlightRole::Keyword);
-    builder.push_hover(channel_from, channel_to, hover_for_keyword(channel));
+fn tokenize(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let chars = source.char_indices().collect::<Vec<_>>();
+    let mut cursor = 0usize;
 
-    if !["r", "g", "b", "a"].contains(&channel) {
-        builder.push_diagnostic(
-            channel_from,
-            channel_to,
-            Severity::Error,
-            "channel.unknown",
-            format!("Unknown color channel `{channel}`."),
-        );
-        return;
-    }
-
-    let expr_text = line.trimmed[token_end..].trim();
-    if expr_text.is_empty() {
-        builder.push_diagnostic(
-            channel_from,
-            channel_to,
-            Severity::Error,
-            "expr.missing",
-            format!("Channel `{channel}` needs a scalar expression."),
-        );
-        return;
-    }
-
-    let expr_start_in_line = line.trimmed.find(expr_text).unwrap_or(token_end);
-    let expr_start = line.start + line.indent + expr_start_in_line;
-    let mut parser = ExpressionParser::new(expr_text, expr_start);
-    let expr = parser.parse_expression();
-    parser.finish(builder);
-
-    let Some(expr) = expr else {
-        return;
-    };
-
-    let symbols = builder.uniforms.clone();
-    let expr_type = infer_expr_type(&expr, &symbols, builder, expr_start);
-    if expr_type != ExprType::Scalar {
-        builder.push_diagnostic(
-            expr_start,
-            expr_start + expr_text.len(),
-            Severity::Error,
-            "expr.type.invalid",
-            format!("Channel `{channel}` must resolve to a scalar float."),
-        );
-        return;
-    }
-
-    builder.channels.insert(channel.chars().next().unwrap_or('r'), expr);
-}
-
-fn infer_expr_type(
-    expr: &Expr,
-    uniforms: &[ShaderUniform],
-    builder: &mut AnalysisBuilder,
-    base_offset: usize,
-) -> ExprType {
-    match expr {
-        Expr::Number(_) => ExprType::Scalar,
-        Expr::Identifier(value) => resolve_identifier_type(value, uniforms, builder),
-        Expr::Unary { expr, .. } => infer_expr_type(expr, uniforms, builder, base_offset),
-        Expr::Binary { left, right, .. } => {
-            let left_ty = infer_expr_type(left, uniforms, builder, base_offset);
-            let right_ty = infer_expr_type(right, uniforms, builder, base_offset);
-
-            if left_ty == ExprType::Invalid || right_ty == ExprType::Invalid {
-                return ExprType::Invalid;
-            }
-
-            if left_ty == right_ty {
-                return left_ty;
-            }
-
-            if left_ty == ExprType::Scalar {
-                return right_ty;
-            }
-
-            if right_ty == ExprType::Scalar {
-                return left_ty;
-            }
-
-            builder.push_diagnostic(
-                base_offset,
-                base_offset + 1,
-                Severity::Error,
-                "expr.type.mismatch",
-                "Vector operations need matching shapes or a scalar companion.",
-            );
-            ExprType::Invalid
+    while cursor < chars.len() {
+        let (byte_index, ch) = chars[cursor];
+        if ch.is_whitespace() {
+            cursor += 1;
+            continue;
         }
-        Expr::Call { name, args } => infer_call_type(name, args, uniforms, builder, base_offset),
-    }
-}
 
-fn resolve_identifier_type(
-    value: &str,
-    uniforms: &[ShaderUniform],
-    builder: &mut AnalysisBuilder,
-) -> ExprType {
-    if value == "pi" {
-        return ExprType::Scalar;
-    }
+        if ch == '/' && chars.get(cursor + 1).is_some_and(|(_, next)| *next == '/') {
+            let start = byte_index;
+            let end = source[byte_index..]
+                .find('\n')
+                .map(|offset| byte_index + offset)
+                .unwrap_or(source.len());
+            tokens.push(Token {
+                from: start,
+                to: end,
+                text: source[start..end].to_string(),
+                role: HighlightRole::Comment,
+            });
+            while cursor < chars.len() && chars[cursor].1 != '\n' {
+                cursor += 1;
+            }
+            continue;
+        }
 
-    if value == "uv" {
-        return ExprType::Vec2;
-    }
+        if ch == '@' {
+            let start = byte_index;
+            cursor += 1;
+            while cursor < chars.len() && is_identifier_continue(chars[cursor].1) {
+                cursor += 1;
+            }
+            let end = chars.get(cursor).map(|(index, _)| *index).unwrap_or(source.len());
+            let text = source[start..end].to_string();
+            tokens.push(Token {
+                from: start,
+                to: end,
+                text,
+                role: HighlightRole::Keyword,
+            });
+            continue;
+        }
 
-    if let Some(field) = value.strip_prefix("uv.") {
-        return if matches!(field, "x" | "y") {
-            ExprType::Scalar
+        if ch.is_ascii_digit() {
+            let start = byte_index;
+            cursor += 1;
+            while cursor < chars.len() && (chars[cursor].1.is_ascii_digit() || chars[cursor].1 == '.') {
+                cursor += 1;
+            }
+            let end = chars.get(cursor).map(|(index, _)| *index).unwrap_or(source.len());
+            tokens.push(Token {
+                from: start,
+                to: end,
+                text: source[start..end].to_string(),
+                role: HighlightRole::Number,
+            });
+            continue;
+        }
+
+        if is_identifier_start(ch) {
+            let start = byte_index;
+            cursor += 1;
+            while cursor < chars.len() && is_identifier_continue(chars[cursor].1) {
+                cursor += 1;
+            }
+            let end = chars.get(cursor).map(|(index, _)| *index).unwrap_or(source.len());
+            let text = source[start..end].to_string();
+            let role = classify_identifier(&text, source, end);
+            tokens.push(Token {
+                from: start,
+                to: end,
+                text,
+                role,
+            });
+            continue;
+        }
+
+        let role = if matches!(ch, '{' | '}' | '(' | ')' | '[' | ']' | ',' | ';' | ':') {
+            HighlightRole::Punctuation
         } else {
-            builder.push_diagnostic(0, 0, Severity::Error, "field.unknown", format!("`uv.{field}` is not supported."));
-            ExprType::Invalid
+            HighlightRole::Operator
         };
+        let end = byte_index + ch.len_utf8();
+        tokens.push(Token {
+            from: byte_index,
+            to: end,
+            text: source[byte_index..end].to_string(),
+            role,
+        });
+        cursor += 1;
     }
 
-    if let Some((name, field)) = value.split_once('.') {
-        if let Some(uniform) = uniforms.iter().find(|uniform| uniform.name == name) {
-            builder.used_uniforms.insert(name.to_string());
-            return match (uniform.ty, field) {
-                (ShaderType::Vec2, "x" | "y") => ExprType::Scalar,
-                (ShaderType::Vec3, "x" | "y" | "z") => ExprType::Scalar,
-                (ShaderType::Vec4, "x" | "y" | "z" | "w") => ExprType::Scalar,
-                _ => {
-                    builder.push_diagnostic(
-                        0,
-                        0,
-                        Severity::Error,
-                        "field.unknown",
-                        format!("`{value}` is not a valid swizzle for `{}`.", uniform.ty.as_str()),
-                    );
-                    ExprType::Invalid
-                }
-            };
-        }
-    }
-
-    if let Some(uniform) = uniforms.iter().find(|uniform| uniform.name == value) {
-        builder.used_uniforms.insert(value.to_string());
-        return ExprType::from_shader_type(uniform.ty);
-    }
-
-    builder.push_diagnostic(
-        0,
-        0,
-        Severity::Error,
-        "symbol.unknown",
-        format!("Unknown shader value `{value}`."),
-    );
-    ExprType::Invalid
+    tokens
 }
 
-fn infer_call_type(
-    name: &str,
-    args: &[Expr],
-    uniforms: &[ShaderUniform],
-    builder: &mut AnalysisBuilder,
-    base_offset: usize,
-) -> ExprType {
-    let argument_types = args
-        .iter()
-        .map(|arg| infer_expr_type(arg, uniforms, builder, base_offset))
-        .collect::<Vec<_>>();
-
-    match name {
-        "sin" | "cos" | "abs" | "floor" | "fract" => argument_types.first().copied().unwrap_or(ExprType::Invalid),
-        "length" => ExprType::Scalar,
-        "min" | "max" => argument_types.first().copied().unwrap_or(ExprType::Invalid),
-        "mix" | "clamp" => argument_types.first().copied().unwrap_or(ExprType::Invalid),
-        "vec2" => ExprType::Vec2,
-        "vec3" => ExprType::Vec3,
-        "vec4" => ExprType::Vec4,
-        _ => {
-            builder.push_diagnostic(
-                base_offset,
-                base_offset + name.len(),
-                Severity::Error,
-                "function.unknown",
-                format!("Unsupported shader helper `{name}`."),
-            );
-            ExprType::Invalid
-        }
+fn classify_identifier(text: &str, source: &str, end: usize) -> HighlightRole {
+    if KEYWORDS.contains(&text) {
+        HighlightRole::Keyword
+    } else if TYPES.contains(&text) {
+        HighlightRole::Type
+    } else if BUILTIN_TOKENS.contains(&text) || next_non_space_char(source, end) == Some('(') {
+        HighlightRole::Function
+    } else {
+        HighlightRole::Text
     }
+}
+
+fn next_non_space_char(source: &str, mut index: usize) -> Option<char> {
+    while index < source.len() {
+        let ch = source[index..].chars().next()?;
+        if !ch.is_whitespace() {
+            return Some(ch);
+        }
+        index += ch.len_utf8();
+    }
+    None
+}
+
+fn is_identifier_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
+}
+
+fn is_identifier_continue(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+fn hover_for_token(token: &str) -> Option<&'static str> {
+    Some(match token {
+        "@vertex" => "Marks the vertex entrypoint for the preview pipeline.",
+        "@fragment" => "Marks the fragment entrypoint for the preview pipeline.",
+        "@group" => "Declares a bind group index for a resource.",
+        "@binding" => "Declares the binding slot inside a bind group.",
+        "@builtin" => "Binds a function parameter or return value to a WGSL builtin.",
+        "@location" => "Maps a value to a user vertex/fragment location.",
+        "struct" => "Defines a WGSL struct type.",
+        "fn" => "Defines a WGSL function.",
+        "var" => "Declares a mutable WGSL variable or resource binding.",
+        "let" => "Declares an immutable WGSL value.",
+        "return" => "Returns a value from the current function.",
+        "f32" | "i32" | "u32" | "bool" => "WGSL scalar type.",
+        "vec2f" | "vec3f" | "vec4f" => "WGSL floating-point vector type.",
+        "mat2x2f" | "mat3x3f" | "mat4x4f" => "WGSL floating-point matrix type.",
+        "texture_2d" => "WGSL sampled 2D texture type.",
+        "sampler" => "WGSL filtering sampler type.",
+        "textureSample" => "Samples a texture with a sampler at normalized coordinates.",
+        "textureSampleLevel" => "Samples a texture at an explicit mip level.",
+        "uniforms" => "Preview uniform block with `time` and `resolution`.",
+        "noise_texture" => "Built-in grayscale noise texture bound by the preview runtime.",
+        "noise_sampler" => "Built-in repeating sampler for the noise texture.",
+        "vs_main" => "The preview expects this vertex entrypoint name.",
+        "fs_main" => "The preview expects this fragment entrypoint name.",
+        "sin" => "Sine helper.",
+        "cos" => "Cosine helper.",
+        "fract" => "Returns the fractional part of a value.",
+        "length" => "Returns vector length.",
+        "smoothstep" => "Hermite interpolation between two thresholds.",
+        "mix" => "Linear interpolation helper.",
+        "clamp" => "Clamps a value into a range.",
+        "min" => "Returns the smaller of two values.",
+        "max" => "Returns the larger of two values.",
+        _ if ATTRIBUTES.contains(&token) => "WGSL attribute.",
+        _ => return None,
+    })
 }
 
 fn collect_lines(source: &str) -> Vec<ParsedLine<'_>> {
     let mut lines = Vec::new();
-    let mut start = 0usize;
-
     for raw_line in source.split('\n') {
-        let indent = raw_line.chars().take_while(|ch| *ch == ' ').count();
-        let trimmed = raw_line.trim_end();
-        lines.push(ParsedLine { start, indent, trimmed: &trimmed[indent.min(trimmed.len())..] });
-        start += raw_line.len() + 1;
+        lines.push(ParsedLine { trimmed: raw_line });
     }
-
     lines
 }
 
@@ -1109,99 +598,6 @@ fn line_starts(source: &str) -> Vec<usize> {
     starts
 }
 
-fn first_token_end(line: &str) -> usize {
-    line.find(char::is_whitespace).unwrap_or(line.len())
-}
-
-fn is_valid_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    match chars.next() {
-        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
-        _ => return false,
-    }
-    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-}
-
-fn split_parts_with_spans(input: &str) -> Vec<(&str, usize)> {
-    let mut parts = Vec::new();
-    let mut start = None;
-
-    for (index, ch) in input.char_indices() {
-        if ch.is_whitespace() {
-            if let Some(part_start) = start.take() {
-                parts.push((&input[part_start..index], part_start));
-            }
-        } else if start.is_none() {
-            start = Some(index);
-        }
-    }
-
-    if let Some(part_start) = start {
-        parts.push((&input[part_start..], part_start));
-    }
-
-    parts
-}
-
-fn hover_for_keyword(keyword: &str) -> &'static str {
-    match keyword {
-        "shader" => "Root shader node. Everything in the file hangs off this declaration.",
-        "uniform" => "Declares a named shader input that maps to an editor-provided builtin value.",
-        "vertex" => "Vertex stage block. In v1 this only supports a fullscreen triangle.",
-        "fragment" => "Fragment stage block. This stage computes the final pixel color.",
-        "position" => "Declares the vertex output position path.",
-        "fullscreen" => "Emits a fullscreen triangle so the fragment stage can shade the whole canvas.",
-        "color" => "Opens the fragment color block. Supply r, g, b, and a channel expressions below it.",
-        "r" => "Red channel expression.",
-        "g" => "Green channel expression.",
-        "b" => "Blue channel expression.",
-        "a" => "Alpha channel expression.",
-        _ => "Shader DSL token.",
-    }
-}
-
-fn hover_for_builtin(value: &str) -> &'static str {
-    match value {
-        "time" => "Animated seconds since the preview started rendering.",
-        "resolution" => "Current preview canvas size as a vec2.",
-        _ => "Shader builtin value.",
-    }
-}
-
-fn collapse_spaces(input: &str) -> String {
-    input.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn collapse_spaces_preserving_punctuation(input: &str) -> String {
-    let mut output = String::new();
-    let mut prev_space = false;
-
-    for ch in input.chars() {
-        if ch.is_whitespace() {
-            if !prev_space {
-                output.push(' ');
-                prev_space = true;
-            }
-            continue;
-        }
-
-        if matches!(ch, ',' | ')' | '(') && output.ends_with(' ') {
-            output.pop();
-        }
-
-        output.push(ch);
-
-        if ch == ',' {
-            output.push(' ');
-            prev_space = true;
-        } else {
-            prev_space = false;
-        }
-    }
-
-    output.trim().to_string()
-}
-
 fn nearest<'a>(value: &str, candidates: &'a [&str]) -> Option<&'a str> {
     candidates
         .iter()
@@ -1210,18 +606,6 @@ fn nearest<'a>(value: &str, candidates: &'a [&str]) -> Option<&'a str> {
         .filter(|(_, distance)| *distance <= 3)
         .min_by_key(|(_, distance)| *distance)
         .map(|(candidate, _)| candidate)
-}
-
-fn replace_token_action(source: &str, from: usize, to: usize, replacement: &str) -> CodeAction {
-    let original = source.get(from..to).unwrap_or_default();
-    CodeAction {
-        title: format!("Replace `{original}` with `{replacement}`"),
-        changes: vec![TextChange {
-            from,
-            to,
-            insert: replacement.to_string(),
-        }],
-    }
 }
 
 fn dedupe_actions(actions: Vec<CodeAction>) -> Vec<CodeAction> {
@@ -1241,11 +625,9 @@ fn levenshtein(left: &str, right: &str) -> usize {
     if left == right {
         return 0;
     }
-
     if left.is_empty() {
         return right.chars().count();
     }
-
     if right.is_empty() {
         return left.chars().count();
     }
@@ -1255,428 +637,92 @@ fn levenshtein(left: &str, right: &str) -> usize {
 
     for (row, left_char) in left.chars().enumerate() {
         let mut current = vec![row + 1];
-
         for (column, right_char) in right_chars.iter().enumerate() {
             let insertion = current[column] + 1;
             let deletion = previous[column + 1] + 1;
             let substitution = previous[column] + usize::from(left_char != *right_char);
             current.push(insertion.min(deletion).min(substitution));
         }
-
         previous = current;
     }
 
     *previous.last().unwrap_or(&0)
 }
 
-fn is_fatal_code(code: &str) -> bool {
-    matches!(
-        code,
-        "shader.missing"
-            | "vertex.missing"
-            | "fragment.missing"
-            | "vertex.position.missing"
-            | "fragment.color.missing"
-            | "fragment.channel.missing"
-            | "expr.missing"
-            | "expr.type.invalid"
-            | "expr.type.mismatch"
-            | "type.unknown"
-            | "builtin.unknown"
-            | "type.mismatch"
-            | "vertex.position.invalid"
-    )
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum TokenKind {
-    Number(String),
-    Identifier(String),
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    LeftParen,
-    RightParen,
-    Comma,
-}
-
-#[derive(Clone, Debug)]
-struct Token {
-    kind: TokenKind,
-    from: usize,
-    to: usize,
-}
-
-struct ExpressionParser<'a> {
-    source: &'a str,
-    absolute_start: usize,
-    tokens: Vec<Token>,
-    cursor: usize,
-    diagnostics: Vec<SceneDiagnostic>,
-    highlights: Vec<SceneHighlight>,
-    hovers: Vec<HoverEntry>,
-}
-
-impl<'a> ExpressionParser<'a> {
-    fn new(source: &'a str, absolute_start: usize) -> Self {
-        let mut parser = Self {
-            source,
-            absolute_start,
-            tokens: Vec::new(),
-            cursor: 0,
-            diagnostics: Vec::new(),
-            highlights: Vec::new(),
-            hovers: Vec::new(),
-        };
-        parser.tokenize();
-        parser
-    }
-
-    fn tokenize(&mut self) {
-        let mut index = 0usize;
-        let bytes = self.source.as_bytes();
-
-        while index < bytes.len() {
-            let ch = self.source[index..].chars().next().unwrap_or(' ');
-            let width = ch.len_utf8();
-
-            if ch.is_whitespace() {
-                index += width;
-                continue;
-            }
-
-            let from = self.absolute_start + index;
-            match ch {
-                '0'..='9' => {
-                    let start = index;
-                    index += width;
-                    while index < bytes.len() {
-                        let next = self.source[index..].chars().next().unwrap_or(' ');
-                        if next.is_ascii_digit() || next == '.' {
-                            index += next.len_utf8();
-                        } else {
-                            break;
-                        }
-                    }
-                    let value = self.source[start..index].to_string();
-                    let to = self.absolute_start + index;
-                    self.highlights.push(SceneHighlight {
-                        from,
-                        to,
-                        role: HighlightRole::Number,
-                    });
-                    self.tokens.push(Token {
-                        kind: TokenKind::Number(value),
-                        from,
-                        to,
-                    });
-                }
-                'a'..='z' | 'A'..='Z' | '_' => {
-                    let start = index;
-                    index += width;
-                    while index < bytes.len() {
-                        let next = self.source[index..].chars().next().unwrap_or(' ');
-                        if next.is_ascii_alphanumeric() || matches!(next, '_' | '.') {
-                            index += next.len_utf8();
-                        } else {
-                            break;
-                        }
-                    }
-                    let value = self.source[start..index].to_string();
-                    let to = self.absolute_start + index;
-                    let role = if is_function_name(&value) {
-                        HighlightRole::Function
-                    } else {
-                        HighlightRole::Text
-                    };
-                    self.highlights.push(SceneHighlight { from, to, role });
-                    self.hovers.push(HoverEntry {
-                        from,
-                        to,
-                        content: hover_for_expression_symbol(&value).to_string(),
-                    });
-                    self.tokens.push(Token {
-                        kind: TokenKind::Identifier(value),
-                        from,
-                        to,
-                    });
-                }
-                '+' => {
-                    self.push_single_token(TokenKind::Plus, from, width);
-                    index += width;
-                }
-                '-' => {
-                    self.push_single_token(TokenKind::Minus, from, width);
-                    index += width;
-                }
-                '*' => {
-                    self.push_single_token(TokenKind::Star, from, width);
-                    index += width;
-                }
-                '/' => {
-                    self.push_single_token(TokenKind::Slash, from, width);
-                    index += width;
-                }
-                '(' => {
-                    self.push_single_token(TokenKind::LeftParen, from, width);
-                    index += width;
-                }
-                ')' => {
-                    self.push_single_token(TokenKind::RightParen, from, width);
-                    index += width;
-                }
-                ',' => {
-                    self.push_single_token(TokenKind::Comma, from, width);
-                    index += width;
-                }
-                _ => {
-                    self.diagnostics.push(SceneDiagnostic {
-                        from,
-                        to: from + width,
-                        severity: Severity::Error,
-                        message: format!("Unexpected character `{ch}` in shader expression."),
-                        source: "shader-lang",
-                        code: "expr.token.invalid",
-                    });
-                    index += width;
-                }
-            }
-        }
-    }
-
-    fn push_single_token(&mut self, kind: TokenKind, from: usize, width: usize) {
-        let to = from + width;
-        let role = if matches!(kind, TokenKind::LeftParen | TokenKind::RightParen | TokenKind::Comma) {
-            HighlightRole::Punctuation
-        } else {
-            HighlightRole::Operator
-        };
-        self.highlights.push(SceneHighlight { from, to, role });
-        self.tokens.push(Token { kind, from, to });
-        self.cursor = self.tokens.len().saturating_sub(1).min(self.cursor);
-    }
-
-    fn parse_expression(&mut self) -> Option<Expr> {
-        self.parse_additive()
-    }
-
-    fn parse_additive(&mut self) -> Option<Expr> {
-        let mut expr = self.parse_multiplicative()?;
-
-        loop {
-            let op = match self.peek_kind() {
-                Some(TokenKind::Plus) => '+',
-                Some(TokenKind::Minus) => '-',
-                _ => break,
-            };
-            self.cursor += 1;
-            let right = self.parse_multiplicative()?;
-            expr = Expr::Binary {
-                op,
-                left: Box::new(expr),
-                right: Box::new(right),
-            };
-        }
-
-        Some(expr)
-    }
-
-    fn parse_multiplicative(&mut self) -> Option<Expr> {
-        let mut expr = self.parse_unary()?;
-
-        loop {
-            let op = match self.peek_kind() {
-                Some(TokenKind::Star) => '*',
-                Some(TokenKind::Slash) => '/',
-                _ => break,
-            };
-            self.cursor += 1;
-            let right = self.parse_unary()?;
-            expr = Expr::Binary {
-                op,
-                left: Box::new(expr),
-                right: Box::new(right),
-            };
-        }
-
-        Some(expr)
-    }
-
-    fn parse_unary(&mut self) -> Option<Expr> {
-        match self.peek_kind() {
-            Some(TokenKind::Plus) => {
-                self.cursor += 1;
-                self.parse_unary()
-            }
-            Some(TokenKind::Minus) => {
-                self.cursor += 1;
-                Some(Expr::Unary {
-                    op: '-',
-                    expr: Box::new(self.parse_unary()?),
-                })
-            }
-            _ => self.parse_primary(),
-        }
-    }
-
-    fn parse_primary(&mut self) -> Option<Expr> {
-        let token = self.tokens.get(self.cursor)?.clone();
-        self.cursor += 1;
-
-        match token.kind {
-            TokenKind::Number(value) => Some(Expr::Number(value)),
-            TokenKind::Identifier(value) => {
-                if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
-                    self.cursor += 1;
-                    let mut args = Vec::new();
-
-                    if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
-                        loop {
-                            args.push(self.parse_expression()?);
-                            if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
-                                self.cursor += 1;
-                                continue;
-                            }
-                            break;
-                        }
-                    }
-
-                    if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
-                        self.diagnostics.push(SceneDiagnostic {
-                            from: token.from,
-                            to: token.to,
-                            severity: Severity::Error,
-                            message: format!("Function `{value}` is missing a closing `)`."),
-                            source: "shader-lang",
-                            code: "expr.call.unclosed",
-                        });
-                        return None;
-                    }
-
-                    self.cursor += 1;
-                    Some(Expr::Call { name: value, args })
-                } else {
-                    Some(Expr::Identifier(value))
-                }
-            }
-            TokenKind::LeftParen => {
-                let expr = self.parse_expression()?;
-                if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
-                    self.diagnostics.push(SceneDiagnostic {
-                        from: token.from,
-                        to: token.to,
-                        severity: Severity::Error,
-                        message: "Expression is missing a closing `)`.".to_string(),
-                        source: "shader-lang",
-                        code: "expr.group.unclosed",
-                    });
-                    return None;
-                }
-                self.cursor += 1;
-                Some(expr)
-            }
-            _ => {
-                self.diagnostics.push(SceneDiagnostic {
-                    from: token.from,
-                    to: token.to,
-                    severity: Severity::Error,
-                    message: "Expected a number, name, or function call here.".to_string(),
-                    source: "shader-lang",
-                    code: "expr.primary.invalid",
-                });
-                None
-            }
-        }
-    }
-
-    fn peek_kind(&self) -> Option<&TokenKind> {
-        self.tokens.get(self.cursor).map(|token| &token.kind)
-    }
-
-    fn finish(self, builder: &mut AnalysisBuilder) {
-        builder.diagnostics.extend(self.diagnostics);
-        builder.highlights.extend(self.highlights);
-        builder.hover_entries.extend(self.hovers);
-    }
-}
-
-fn is_function_name(value: &str) -> bool {
-    matches!(
-        value,
-        "sin" | "cos" | "abs" | "floor" | "fract" | "length" | "min" | "max" | "mix" | "clamp" | "vec2" | "vec3" | "vec4"
-    )
-}
-
-fn hover_for_expression_symbol(value: &str) -> &'static str {
-    match value {
-        "uv" => "Normalized fragment coordinates from 0.0 to 1.0 across the preview canvas.",
-        "uv.x" => "Horizontal fragment coordinate across the preview canvas.",
-        "uv.y" => "Vertical fragment coordinate across the preview canvas.",
-        "pi" => "Pi as a built-in scalar constant.",
-        "sin" => "Sine helper.",
-        "cos" => "Cosine helper.",
-        "mix" => "Linear interpolation helper.",
-        "clamp" => "Clamps a value into a min/max range.",
-        "vec2" => "Constructs a vec2 value.",
-        "vec3" => "Constructs a vec3 value.",
-        "vec4" => "Constructs a vec4 value.",
-        _ => "Shader expression symbol.",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = r#"shader
-uniform clock float builtin time
-uniform viewport vec2 builtin resolution
+    const SAMPLE: &str = r#"struct PreviewUniforms {
+  time: f32,
+  _pad0: vec3f,
+  resolution: vec2f,
+  _pad1: vec2f,
+}
 
-vertex
-  position fullscreen
+@group(0) @binding(0) var<uniform> uniforms: PreviewUniforms;
+@group(0) @binding(1) var noise_texture: texture_2d<f32>;
+@group(0) @binding(2) var noise_sampler: sampler;
 
-fragment
-  color
-    r 0.5 + 0.5 * sin(clock + uv.x * 6.0)
-    g 0.5 + 0.5 * sin(clock * 0.7 + uv.y * 8.0)
-    b 0.35 + 0.65 * uv.x
-    a 1.0
-  clor
+struct VertexOut {
+  @builtin(position) position: vec4f,
+  @location(0) uv: vec2f,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> VertexOut {
+  var positions = array<vec2f, 3>(
+    vec2f(-1.0, -1.0),
+    vec2f(3.0, -1.0),
+    vec2f(-1.0, 3.0),
+  );
+  let clip = positions[index];
+  var out: VertexOut;
+  out.position = vec4f(clip, 0.0, 1.0);
+  out.uv = clip * 0.5 + vec2f(0.5, 0.5);
+  return out;
+}
+
+@fragment
+fn fs_main(in_vertex: VertexOut) -> @location(0) vec4f {
+  let uv = vec2f(in_vertex.uv.x, 1.0 - in_vertex.uv.y);
+  let grain = textureSample(noise_texture, noise_sampler, fract(uv * 3.0 + vec2f(uniforms.time * 0.05, 0.0))).r;
+  return vec4f(uv.x, grain, uv.y, 1.0);
+}
 "#;
 
     #[test]
-    fn analysis_reports_warning_and_recoverable_error() {
+    fn analysis_reports_program_for_valid_wgsl() {
         let analysis = analyze_scene(SAMPLE);
         assert!(analysis.program.is_some());
-        assert!(analysis.diagnostics.iter().any(|diagnostic| diagnostic.code == "uniform.unused"));
-        assert!(analysis.diagnostics.iter().any(|diagnostic| diagnostic.code == "command.unknown"));
+        assert!(analysis.program.as_ref().is_some_and(|program| program.uses_noise));
     }
 
     #[test]
-    fn hover_finds_shader_root() {
-        let offset = SAMPLE.find("shader").unwrap_or(0);
+    fn hover_finds_fragment_attribute() {
+        let offset = SAMPLE.find("@fragment").unwrap_or(0);
         let hover = hover_at(SAMPLE, offset + 1).expect("hover");
-        assert!(hover.content.contains("Root shader node"));
+        assert!(hover.content.contains("fragment entrypoint"));
     }
 
     #[test]
-    fn formatter_normalizes_basic_spacing() {
-        let formatted = format_scene("shader\nuniform clock float builtin time\nfragment\n  color\n    r 1");
-        assert!(formatted.contains("uniform clock float builtin time"));
-        assert!(formatted.contains("    r 1"));
+    fn formatter_keeps_function_names() {
+        let formatted = format_scene(SAMPLE);
+        assert!(formatted.contains("fn vs_main"));
+        assert!(formatted.contains("fn fs_main"));
     }
 
     #[test]
     fn code_actions_suggest_replacing_typos() {
-        let selection = SAMPLE.find("clor").unwrap_or(0);
-        let actions = code_actions(SAMPLE, selection, selection + 4);
-        assert!(actions.iter().any(|action| action.title.contains("color")));
+        let source = "textureSmple(noise_texture, noise_sampler, uv)";
+        let selection = source.find("textureSmple").unwrap_or(0);
+        let actions = code_actions(source, selection, selection + "textureSmple".len());
+        assert!(actions.iter().any(|action| action.title.contains("textureSample")));
     }
 
     #[test]
-    fn highlights_include_numbers_and_keywords() {
-        let highlights = highlights_for_lines(SAMPLE, 0, 20);
+    fn highlights_include_keywords_and_numbers() {
+        let highlights = highlights_for_lines(SAMPLE, 0, 30);
         assert!(highlights.iter().any(|span| span.role == HighlightRole::Keyword));
         assert!(highlights.iter().any(|span| span.role == HighlightRole::Number));
     }

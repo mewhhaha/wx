@@ -134,13 +134,14 @@ pub fn highlights_json_payload(source: &str, from_line: usize, to_line: usize) -
 pub fn compile_json_payload(source: &str) -> String {
     match compile_scene(source) {
         Ok(output) => format!(
-            "{{\"ok\":true,\"wgsl\":\"{}\",\"usesTime\":{},\"usesResolution\":{}}}",
+            "{{\"ok\":true,\"wgsl\":\"{}\",\"usesTime\":{},\"usesResolution\":{},\"usesNoise\":{}}}",
             escape_json(&output.wgsl),
             output.uses_time,
-            output.uses_resolution
+            output.uses_resolution,
+            output.uses_noise
         ),
         Err(error) => format!(
-            "{{\"ok\":false,\"error\":\"{}\",\"wgsl\":null,\"usesTime\":false,\"usesResolution\":false}}",
+            "{{\"ok\":false,\"error\":\"{}\",\"wgsl\":null,\"usesTime\":false,\"usesResolution\":false,\"usesNoise\":false}}",
             escape_json(&error)
         ),
     }
@@ -174,26 +175,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn diagnostics_payload_reports_unknown_command() {
-        let source = "shader\nfragment\n  clor";
+    fn diagnostics_payload_reports_missing_entrypoints() {
+        let source = "fn nope() -> f32 { return 0.0; }";
         let payload = diagnostics_json_payload(source);
-        assert!(payload.contains("\"command.unknown\""));
+        assert!(payload.contains("\"vertex.missing\""));
     }
 
     #[test]
     fn compile_payload_contains_wgsl_when_shader_is_valid() {
-        let source = r#"shader
-uniform clock float builtin time
+        let source = r#"struct PreviewUniforms {
+  time: f32,
+  _pad0: vec3f,
+  resolution: vec2f,
+  _pad1: vec2f,
+}
 
-vertex
-  position fullscreen
+@group(0) @binding(0) var<uniform> uniforms: PreviewUniforms;
+@group(0) @binding(1) var noise_texture: texture_2d<f32>;
+@group(0) @binding(2) var noise_sampler: sampler;
 
-fragment
-  color
-    r 0.5 + 0.5 * sin(clock)
-    g 0.2
-    b 0.4
-    a 1.0
+struct VertexOut {
+  @builtin(position) position: vec4f,
+  @location(0) uv: vec2f,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> VertexOut {
+  var positions = array<vec2f, 3>(
+    vec2f(-1.0, -1.0),
+    vec2f(3.0, -1.0),
+    vec2f(-1.0, 3.0),
+  );
+  let clip = positions[index];
+  var out: VertexOut;
+  out.position = vec4f(clip, 0.0, 1.0);
+  out.uv = clip * 0.5 + vec2f(0.5, 0.5);
+  return out;
+}
+
+@fragment
+fn fs_main(in_vertex: VertexOut) -> @location(0) vec4f {
+  let uv = vec2f(in_vertex.uv.x, 1.0 - in_vertex.uv.y);
+  let grain = textureSample(noise_texture, noise_sampler, fract(uv * 3.0 + vec2f(uniforms.time * 0.05, 0.0))).r;
+  return vec4f(uv.x, grain, uv.y, 1.0);
+}
 "#;
 
         let payload = compile_json_payload(source);

@@ -68,6 +68,12 @@ importers:
       '@wx/editor-core':
         specifier: workspace:*
         version: link:../editor-core
+      '@wx/editor-language':
+        specifier: workspace:*
+        version: link:../editor-language
+      '@wx/editor-layout':
+        specifier: workspace:*
+        version: link:../editor-layout
 
   packages/editor-core: {}
 
@@ -91,6 +97,15 @@ importers:
       '@wx/editor-core':
         specifier: workspace:*
         version: link:../editor-core
+
+  packages/editor-layout:
+    dependencies:
+      '@wx/editor-core':
+        specifier: workspace:*
+        version: link:../editor-core
+      '@wx/editor-language':
+        specifier: workspace:*
+        version: link:../editor-language
 
   packages/editor-theme:
     dependencies:
@@ -121,6 +136,9 @@ importers:
       '@wx/editor-language':
         specifier: workspace:*
         version: link:../editor-language
+      '@wx/editor-layout':
+        specifier: workspace:*
+        version: link:../editor-layout
       '@wx/editor-theme':
         specifier: workspace:*
         version: link:../editor-theme

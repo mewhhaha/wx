@@ -54,6 +54,7 @@ export interface ShaderCompileResult {
   wgsl: string | null;
   usesTime: boolean;
   usesResolution: boolean;
+  usesNoise: boolean;
   error?: string;
 }
 
