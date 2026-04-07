@@ -915,7 +915,9 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       rebuildViewportModel();
       const didReveal = revealSelectionWithinViewport();
       viewportChanged = syncVisibleViewportRows() || didReveal;
-      syncVisibleLanguageDecorations();
+      if (update.docChanged || viewportChanged) {
+        syncVisibleLanguageDecorations();
+      }
     }
 
     if (viewportChanged) {

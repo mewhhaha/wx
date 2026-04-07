@@ -2337,6 +2337,210 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     );
   }
 
+  function getRowViewByVisualRowIndex(visualRowIndex: number): RowView | null {
+    return rowViews.find((view) => view.visualRowIndex === visualRowIndex) ?? null;
+  }
+
+  function getTokenSourceRange(token: Element): { from: number; to: number } | null {
+    if (!(token instanceof HTMLSpanElement)) {
+      return null;
+    }
+
+    const from = Number(token.dataset.wxEditorOffset);
+    const to = Number(token.dataset.wxEditorOffsetEnd);
+
+    if (!Number.isFinite(from) || !Number.isFinite(to)) {
+      return null;
+    }
+
+    return { from, to };
+  }
+
+  function cloneTokenSpan(template: HTMLSpanElement, text: string, from: number, to: number): HTMLSpanElement {
+    const token = template.cloneNode(false) as HTMLSpanElement;
+    token.classList.remove("wx-cursor-block", "wx-is-selected");
+    delete token.dataset.wxEditorCursor;
+    delete token.dataset.wxEditorCursorKind;
+    token.dataset.wxEditorOffset = String(from);
+    token.dataset.wxEditorOffsetEnd = String(to);
+    token.textContent = text;
+    return token;
+  }
+
+  function findOrSplitTokenAtOffset(lineText: HTMLElement, offset: number): HTMLSpanElement | null {
+    for (const child of lineText.children) {
+      if (!(child instanceof HTMLSpanElement)) {
+        continue;
+      }
+
+      const range = getTokenSourceRange(child);
+      if (!range || offset < range.from || offset >= range.to) {
+        continue;
+      }
+
+      if (range.from === offset && range.to === offset + 1) {
+        return child;
+      }
+
+      const text = child.textContent ?? "";
+      const splitIndex = offset - range.from;
+      const beforeText = text.slice(0, splitIndex);
+      const cursorText = text.slice(splitIndex, splitIndex + 1) || EMPTY_CELL_TEXT;
+      const afterText = text.slice(splitIndex + 1);
+      const fragment = document.createDocumentFragment();
+
+      if (beforeText.length > 0) {
+        fragment.append(cloneTokenSpan(child, beforeText, range.from, offset));
+      }
+
+      const cursorToken = cloneTokenSpan(child, cursorText, offset, offset + 1);
+      fragment.append(cursorToken);
+
+      if (afterText.length > 0) {
+        fragment.append(cloneTokenSpan(child, afterText, offset + 1, range.to));
+      }
+
+      child.replaceWith(fragment);
+      return cursorToken;
+    }
+
+    return null;
+  }
+
+  function setBlockCursorToken(token: HTMLSpanElement | null, active: boolean): void {
+    if (!token) {
+      return;
+    }
+
+    token.classList.toggle("wx-cursor-block", active);
+    token.classList.toggle("wx-is-selected", active);
+
+    if (active) {
+      token.dataset.wxEditorCursor = "true";
+      token.dataset.wxEditorCursorKind = "block";
+    } else {
+      delete token.dataset.wxEditorCursor;
+      delete token.dataset.wxEditorCursorKind;
+    }
+  }
+
+  function getCaretMetrics() {
+    const height = Math.max(14, Math.round(metrics.lineHeight * 0.84));
+    const top = Math.max(0, Math.round((metrics.lineHeight - height) / 2));
+    return { height, top };
+  }
+
+  function ensureLineCursor(view: RowView, column: number): void {
+    const existing =
+      view.content.querySelector<HTMLElement>("[data-wx-editor-cursor='true'][data-wx-editor-cursor-kind='line']") ??
+      document.createElement("span");
+    const { height, top } = getCaretMetrics();
+
+    existing.className = "wx-cursor-line";
+    existing.dataset.wxEditorCursor = "true";
+    existing.dataset.wxEditorCursorKind = "line";
+    existing.style.left = `${column * metrics.charWidth}px`;
+    existing.style.top = `${top}px`;
+    existing.style.height = `${height}px`;
+
+    if (!existing.parentElement) {
+      view.content.append(existing);
+    }
+  }
+
+  function tryPatchSimpleCursorMove(previousState: EditorState, nextState: EditorState): boolean {
+    if (flashState.active || pendingAction !== null) {
+      return false;
+    }
+
+    const isSimpleSelection = (targetState: EditorState): boolean => {
+      if (targetState.selection.ranges.length !== 1) {
+        return false;
+      }
+
+      const selection = getSelectionOffsets(targetState);
+      return targetState.mode === "insert" ? selection.from === selection.to : selection.to === selection.from + 1;
+    };
+
+    if (!isSimpleSelection(previousState) || !isSimpleSelection(nextState)) {
+      return false;
+    }
+
+    if (previousState.mode !== nextState.mode || (nextState.mode !== "normal" && nextState.mode !== "insert")) {
+      return false;
+    }
+
+    const previousOffset =
+      previousState.mode === "insert"
+        ? getCursorOffset(previousState.selection)
+        : getActiveCharacterOffset(previousState);
+    const nextOffset =
+      nextState.mode === "insert" ? getCursorOffset(nextState.selection) : getActiveCharacterOffset(nextState);
+
+    if (previousOffset === nextOffset) {
+      return false;
+    }
+
+    const previousVisual = getVisualRowForOffset(
+      previousState,
+      visualRows,
+      lineVisualRanges,
+      previousOffset,
+      softWrap,
+      softWrap ? Math.max(1, wrapColumns) : Number.MAX_SAFE_INTEGER
+    );
+    const nextVisual = getVisualRowForOffset(
+      nextState,
+      visualRows,
+      lineVisualRanges,
+      nextOffset,
+      softWrap,
+      softWrap ? Math.max(1, wrapColumns) : Number.MAX_SAFE_INTEGER
+    );
+
+    if (
+      getLineDiagnostics(previousVisual.row.docLine).length > 0 ||
+      getLineDiagnostics(nextVisual.row.docLine).length > 0
+    ) {
+      return false;
+    }
+
+    const previousView = getRowViewByVisualRowIndex(previousVisual.rowIndex);
+    const nextView = getRowViewByVisualRowIndex(nextVisual.rowIndex);
+
+    if (!previousView || !nextView) {
+      return false;
+    }
+
+    previousView.row.classList.toggle("wx-row-active", previousVisual.rowIndex === nextVisual.rowIndex);
+    nextView.row.classList.add("wx-row-active");
+
+    if (nextState.mode === "insert") {
+      root
+        .querySelectorAll<HTMLElement>("[data-wx-editor-cursor='true'][data-wx-editor-cursor-kind='line']")
+        .forEach((cursor) => cursor.remove());
+      ensureLineCursor(nextView, nextVisual.column);
+      return true;
+    }
+
+    root
+      .querySelectorAll<HTMLSpanElement>("[data-wx-editor-cursor='true'][data-wx-editor-cursor-kind='block']")
+      .forEach((token) => setBlockCursorToken(token, false));
+
+    const lineText = nextView.content.querySelector<HTMLElement>(".wx-editor__line-text");
+    if (!lineText) {
+      return false;
+    }
+
+    const nextToken = findOrSplitTokenAtOffset(lineText, nextOffset);
+    if (!nextToken) {
+      return false;
+    }
+
+    setBlockCursorToken(nextToken, true);
+    return true;
+  }
+
   function patchRowView(view: RowView, layoutRow: EditorLayoutModel["document"]["rows"][number]): void {
     const visualRowIndex = layoutRow.visualRowIndex;
     const lineIndex = layoutRow.docLine;
@@ -2792,6 +2996,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       if (refreshViewportMetricsIfNeeded(true)) {
         return;
       }
+    }
+
+    if (dirtyLines && tryPatchSimpleCursorMove(previousState, nextState)) {
+      patchStatus();
+      return;
     }
 
     if (dirtyLines && renderDirtyRows(dirtyLines)) {
