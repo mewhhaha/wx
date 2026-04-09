@@ -229,20 +229,27 @@ describe("createEditor", () => {
     expect(container.querySelector('[data-wx-editor-content="2"] .wx-indent-guide')?.textContent).toBe("╎");
   });
 
-  it("moves the cursor with mouse wheel scrolling", () => {
+  it("scrolls the viewport with mouse wheel input without moving the cursor", () => {
     const container = document.createElement("div");
     document.body.append(container);
 
-    const editor = createEditor(container, { value: "one\ntwo\nthree" });
+    const editor = createEditor(container, {
+      value: Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n")
+    });
     const surface = container.querySelector("[data-wx-editor='surface']") as HTMLDivElement;
 
+    Object.defineProperty(surface, "clientHeight", { value: 80, configurable: true });
+    editor.mount(container);
+
     surface.dispatchEvent(new WheelEvent("wheel", { deltaY: 50, bubbles: true, cancelable: true }));
+    expect(visibleRows(container)[0]).toBe(2);
     expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0)).toEqual({
-      line: 1,
+      line: 0,
       column: 0
     });
 
     surface.dispatchEvent(new WheelEvent("wheel", { deltaY: -50, bubbles: true, cancelable: true }));
+    expect(visibleRows(container)[0]).toBe(1);
     expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0)).toEqual({
       line: 0,
       column: 0

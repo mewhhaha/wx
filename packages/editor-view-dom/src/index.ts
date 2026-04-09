@@ -1,74 +1,20 @@
 import {
-  addSurround,
-  appendInsertMode,
-  changeSelection,
   createEditorState,
-  createCharacterSelection,
   createSelection,
-  deleteSurround,
-  deleteSelection,
-  deleteBackwardIndentAware,
-  deleteForward,
-  enterInsertMode,
-  enterNormalMode,
   getActiveCharacterOffset,
   getCursorOffset,
   getSelectionOffsets,
-  gotoMatchingBracket,
-  gotoNextParagraph,
-  gotoPrevParagraph,
-  gotoWindowBottom,
-  gotoWindowCenter,
-  gotoWindowTop,
-  halfPageDown,
-  halfPageUp,
-  insertNewline,
-  insertText,
-  findNextChar,
-  findPrevChar,
-  findTillNextChar,
-  findTillPrevChar,
-  moveDown,
-  moveNextLongWordEnd,
-  moveNextLongWordStart,
-  moveNextWordStart,
-  movePrevLongWordStart,
-  moveWordBackward,
-  moveWordForward,
-  gotoFileStart,
-  gotoFirstNonWhitespace,
-  gotoLastLine,
-  gotoLineEnd,
-  gotoLineStart,
-  moveLeft,
-  moveRight,
-  moveUp,
-  pageDown,
-  pageUp,
-  openAbove,
-  openBelow,
-  pasteAfter,
-  replaceSurround,
-  redo,
-  selectAll,
-  selectLineBelow,
-  selectTextobject,
-  toggleVisualMode,
-  undo,
-  yankSelection,
-  type Command,
-  type EditorState,
-  type TextChange
+  type EditorState
 } from "@wx/editor-core";
 import {
   createEditorController,
-  type EditorJumpEntry,
   type EditorController,
   type EditorUpdate
 } from "@wx/editor-controller";
 import {
   buildEditorLayout,
   buildEditorLayoutRow,
+  getVisualRowForOffset as getLayoutVisualRowForOffset,
   type EditorLayoutModel,
   type EditorLayoutPanel,
   type EditorLayoutRow,
@@ -83,9 +29,7 @@ import type {
   EditorLanguageServiceInput,
   EditorLanguageServices,
   HighlightRole,
-  HighlightSpan,
-  LanguageProvider,
-  SyntaxTextobjectMode,
+  LanguageProvider
 } from "@wx/editor-language";
 import { languageProviderToServices } from "@wx/editor-language";
 import { defaultTheme, createThemeVariables, type ThemeSpec } from "@wx/editor-theme";
@@ -137,40 +81,10 @@ export interface EditorHandle {
   setValue(value: string): Promise<void>;
 }
 
-interface LineFragment {
-  offset: number | null;
-  endOffset: number | null;
-  text: string;
-  role: HighlightRole;
-  isIndentGuide: boolean;
-  isSelected: boolean;
-  isCursor: boolean;
-  cursorKind: "block" | null;
-  diagnosticSeverity: DiagnosticSeverity | null;
-  isSearchMatch: boolean;
-  isCurrentSearchMatch: boolean;
-  isFlashTarget: boolean;
-}
-
 interface CommandLineState {
   active: boolean;
   value: string;
   prompt: ":" | "/" | "?";
-}
-
-interface SearchPreviewState {
-  active: boolean;
-  direction: "forward" | "backward";
-  selection: EditorState["selection"];
-  mode: EditorState["mode"];
-  search: ReturnType<EditorController["getSearchState"]>;
-  startOffset: number;
-}
-
-interface CommandCompletionItem {
-  label: string;
-  detail?: string;
-  run(): void;
 }
 
 interface BottomMessageState {
@@ -223,29 +137,6 @@ interface LineChangeState {
 
 type LineChangesByLine = Map<number, LineChangeState>;
 
-type PendingAction =
-  | null
-  | { kind: "g" }
-  | { kind: "[" | "]" }
-  | { kind: "m" }
-  | { kind: "space" }
-  | { kind: "flash-target" }
-  | { kind: "z"; sticky: boolean }
-  | { kind: "find"; variant: "f" | "F" | "t" | "T" }
-  | { kind: "textobject"; mode: "around" | "inside" }
-  | { kind: "surround-add" }
-  | { kind: "surround-delete" }
-  | { kind: "surround-replace-from" }
-  | { kind: "surround-replace-to"; fromObject: string }
-  | { kind: "register-select"; insert: boolean };
-
-type RepeatableMotion =
-  | { kind: "find"; variant: "f" | "F" | "t" | "T"; target: string }
-  | { kind: "matching-bracket" }
-  | { kind: "paragraph"; direction: "next" | "prev" }
-  | { kind: "textobject"; mode: "around" | "inside"; object: string }
-  | { kind: "search"; reverse: boolean };
-
 const DIAGNOSTIC_SEVERITY_ORDER: Record<DiagnosticSeverity, number> = {
   error: 0,
   warning: 1,
@@ -262,9 +153,6 @@ const VERTICAL_SCROLLOFF_ROWS = 3;
 const END_OF_LINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "hint";
 const CURSOR_LINE_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "warning";
 const OTHER_LINES_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "error";
-const FLASH_HOME_BIAS_LETTERS = [..."fjdkslagheruiwovncmptyqbzx"];
-const FLASH_ALL_LETTERS = [..."qwertyuiopasdfghjklzxcvbnm"];
-const KEYBOARD_ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 
 interface RowView {
   visualRowIndex: number;
@@ -351,7 +239,7 @@ function normalizeLanguageServices(input: EditorLanguageServiceInput | null | un
     return [];
   }
 
-  return Array.isArray(input) ? [...input] : [input];
+  return Array.isArray(input) ? [...(input as readonly EditorLanguageServices[])] : [input as EditorLanguageServices];
 }
 
 function normalizeCommandThemes(themes: readonly ThemeSpec[] | undefined, activeTheme: ThemeSpec): ThemeSpec[] {
@@ -1006,305 +894,6 @@ function measureMetrics(styleHost: HTMLElement): { charWidth: number; lineHeight
   };
 }
 
-function commandForNormalMode(key: string): Command | null {
-  switch (key) {
-    case "%":
-      return selectAll;
-    case "B":
-      return movePrevLongWordStart;
-    case "E":
-      return moveNextLongWordEnd;
-    case "End":
-      return gotoLineEnd;
-    case "Home":
-      return gotoLineStart;
-    case "PageDown":
-      return pageDown;
-    case "PageUp":
-      return pageUp;
-    case "W":
-      return moveNextLongWordStart;
-    case "a":
-      return appendInsertMode;
-    case "ArrowLeft":
-    case "h":
-      return moveLeft;
-    case "ArrowRight":
-    case "l":
-      return moveRight;
-    case "ArrowUp":
-    case "k":
-      return moveUp;
-    case "ArrowDown":
-    case "j":
-      return moveDown;
-    case "b":
-      return moveWordBackward;
-    case "c":
-      return changeSelection;
-    case "d":
-      return deleteSelection;
-    case "e":
-      return moveWordForward;
-    case "i":
-      return enterInsertMode;
-    case "o":
-      return openBelow;
-    case "O":
-      return openAbove;
-    case "p":
-      return pasteAfter;
-    case "u":
-      return undo;
-    case "U":
-      return redo;
-    case "v":
-      return toggleVisualMode;
-    case "w":
-      return moveNextWordStart;
-    case "x":
-      return selectLineBelow;
-    case "y":
-      return yankSelection;
-    default:
-      return null;
-  }
-}
-
-function commandForVisualMode(key: string): Command | null {
-  switch (key) {
-    case "%":
-      return selectAll;
-    case "B":
-      return movePrevLongWordStart;
-    case "E":
-      return moveNextLongWordEnd;
-    case "Escape":
-      return enterNormalMode;
-    case "End":
-      return gotoLineEnd;
-    case "Home":
-      return gotoLineStart;
-    case "PageDown":
-      return pageDown;
-    case "PageUp":
-      return pageUp;
-    case "W":
-      return moveNextLongWordStart;
-    case "ArrowLeft":
-    case "h":
-      return moveLeft;
-    case "ArrowRight":
-    case "l":
-      return moveRight;
-    case "ArrowUp":
-    case "k":
-      return moveUp;
-    case "ArrowDown":
-    case "j":
-      return moveDown;
-    case "b":
-      return moveWordBackward;
-    case "c":
-      return changeSelection;
-    case "d":
-      return deleteSelection;
-    case "e":
-      return moveWordForward;
-    case "o":
-      return openBelow;
-    case "O":
-      return openAbove;
-    case "p":
-      return pasteAfter;
-    case "u":
-      return undo;
-    case "U":
-      return redo;
-    case "v":
-      return toggleVisualMode;
-    case "w":
-      return moveNextWordStart;
-    case "x":
-      return selectLineBelow;
-    case "y":
-      return yankSelection;
-    default:
-      return null;
-  }
-}
-
-function commandForInsertMode(key: string): Command | null {
-  switch (key) {
-    case "Escape":
-      return enterNormalMode;
-    case "Tab":
-      return insertText(INSERT_TAB_TEXT);
-    case "ArrowLeft":
-      return moveLeft;
-    case "ArrowRight":
-      return moveRight;
-    case "ArrowUp":
-      return moveUp;
-    case "ArrowDown":
-      return moveDown;
-    case "Backspace":
-      return deleteBackwardIndentAware(INSERT_TAB_TEXT);
-    case "Delete":
-      return deleteForward;
-    case "Enter":
-      return insertNewline;
-    default:
-      if (key.length === 1) {
-        return insertText(key);
-      }
-
-      return null;
-  }
-}
-
-function movementCommandForDelta(deltaY: number): Command | null {
-  if (deltaY > 0) {
-    return moveDown;
-  }
-
-  if (deltaY < 0) {
-    return moveUp;
-  }
-
-  return null;
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function keyboardPosition(letter: string): { row: number; column: number } | null {
-  const normalized = letter.toLowerCase();
-
-  for (let row = 0; row < KEYBOARD_ROWS.length; row += 1) {
-    const column = KEYBOARD_ROWS[row]?.indexOf(normalized) ?? -1;
-    if (column >= 0) {
-      return { row, column };
-    }
-  }
-
-  return null;
-}
-
-function keyboardDistance(from: string, to: string): number {
-  const left = keyboardPosition(from);
-  const right = keyboardPosition(to);
-
-  if (!left || !right) {
-    return FLASH_ALL_LETTERS.length;
-  }
-
-  return Math.abs(left.row - right.row) * 3 + Math.abs(left.column - right.column);
-}
-
-function flashAlphabet(target: string): string[] {
-  const normalizedTarget = target.toLowerCase();
-  const unique = new Set<string>([normalizedTarget, ...FLASH_ALL_LETTERS]);
-  return [...unique].sort((left, right) => {
-    if (left === normalizedTarget) {
-      return -1;
-    }
-
-    if (right === normalizedTarget) {
-      return 1;
-    }
-
-    const distanceDelta = keyboardDistance(normalizedTarget, left) - keyboardDistance(normalizedTarget, right);
-    if (distanceDelta !== 0) {
-      return distanceDelta;
-    }
-
-    return FLASH_HOME_BIAS_LETTERS.indexOf(left) - FLASH_HOME_BIAS_LETTERS.indexOf(right);
-  });
-}
-
-function buildFlashLabels(target: string, count: number): string[] {
-  const alphabet = flashAlphabet(target);
-  const labels: string[] = [];
-
-  for (let index = 0; index < count; index += 1) {
-    labels.push(alphabet[index % alphabet.length] ?? alphabet[0] ?? target.toLowerCase());
-  }
-
-  return labels;
-}
-
-function searchFlagsAtOffset(
-  matches: readonly { from: number; to: number }[],
-  current: { from: number; to: number } | null,
-  offset: number
-): { isSearchMatch: boolean; isCurrentSearchMatch: boolean } {
-  const isSearchMatch = matches.some((entry) => offset >= entry.from && offset < entry.to);
-  const isCurrentSearchMatch = !!current && offset >= current.from && offset < current.to;
-  return { isSearchMatch, isCurrentSearchMatch };
-}
-
-function roleAtOffset(spans: HighlightSpan[], offset: number): HighlightRole {
-  const span = spans.find((entry) => offset >= entry.from && offset < entry.to);
-  return span?.role ?? "text";
-}
-
-function selectionFromSyntaxRange(from: number, to: number) {
-  return createSelection(from, Math.max(from, to - 1));
-}
-
-function commandForGotoPrefix(key: string): Command | null {
-  switch (key) {
-    case "g":
-      return gotoFileStart;
-    case "b":
-      return gotoWindowBottom;
-    case "c":
-      return gotoWindowCenter;
-    case "e":
-      return gotoLastLine;
-    case "h":
-      return gotoLineStart;
-    case "j":
-      return moveDown;
-    case "k":
-      return moveUp;
-    case "l":
-      return gotoLineEnd;
-    case "s":
-      return gotoFirstNonWhitespace;
-    case "t":
-      return gotoWindowTop;
-    default:
-      return null;
-  }
-}
-
-function commandForBracketPrefix(direction: "[" | "]", key: string): Command | null {
-  if (key !== "p") {
-    return null;
-  }
-
-  return direction === "[" ? gotoPrevParagraph : gotoNextParagraph;
-}
-
-function diagnosticSeverityAtOffset(entries: readonly EditorDiagnostic[], offset: number): DiagnosticSeverity | null {
-  let best: DiagnosticSeverity | null = null;
-
-  for (const entry of entries) {
-    if (offset < entry.from || offset >= entry.to) {
-      continue;
-    }
-
-    if (!best || DIAGNOSTIC_SEVERITY_ORDER[entry.severity] < DIAGNOSTIC_SEVERITY_ORDER[best]) {
-      best = entry.severity;
-    }
-  }
-
-  return best;
-}
-
 function resolveOffsetWithinRun(
   target: HTMLElement,
   startOffset: number,
@@ -1327,194 +916,6 @@ function resolveOffsetWithinRun(
   const ratio = width > 0 ? relativeX / width : 0;
   const index = Math.min(runLength - 1, Math.max(0, Math.floor(ratio * runLength)));
   return startOffset + index;
-}
-
-function getIndentGuideOffsets(
-  lineText: string,
-  lineStart: number,
-  options: { render: boolean; character: string; skipLevels: number; indentWidth: number }
-): Set<number> {
-  const offsets = new Set<number>();
-
-  if (!options.render || !lineText || options.indentWidth <= 0) {
-    return offsets;
-  }
-
-  let visualColumn = 0;
-  let indentLevel = 0;
-
-  for (let index = 0; index < lineText.length; index += 1) {
-    const character = lineText[index];
-
-    if (character !== " " && character !== "\t") {
-      break;
-    }
-
-    if (visualColumn % options.indentWidth === 0) {
-      if (indentLevel >= options.skipLevels) {
-        offsets.add(lineStart + index);
-      }
-      indentLevel += 1;
-    }
-
-    visualColumn += character === "\t" ? options.indentWidth : 1;
-  }
-
-  return offsets;
-}
-
-function renderLineFragments(
-  line: { start: number; text: string },
-  state: EditorState,
-  spans: HighlightSpan[],
-  lineDiagnostics: readonly EditorDiagnostic[],
-  lineSearchMatches: readonly { from: number; to: number }[],
-  currentSearchMatch: { from: number; to: number } | null,
-  flashOffsets: ReadonlySet<number>,
-  segmentStart: number,
-  segmentEnd: number,
-  includeLineEndingCell: boolean,
-  indentGuideOptions: { render: boolean; character: string; skipLevels: number; indentWidth: number }
-): LineFragment[] {
-  const fragments: LineFragment[] = [];
-  const activeOffset = getActiveCharacterOffset(state);
-  const selection = getSelectionOffsets(state);
-  const lineEnd = line.start + line.text.length;
-  const segmentStartIndex = Math.max(0, segmentStart - line.start);
-  const segmentEndIndex = Math.max(segmentStartIndex, segmentEnd - line.start);
-  const indentGuideOffsets = getIndentGuideOffsets(line.text, line.start, indentGuideOptions);
-  const pushFragment = (fragment: LineFragment): void => {
-    const previous = fragments[fragments.length - 1];
-
-    if (
-      previous &&
-      previous.offset !== null &&
-      previous.endOffset !== null &&
-      fragment.offset !== null &&
-      fragment.endOffset !== null &&
-      !previous.isCursor &&
-      !fragment.isCursor &&
-      previous.role === fragment.role &&
-      previous.isIndentGuide === fragment.isIndentGuide &&
-      previous.isSelected === fragment.isSelected &&
-      previous.isSearchMatch === fragment.isSearchMatch &&
-      previous.isCurrentSearchMatch === fragment.isCurrentSearchMatch &&
-      previous.isFlashTarget === fragment.isFlashTarget &&
-      previous.diagnosticSeverity === fragment.diagnosticSeverity &&
-      previous.endOffset === fragment.offset
-    ) {
-      previous.text += fragment.text;
-      previous.endOffset = fragment.endOffset;
-      return;
-    }
-
-    fragments.push(fragment);
-  };
-
-  if (state.mode === "insert") {
-    if (line.text.length === 0) {
-      return [
-        {
-          offset: line.start,
-          endOffset: line.start + 1,
-          text: EMPTY_CELL_TEXT,
-          role: "text",
-          isIndentGuide: false,
-          isSelected: false,
-          isCursor: false,
-          cursorKind: null,
-          diagnosticSeverity: null,
-          isSearchMatch: false,
-          isCurrentSearchMatch: false,
-          isFlashTarget: false
-        }
-      ];
-    }
-
-    for (let index = segmentStartIndex; index < segmentEndIndex; index += 1) {
-      const offset = line.start + index;
-
-      const searchFlags = searchFlagsAtOffset(lineSearchMatches, currentSearchMatch, offset);
-      pushFragment({
-        offset,
-        endOffset: offset + 1,
-        text: indentGuideOffsets.has(offset) ? indentGuideOptions.character : line.text[index] ?? EMPTY_CELL_TEXT,
-        role: roleAtOffset(spans, offset),
-        isIndentGuide: indentGuideOffsets.has(offset),
-        isSelected: false,
-        isCursor: false,
-        cursorKind: null,
-        diagnosticSeverity: diagnosticSeverityAtOffset(lineDiagnostics, offset),
-        isSearchMatch: searchFlags.isSearchMatch,
-        isCurrentSearchMatch: searchFlags.isCurrentSearchMatch,
-        isFlashTarget: flashOffsets.has(offset)
-      });
-    }
-
-    return fragments;
-  }
-
-  if (line.text.length === 0) {
-    const selected = selection.from <= line.start && line.start < selection.to;
-    return [
-      {
-        offset: line.start,
-        endOffset: line.start + 1,
-        text: EMPTY_CELL_TEXT,
-        role: "text",
-        isIndentGuide: false,
-        isSelected: selected,
-        isCursor: activeOffset === line.start,
-        cursorKind: activeOffset === line.start ? "block" : null,
-        diagnosticSeverity: null,
-        isSearchMatch: false,
-        isCurrentSearchMatch: false,
-        isFlashTarget: false
-      }
-    ];
-  }
-
-  for (let index = segmentStartIndex; index < segmentEndIndex; index += 1) {
-    const offset = line.start + index;
-    const searchFlags = searchFlagsAtOffset(lineSearchMatches, currentSearchMatch, offset);
-    pushFragment({
-      offset,
-      endOffset: offset + 1,
-      text: indentGuideOffsets.has(offset) ? indentGuideOptions.character : line.text[index] ?? " ",
-      role: roleAtOffset(spans, offset),
-      isIndentGuide: indentGuideOffsets.has(offset),
-      isSelected: offset >= selection.from && offset < selection.to,
-      isCursor: offset === activeOffset,
-      cursorKind: offset === activeOffset ? "block" : null,
-      diagnosticSeverity: diagnosticSeverityAtOffset(lineDiagnostics, offset),
-      isSearchMatch: searchFlags.isSearchMatch,
-      isCurrentSearchMatch: searchFlags.isCurrentSearchMatch,
-      isFlashTarget: flashOffsets.has(offset)
-    });
-  }
-
-  const hasLineEnding = lineEnd < state.doc.length && state.doc.text[lineEnd] === "\n";
-  const lineEndingSelected = hasLineEnding && lineEnd >= selection.from && lineEnd < selection.to;
-  const lineEndingCursor = hasLineEnding && activeOffset === lineEnd;
-
-  if (includeLineEndingCell && (lineEndingSelected || lineEndingCursor)) {
-    pushFragment({
-      offset: lineEnd,
-      endOffset: lineEnd + 1,
-      text: EMPTY_CELL_TEXT,
-      role: "text",
-      isIndentGuide: false,
-      isSelected: lineEndingSelected,
-      isCursor: lineEndingCursor,
-      cursorKind: lineEndingCursor ? "block" : null,
-      diagnosticSeverity: null,
-      isSearchMatch: false,
-      isCurrentSearchMatch: false,
-      isFlashTarget: false
-    });
-  }
-
-  return fragments;
 }
 
 function selectDiagnostic(
@@ -1612,29 +1013,20 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let diagnostics = languageState.diagnostics;
   let diagnosticsByLine = languageState.diagnosticsByLine;
   let lineChangesByLine: LineChangesByLine = languageState.lineChangesByLine as LineChangesByLine;
-  let pickerActions: readonly PickerItem[] = [];
   let flashState: FlashState = uiState.flash as FlashState;
-  let pendingAction: PendingAction = uiState.pendingAction;
+  let pendingAction = uiState.pendingAction;
   let pendingCount = uiState.pendingCount;
-  let lastRepeatableMotion: RepeatableMotion | null = uiState.lastRepeatableMotion;
-  let languageRevision = languageState.languageRevision;
   let hoverRenderRequestId = 0;
   let gutterWidth = 0;
   let anchoredTopVisualRow = viewportState.topVisualRow;
   let visibleLineCapacity = viewportState.visibleRowCapacity;
-  let commandCompletionIndex = uiState.commandCompletionIndex;
-  let previewTheme: ThemeSpec | null = null;
   let destroyed = false;
   let mountedContainer: HTMLElement | null = container;
   let unsubscribeController = () => {};
   let currentLayoutModel: EditorLayoutModel | null = null;
-  let searchPreviewState: SearchPreviewState | null = null;
   let pendingMountFrame = 0;
   let resizeObserver: ResizeObserver | null = null;
   let availableCommandThemes = normalizeCommandThemes(options.commandThemes, options.theme ?? defaultTheme);
-  previewTheme = uiState.previewTheme
-    ? availableCommandThemes.find((entry) => entry.name === uiState.previewTheme) ?? null
-    : null;
 
   function syncViewportMirrors(): void {
     anchoredTopVisualRow = viewportState.topVisualRow;
@@ -1649,7 +1041,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     diagnostics = languageState.diagnostics;
     diagnosticsByLine = languageState.diagnosticsByLine;
     lineChangesByLine = languageState.lineChangesByLine as LineChangesByLine;
-    languageRevision = languageState.languageRevision;
   }
 
   function syncUiMirrors(): void {
@@ -1660,7 +1051,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     flashState = uiState.flash as FlashState;
     pendingAction = uiState.pendingAction;
     pendingCount = uiState.pendingCount;
-    lastRepeatableMotion = uiState.lastRepeatableMotion;
     pickerState = {
       active: uiState.picker.active,
       loading: uiState.picker.loading,
@@ -1673,10 +1063,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       selectedIndex: uiState.picker.selectedIndex,
       error: uiState.picker.error
     };
-    commandCompletionIndex = uiState.commandCompletionIndex;
-    previewTheme = uiState.previewTheme
-      ? availableCommandThemes.find((entry) => entry.name === uiState.previewTheme) ?? null
-      : null;
   }
 
   function syncPresentationMirrors(): void {
@@ -1696,21 +1082,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     controller.updatePresentationState((presentation) => {
       updater(presentation.ui);
     }, effectType, { defer: true });
-  }
-
-  function setCommandLineState(next: CommandLineState): void {
-    if (
-      commandLine.active === next.active &&
-      commandLine.value === next.value &&
-      commandLine.prompt === next.prompt
-    ) {
-      return;
-    }
-    commandLine = next;
-    currentLayoutModel = null;
-    updateControllerUiPresentation((ui) => {
-      ui.commandLine = next;
-    }, "ui.command-line");
   }
 
   function setBottomMessageState(next: BottomMessageState | null): void {
@@ -1739,101 +1110,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     uiState.flash = next;
     currentLayoutModel = null;
   }
-
-  function setPendingActionState(next: PendingAction): void {
-    pendingAction = next;
-    currentLayoutModel = null;
-    updateControllerUiPresentation((ui) => {
-      ui.pendingAction = next;
-    }, "ui.pending-action");
-  }
-
-  function setPendingCountState(next: string): void {
-    pendingCount = next;
-    currentLayoutModel = null;
-    updateControllerUiPresentation((ui) => {
-      ui.pendingCount = next;
-    }, "ui.pending-count");
-  }
-
-  function setStickyViewModeState(next: boolean): void {
-    stickyViewMode = next;
-    currentLayoutModel = null;
-    updateControllerUiPresentation((ui) => {
-      ui.stickyViewMode = next;
-    }, "ui.sticky-view-mode");
-  }
-
-  function setCommandCompletionIndexState(next: number): void {
-    if (commandCompletionIndex === next) {
-      return;
-    }
-    commandCompletionIndex = next;
-    currentLayoutModel = null;
-    updateControllerUiPresentation((ui) => {
-      ui.commandCompletionIndex = next;
-    }, "ui.command-completion-index");
-  }
-
-  function setLastRepeatableMotionState(next: RepeatableMotion | null): void {
-    lastRepeatableMotion = next;
-    currentLayoutModel = null;
-    updateControllerUiPresentation((ui) => {
-      ui.lastRepeatableMotion = next;
-    }, "ui.repeatable-motion");
-  }
-
-  function setPreviewThemeState(next: ThemeSpec | null): void {
-    if (previewTheme?.name === next?.name || (!previewTheme && !next)) {
-      return;
-    }
-    previewTheme = next;
-    currentLayoutModel = null;
-    updateControllerUiPresentation((ui) => {
-      ui.previewTheme = next?.name ?? null;
-    }, "ui.preview-theme");
-  }
-
-  function setPickerPresentation(next: PickerState): void {
-    if (
-      pickerState.active === next.active &&
-      pickerState.loading === next.loading &&
-      pickerState.title === next.title &&
-      pickerState.selectedIndex === next.selectedIndex &&
-      pickerState.error === next.error &&
-      pickerState.items.length === next.items.length &&
-      pickerState.items.every(
-        (item, index) =>
-          item.label === next.items[index]?.label &&
-          item.detail === next.items[index]?.detail
-      )
-    ) {
-      return;
-    }
-    pickerState = next;
-    currentLayoutModel = null;
-    updateControllerUiPresentation((ui) => {
-      ui.picker = {
-        active: next.active,
-        loading: next.loading,
-        title: next.title,
-        items: next.items.map((item, index) => ({
-          label: item.label,
-          detail: item.detail,
-          selected: index === next.selectedIndex
-        })),
-        selectedIndex: next.selectedIndex,
-        error: next.error
-      };
-    }, "ui.picker");
-  }
-
-  const getHighlighter = () => languageServices.find((services) => services.highlighter)?.highlighter;
-  const getSyntaxSelector = () => languageServices.find((services) => services.syntaxSelector)?.syntaxSelector;
-  const getDiagnosticsSource = () => languageServices.find((services) => services.diagnostics)?.diagnostics;
-  const getCommentToggler = () => languageServices.find((services) => services.comments)?.comments;
-  const getSyntaxTextobjectProvider = () => languageServices.find((services) => services.syntaxTextobjects)?.syntaxTextobjects;
-  const getSyntaxNavigationProvider = () => languageServices.find((services) => services.syntaxNavigation)?.syntaxNavigation;
 
   function buildLayoutModelForViewport(_viewport: LineViewport): EditorLayoutModel {
     if (currentLayoutModel) {
@@ -1930,20 +1206,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   textarea.spellcheck = false;
   textarea.autocapitalize = "off";
   textarea.autocomplete = "off";
-  textarea.autocorrect = "off";
+  textarea.setAttribute("autocorrect", "off");
 
   status.append(statusMode, statusFile, statusMeta);
   rows.append(viewportRows);
   surface.append(rows, tooltip, textarea);
   root.append(surface, commandPopover, status, bottomRow);
   mountedContainer.replaceChildren(root);
-
-  function getSnapshot() {
-    return {
-      revision: state.revision,
-      doc: state.doc
-    };
-  }
 
   function getSelectionLines(targetState: EditorState): Set<number> {
     const lines = new Set<number>();
@@ -2045,27 +1314,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       isContinuation: false,
       isLastSegment: true
     };
-  }
-
-  function getVisibleLineCountForViewport(viewport: LineViewport): number {
-    return Math.max(1, viewport.toLine - viewport.fromLine + 1);
-  }
-
-  function getLineViewportForVisualViewport(viewport: LineViewport): LineViewport {
-    if (visualRows.length === 0) {
-      return { fromLine: 0, toLine: Math.max(0, state.doc.lineCount - 1) };
-    }
-
-    const fromRow = getVisualRow(viewport.fromLine);
-    const toRow = getVisualRow(viewport.toLine);
-
-    return normalizeViewport(
-      {
-        fromLine: fromRow.docLine,
-        toLine: toRow.docLine
-      },
-      state.doc.lineCount
-    );
   }
 
   function getVisualRowForOffset(offset: number): { rowIndex: number; column: number; row: VisualRow } {
@@ -2186,140 +1434,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function getEndOfLineDiagnosticForLine(lineIndex: number): EditorDiagnostic | null {
     const entries = getLineDiagnostics(lineIndex);
     return selectDiagnostic(entries, END_OF_LINE_DIAGNOSTIC_MIN, getInlineDiagnosticForLine(lineIndex));
-  }
-
-  function isFlashJumpOffset(offset: number, target: string): boolean {
-    const character = state.doc.text[offset] ?? "";
-
-    if (!character || character !== target) {
-      return false;
-    }
-
-    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    return offset !== activeOffset;
-  }
-
-  function getActiveFlashHints(): readonly FlashHint[] {
-    if (!flashState.active) {
-      return [];
-    }
-    return flashState.hints;
-  }
-
-  function getFlashHintsForVisualRow(visualRow: VisualRow): readonly FlashHint[] {
-    const hints = getActiveFlashHints();
-    return hints.filter((hint) => hint.offset >= visualRow.segmentStart && hint.offset < visualRow.segmentEnd);
-  }
-
-  function getFlashOffsetsForVisualRow(visualRow: VisualRow): ReadonlySet<number> {
-    return new Set(getFlashHintsForVisualRow(visualRow).map((hint) => hint.offset));
-  }
-
-  function collectVisibleFlashHints(target: string): readonly FlashHint[] {
-    const viewport = getVisibleViewport();
-    const offsets: number[] = [];
-
-    for (let visualRowIndex = viewport.fromLine; visualRowIndex <= viewport.toLine; visualRowIndex += 1) {
-      const visualRow = getVisualRow(visualRowIndex);
-
-      for (let offset = visualRow.segmentStart; offset < visualRow.segmentEnd; offset += 1) {
-        if (isFlashJumpOffset(offset, target)) {
-          offsets.push(offset);
-        }
-      }
-    }
-
-    const labels = buildFlashLabels(target, offsets.length);
-    return offsets.map((offset, index) => ({
-      offset,
-      label: labels[index] ?? ""
-    }));
-  }
-
-  function setFlashState(next: FlashState): void {
-    setFlashPresentation(next);
-    patchBottomRow();
-    renderVisibleRows(true);
-  }
-
-  function clearFlash(): void {
-    if (!flashState.active) {
-      return;
-    }
-
-    setFlashState({
-      active: false,
-      target: "",
-      input: "",
-      hints: []
-    });
-  }
-
-  function startFlashJump(target: string): void {
-    const hints = collectVisibleFlashHints(target);
-
-    if (hints.length === 0) {
-      setBottomMessage({ tone: "warning", text: `No visible '${target}' targets` });
-      return;
-    }
-
-    setBottomMessage(null);
-    setFlashState({
-      active: true,
-      target,
-      input: "",
-      hints
-    });
-  }
-
-  function applyFlashJump(targetOffset: number): void {
-    clearFlash();
-    const targetPosition = state.doc.positionAt(targetOffset);
-    dispatchOffsetSelection(targetOffset, targetPosition.column);
-  }
-
-  function handleFlashInput(key: string): boolean {
-    if (!flashState.active) {
-      return false;
-    }
-
-    if (key === "Escape") {
-      clearFlash();
-      return true;
-    }
-
-    if (key === "Backspace") {
-      clearFlash();
-      return true;
-    }
-
-    if (!/^[a-z]$/i.test(key)) {
-      clearFlash();
-      return false;
-    }
-
-    const nextInput = `${flashState.input}${key.toLowerCase()}`;
-    const matchingHints = flashState.hints.filter((hint) => hint.label === key.toLowerCase());
-
-    if (matchingHints.length === 0) {
-      return true;
-    }
-
-    if (matchingHints.length === 1) {
-      applyFlashJump(matchingHints[0].offset);
-      return true;
-    }
-
-    const narrowedLabels = buildFlashLabels(key.toLowerCase(), matchingHints.length);
-    setFlashState({
-      ...flashState,
-      input: nextInput,
-      hints: matchingHints.map((hint, index) => ({
-        offset: hint.offset,
-        label: narrowedLabels[index] ?? narrowedLabels[0] ?? flashState.target
-      }))
-    });
-    return true;
   }
 
   function getDiagnosticsSummary(): { errors: number; warnings: number } {
@@ -2503,7 +1617,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return false;
     }
 
-    const previousVisual = getVisualRowForOffset(
+    const previousVisual = getLayoutVisualRowForOffset(
       previousState,
       visualRows,
       lineVisualRanges,
@@ -2511,7 +1625,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       softWrap,
       softWrap ? Math.max(1, wrapColumns) : Number.MAX_SAFE_INTEGER
     );
-    const nextVisual = getVisualRowForOffset(
+    const nextVisual = getLayoutVisualRowForOffset(
       nextState,
       visualRows,
       lineVisualRanges,
@@ -2610,7 +1724,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       addClassName(token, "wx-search-current", !!segment.currentSearchMatch);
       addClassName(token, "wx-flash-target", !!segment.flashTarget);
       addClassName(token, "wx-indent-guide", !!segment.isIndentGuide);
-      addClassName(token, diagnosticClassName(severity), !!severity);
+      if (severity) {
+        token.classList.add(diagnosticClassName(severity));
+      }
 
       if (segment.cursorBlock) {
         token.classList.add("wx-cursor-block");
@@ -2722,12 +1838,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return Math.max(0, Math.min(VERTICAL_SCROLLOFF_ROWS, Math.floor((capacity - 1) / 2)));
   }
 
-  function setAnchoredTopVisualRow(rowIndex: number): void {
-    const maxFromLine = Math.max(0, visualRows.length - getVisibleLineCapacity());
-    anchoredTopVisualRow = Math.max(0, Math.min(maxFromLine, rowIndex));
-    viewportState.topVisualRow = anchoredTopVisualRow;
-  }
-
   function renderVisibleRows(force = false): void {
     const visibleViewport = getVisibleViewport();
 
@@ -2820,7 +1930,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const activeRow = getVisualRowForOffset(
+    const activeRow = getLayoutVisualRowForOffset(
       state,
       visualRows,
       lineVisualRanges,
@@ -2877,14 +1987,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     ]
       .filter(Boolean)
       .join("   ");
-  }
-
-  function getViewportContext() {
-    const viewport = getLineViewportForVisualViewport(getVisibleViewport());
-    return {
-      ...viewport,
-      visibleLineCount: getVisibleLineCountForViewport(getVisibleViewport())
-    };
   }
 
   function patchBottomRow(): void {
@@ -2972,6 +2074,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function handleControllerUpdate(update: EditorUpdate): void {
     const previousState = update.prevState;
     const nextState = update.nextState;
+    const previousVisibleViewport = getVisibleViewport();
     const changes = update.transaction.changes ?? [];
     const hasDocumentChanges = update.docChanged || changes.length > 0;
     const isPresentationOnlyUpdate = !hasDocumentChanges && !update.selectionChanged && !update.modeChanged;
@@ -2987,6 +2090,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     state = nextState;
     syncPresentationMirrors();
     syncRenderedThemeFromPresentation();
+    const viewportChanged = !viewportEquals(previousVisibleViewport, getVisibleViewport());
 
     if (isPresentationOnlyUpdate) {
       renderVisibleRows(true);
@@ -3023,6 +2127,16 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       }
     }
 
+    if (viewportChanged) {
+      renderVisibleRows(true);
+      patchStatus();
+      if (update.modeChanged) {
+        patchBottomRow();
+      }
+      patchTooltip();
+      return;
+    }
+
     if (dirtyLines && tryPatchSimpleCursorMove(previousState, nextState)) {
       patchStatus();
       patchTooltip();
@@ -3044,27 +2158,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       patchBottomRow();
     }
     patchTooltip();
-  }
-
-  function openCommandLine(prompt: ":" | "/" | "?" = ":"): void {
-    setPendingActionState(null);
-    clearFlash();
-    clearHover();
-    setCommandCompletionIndexState(0);
-    if (prompt === "/" || prompt === "?") {
-      searchPreviewState = {
-        active: true,
-        direction: prompt === "/" ? "forward" : "backward",
-        selection: state.selection,
-        mode: state.mode,
-        search: { ...controller.getSearchState() },
-        startOffset: state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state)
-      };
-    } else {
-      searchPreviewState = null;
-    }
-    setCommandLineState({ active: true, value: "", prompt });
-    patchBottomRow();
   }
 
   function applyRenderedTheme(nextTheme: ThemeSpec): void {
@@ -3097,57 +2190,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     applyThemeVariables(root, theme);
   }
 
-  function previewThemeByName(name: string | null): void {
-    if (!name) {
-      if (!previewTheme) {
-        return;
-      }
-
-      setPreviewThemeState(null);
-      applyRenderedTheme(theme);
-      return;
-    }
-
-    const nextTheme = availableCommandThemes.find((entry) => entry.name.toLowerCase() === name.trim().toLowerCase());
-
-    if (!nextTheme) {
-      return;
-    }
-
-    if (previewTheme?.name === nextTheme.name || (!previewTheme && theme.name === nextTheme.name)) {
-      return;
-    }
-
-    setPreviewThemeState(nextTheme);
-    applyRenderedTheme(nextTheme);
-  }
-
-  function closeCommandLine(restorePreview = true): void {
-    if (restorePreview) {
-      previewThemeByName(null);
-      restoreSearchPreview();
-    }
-    setCommandCompletionIndexState(0);
-    setCommandLineState({ active: false, value: "", prompt: ":" });
-    patchBottomRow();
-  }
-
-  function closePicker(): void {
-    if (!pickerState.active && !pickerState.loading && pickerState.items.length === 0 && !pickerState.error) {
-      return;
-    }
-    setPickerPresentation({
-      active: false,
-      loading: false,
-      title: "",
-      items: [],
-      selectedIndex: 0,
-      error: null
-    });
-    pickerActions = [];
-    patchBottomRow();
-  }
-
   function setBottomMessage(message: BottomMessageState | null): void {
     if (
       bottomMessage?.tone === message?.tone &&
@@ -3160,257 +2202,17 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     patchBottomRow();
   }
 
-  function updateCommandLineValue(value: string, preserveCompletionIndex = false): void {
-    if (!preserveCompletionIndex) {
-      setCommandCompletionIndexState(0);
-    }
-    setCommandLineState({
-      ...commandLine,
-      value
-    });
-    if (commandLine.prompt === "/" || commandLine.prompt === "?") {
-      previewSearch(value, commandLine.prompt === "/" ? "forward" : "backward");
-    }
-    patchBottomRow();
-  }
-
-  function restoreSearchPreview(): void {
-    if (!searchPreviewState?.active) {
-      searchPreviewState = null;
-      return;
-    }
-
-    controller.setSearchState(searchPreviewState.search);
-    controller.dispatch({
-      selection: searchPreviewState.selection,
-      mode: searchPreviewState.mode
-    });
-    revealCursor();
-    renderVisibleRows(true);
-    searchPreviewState = null;
-  }
-
-  function findSearchMatch(
-    matches: readonly { from: number; to: number }[],
-    offset: number,
-    direction: "forward" | "backward",
-    reverse = false
-  ): { from: number; to: number } | null {
-    const forward = reverse ? direction === "backward" : direction === "forward";
-
-    return forward
-      ? matches.find((entry) => entry.from > offset || (entry.from <= offset && offset < entry.to)) ?? matches[0] ?? null
-      : [...matches].reverse().find((entry) => entry.to - 1 < offset || (entry.from <= offset && offset < entry.to)) ??
-          matches[matches.length - 1] ??
-          null;
-  }
-
-  function previewSearch(rawQuery: string, direction: "forward" | "backward"): void {
-    if (!searchPreviewState?.active) {
-      return;
-    }
-
-    const query = rawQuery.trim();
-
-    if (!query) {
-      controller.setSearchState(searchPreviewState.search);
-      controller.dispatch({
-        selection: searchPreviewState.selection,
-        mode: searchPreviewState.mode
-      });
-      revealCursor();
-      renderVisibleRows(true);
-      return;
-    }
-
-    controller.setSearchState({
-      query,
-      direction,
-      lastMatch: null
-    });
-    const matches = controller.getPresentationState().search.matches;
-
-    if (matches.length === 0) {
-      controller.setSearchState(searchPreviewState.search);
-      controller.dispatch({
-        selection: searchPreviewState.selection,
-        mode: searchPreviewState.mode
-      });
-      revealCursor();
-      renderVisibleRows(true);
-      return;
-    }
-
-    const match = findSearchMatch(matches, searchPreviewState.startOffset, direction);
-
-    if (!match) {
-      controller.setSearchState(searchPreviewState.search);
-      controller.dispatch({
-        selection: searchPreviewState.selection,
-        mode: searchPreviewState.mode
-      });
-      revealCursor();
-      renderVisibleRows(true);
-      return;
-    }
-
-    controller.setSearchState({
-      query,
-      direction,
-      lastMatch: match
-    });
-    applySelectionRange(match.from, match.to);
-    revealCursor();
-    renderVisibleRows(true);
-  }
-
-  function setThemeByName(name: string): boolean {
-    const normalized = name.trim().toLowerCase();
-    const nextTheme = availableCommandThemes.find((entry) => entry.name.toLowerCase() === normalized);
-
-    if (!nextTheme) {
-      setBottomMessage({ tone: "warning", text: `Unknown theme: ${name}` });
-      return false;
-    }
-
-    theme = nextTheme;
-    controller.setThemeName(nextTheme.name);
-    setPreviewThemeState(null);
-    availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
-    applyRenderedTheme(theme);
-    patchBottomRow();
-    setBottomMessage({ tone: "info", text: `Theme ${nextTheme.name}` });
-    return true;
-  }
-
-  function getCommandCompletionItems(): readonly CommandCompletionItem[] {
-    if (!commandLine.active || commandLine.prompt !== ":") {
-      return [];
-    }
-
-    const rawValue = commandLine.value;
-    const trimmedStart = rawValue.trimStart();
-
-    if (!trimmedStart) {
-      return [
-        {
-          label: "theme",
-          detail: "switch theme",
-          run: () => {
-            updateCommandLineValue("theme ");
-          }
-        },
-        {
-          label: "write",
-          detail: "save document",
-          run: () => {
-            closeCommandLine();
-            void saveDocument(filePath);
-          }
-        },
-        {
-          label: "format",
-          detail: "format document",
-          run: () => {
-            closeCommandLine();
-            void formatDocument();
-          }
-        },
-        {
-          label: "code-actions",
-          detail: "show code actions",
-          run: () => {
-            closeCommandLine();
-            void loadCodeActions();
-          }
-        }
-      ];
-    }
-
-    const parts = trimmedStart.split(/\s+/);
-    const commandName = (parts[0] ?? "").toLowerCase();
-    const hasArgumentSpace = /\s$/.test(rawValue);
-    const commandArgument = trimmedStart.slice(parts[0]?.length ?? 0).trim();
-
-    if (commandName === "theme") {
-      const query = commandArgument;
-      const filteredThemes = availableCommandThemes.filter((entry) => entry.name.toLowerCase().includes(query.toLowerCase()));
-
-      return filteredThemes.map((entry) => ({
-        label: entry.name,
-        detail: "theme",
-        run: () => {
-          closeCommandLine(false);
-          setThemeByName(entry.name);
-        }
-      }));
-    }
-
-    if (!hasArgumentSpace) {
-      const commands = [
-        { label: "theme", detail: "switch theme", run: () => updateCommandLineValue("theme ") },
-        { label: "write", detail: "save document", run: () => updateCommandLineValue("write ") },
-        { label: "format", detail: "format document", run: () => updateCommandLineValue("format") },
-        { label: "code-actions", detail: "show code actions", run: () => updateCommandLineValue("code-actions") }
-      ];
-
-      return commands.filter((entry) => entry.label.startsWith(commandName));
-    }
-
-    return [];
-  }
-
-  function hasRunnableCommandLineValue(rawValue: string): boolean {
-    const trimmed = rawValue.trim();
-
-    if (!trimmed) {
-      return false;
-    }
-
-    const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
-    const value = commandName.toLowerCase();
-    const commandArgument = argumentParts.join(" ").trim();
-
-    if (["format", "fmt", "w", "write", "code-actions", "codeaction", "ca"].includes(value)) {
-      return true;
-    }
-
-    if (value !== "theme") {
-      return false;
-    }
-
-    if (!commandArgument) {
-      return true;
-    }
-
-    const normalizedArgument = commandArgument.toLowerCase();
-    return availableCommandThemes.some(
-      (entry) =>
-        entry.name.toLowerCase() === normalizedArgument ||
-        entry.name.toLowerCase().startsWith(normalizedArgument)
-    );
-  }
-
   function patchCommandPopover(): void {
-    const items = getCommandCompletionItems();
-    const rawValue = commandLine.value.trimStart();
-    const activeCommandName = rawValue.split(/\s+/)[0]?.toLowerCase() ?? "";
+    const items = uiState.commandCompletionItems;
 
     if (items.length === 0 || !commandLine.active || commandLine.prompt !== ":") {
-      previewThemeByName(null);
       commandPopover.hidden = true;
       commandPopover.replaceChildren();
       return;
     }
 
     commandPopover.hidden = false;
-    setCommandCompletionIndexState(Math.max(0, Math.min(items.length - 1, commandCompletionIndex)));
-
-    if (activeCommandName === "theme") {
-      previewThemeByName(items[commandCompletionIndex]?.label ?? null);
-    } else {
-      previewThemeByName(null);
-    }
+    const selectedIndex = Math.max(0, Math.min(items.length - 1, uiState.commandCompletionIndex));
 
     const panel = document.createElement("div");
     panel.className = "wx-editor__command-popover-panel";
@@ -3421,7 +2223,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       const detail = document.createElement("span");
 
       row.className = "wx-editor__command-completion";
-      row.dataset.selected = String(index === commandCompletionIndex);
+      row.dataset.selected = String(index === selectedIndex);
       row.dataset.wxEditorCommandCompletion = item.label;
 
       label.className = "wx-editor__command-completion-label";
@@ -3584,202 +2386,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   async function applyCodeActionInternal(action: EditorCodeAction): Promise<boolean> {
-    const applied = await controller.applyCodeAction(action);
-
-    if (!applied) {
-      setBottomMessage({ tone: "warning", text: `No edits for ${action.title}` });
-      return false;
-    }
-    closePicker();
-    setBottomMessage({ tone: "info", text: `Applied ${action.title}` });
-    return true;
-  }
-
-  function setPickerState(next: PickerState): void {
-    setPickerPresentation(next);
-    patchBottomRow();
-  }
-
-  async function loadCodeActions(): Promise<readonly EditorCodeAction[]> {
-    setPickerState({
-      active: true,
-      loading: true,
-      title: "code actions",
-      items: [],
-      selectedIndex: 0,
-      error: null
-    });
-
-    let actions: readonly EditorCodeAction[];
-
-    try {
-      actions = await controller.requestCodeActions();
-    } catch {
-      closePicker();
-      setBottomMessage({ tone: "error", text: "Code actions request failed" });
-      return [];
-    }
-
-    setPickerState({
-      active: true,
-      loading: false,
-      title: "code actions",
-      items: actions.map((action) => ({
-        label: action.title,
-        run: () => {
-          void applyCodeActionInternal(action);
-        }
-      })),
-      selectedIndex: 0,
-      error: actions.length === 0 ? "No code actions" : null
-    });
-
-    if (actions.length === 0) {
-      closePicker();
-      setBottomMessage({ tone: "warning", text: "No code actions available" });
-    }
-
-    return actions;
-  }
-
-  async function formatDocument(): Promise<boolean> {
-    let didFormat = false;
-
-    try {
-      didFormat = await controller.formatDocument();
-    } catch {
-      setBottomMessage({ tone: "error", text: "Formatting failed" });
-      return false;
-    }
-
-    if (!didFormat) {
-      setBottomMessage({ tone: "info", text: "Already formatted" });
-      return false;
-    }
-    setBottomMessage({ tone: "info", text: "Formatted document" });
-    return true;
-  }
-
-  async function saveDocument(targetFilePath = filePath): Promise<boolean> {
-    if (!host?.writeFile) {
-      setBottomMessage({ tone: "warning", text: "No file writer available" });
-      return false;
-    }
-
-    try {
-      const didSave = await controller.saveDocument(targetFilePath);
-      if (!didSave) {
-        setBottomMessage({ tone: "error", text: `Write failed for ${targetFilePath}` });
-        return false;
-      }
-    } catch {
-      setBottomMessage({ tone: "error", text: `Write failed for ${targetFilePath}` });
-      return false;
-    }
-
-    filePath = targetFilePath;
-    patchStatus();
-    setBottomMessage({ tone: "info", text: `Wrote ${targetFilePath}` });
-    return true;
-  }
-
-  function applySelectionRange(from: number, to: number): boolean {
-    if (state.mode === "visual") {
-      const anchor = state.selection.ranges[state.selection.primaryIndex]?.anchor ?? from;
-      controller.dispatch({
-        selection: createSelection(anchor, Math.max(from, to - 1)),
-        mode: "visual"
-      });
-      return true;
-    }
-
-    controller.dispatch({
-      selection: createSelection(from, Math.max(from, to - 1)),
-      mode: "normal"
-    });
-    return true;
-  }
-
-  function runSearch(query: string, direction: "forward" | "backward", reverse = false, startOffset?: number): boolean {
-    const previousSearch = { ...controller.getSearchState() };
-    controller.setSearchState({
-      query,
-      direction,
-      lastMatch: null
-    });
-    const nextMatches = controller.getPresentationState().search.matches;
-
-    if (nextMatches.length === 0) {
-      controller.setSearchState(previousSearch);
-      setBottomMessage({ tone: "warning", text: `No matches for ${query}` });
-      renderVisibleRows(true);
-      return false;
-    }
-
-    const offset = startOffset ?? (state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state));
-    const match = findSearchMatch(nextMatches, offset, direction, reverse);
-
-    if (!match) {
-      controller.setSearchState(previousSearch);
-      return false;
-    }
-
-    controller.setSearchState({
-      query,
-      direction,
-      lastMatch: match
-    });
-    controller.setRegister("/", query);
-    applySelectionRange(match.from, match.to);
-    revealCursor();
-    renderVisibleRows(true);
-    setLastRepeatableMotionState({ kind: "search", reverse });
-    return true;
-  }
-
-  function repeatSearch(reverseAgainstDirection = false): boolean {
-    const search = controller.getSearchState();
-
-    if (!search.query) {
-      setBottomMessage({ tone: "warning", text: "No active search" });
-      return false;
-    }
-
-    const baseOffset =
-      search.lastMatch
-        ? reverseAgainstDirection
-          ? search.lastMatch.from - 1
-          : search.lastMatch.to
-        : undefined;
-    const didRun = runSearch(search.query, search.direction, reverseAgainstDirection, baseOffset);
-
-    if (didRun) {
-      setLastRepeatableMotionState({ kind: "search", reverse: reverseAgainstDirection });
-    }
-
-    return didRun;
-  }
-
-  function searchFromSelection(reverse = false): boolean {
-    const selection = getSelectionOffsets(state);
-    const query = escapeRegex(state.doc.slice(selection.from, selection.to));
-
-    if (!query) {
-      return false;
-    }
-
-    return runSearch(query, reverse ? "backward" : "forward");
-  }
-
-  function selectRegisterForNext(name: string | null): void {
-    controller.selectRegister(name);
-    setBottomMessage(name ? { tone: "info", text: `Register "${name}" selected` } : null);
-  }
-
-  function consumeSelectedRegister(): string | null {
-    const selected = controller.getSelectedRegister();
-    controller.selectRegister(null);
-    return selected;
+    return controller.applyCodeAction(action);
   }
 
   async function readSystemClipboard(): Promise<string | null> {
@@ -3796,531 +2403,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       setBottomMessage({ tone: "error", text: "Could not read the system clipboard" });
       return null;
     }
-  }
-
-  function primeRegisterForPaste(): void {
-    const selected = consumeSelectedRegister();
-
-    if (!selected) {
-      return;
-    }
-
-    const value = controller.getRegister(selected);
-    controller.dispatch({
-      yankBuffer: value
-    });
-  }
-
-  async function insertRegisterValue(name: string): Promise<boolean> {
-    const value = name === "+" ? await readSystemClipboard() : controller.getRegister(name);
-    controller.selectRegister(null);
-
-    if (!value) {
-      setBottomMessage({ tone: "warning", text: `Register ${name} is empty` });
-      return false;
-    }
-
-    return runCommand(insertText(value));
-  }
-
-  async function pasteSystemClipboard(count: number): Promise<boolean> {
-    const value = await readSystemClipboard();
-    controller.selectRegister(null);
-
-    if (!value) {
-      setBottomMessage({ tone: "warning", text: 'Register "+" is empty' });
-      return false;
-    }
-
-    controller.dispatch({
-      yankBuffer: value
-    });
-
-    let applied = false;
-
-    for (let index = 0; index < count; index += 1) {
-      const previousMode = state.mode;
-      const previousRevision = state.revision;
-      const didRun = runCommand(pasteAfter);
-
-      if (!didRun) {
-        break;
-      }
-
-      applied = true;
-
-      if (state.mode !== previousMode || state.revision === previousRevision) {
-        break;
-      }
-    }
-
-    return applied;
-  }
-
-  function pushCurrentJump(): boolean {
-    return controller.pushJump();
-  }
-
-  function restoreJump(entry: EditorJumpEntry | null): boolean {
-    if (!entry) {
-      return false;
-    }
-
-    controller.dispatch({
-      selection: entry.selection,
-      mode: entry.mode
-    });
-    revealCursor();
-    renderVisibleRows(true);
-    return true;
-  }
-
-  function jumpBackward(): boolean {
-    return restoreJump(controller.jumpBackward());
-  }
-
-  function jumpForward(): boolean {
-    return restoreJump(controller.jumpForward());
-  }
-
-  function openDiagnosticsPicker(): void {
-    const items = diagnostics.map((entry) => {
-      const position = state.doc.positionAt(entry.from);
-      const lineText = state.doc.lineAt(position.line).text.trim();
-      return {
-        label: `${position.line + 1}:${position.column + 1} ${entry.message}`,
-        detail: lineText,
-        run: () => {
-          pushCurrentJump();
-          applySelectionRange(entry.from, entry.to);
-          closePicker();
-        }
-      };
-    });
-
-    if (items.length === 0) {
-      setBottomMessage({ tone: "warning", text: "No diagnostics" });
-      return;
-    }
-
-    setPickerState({
-      active: true,
-      loading: false,
-      title: "diagnostics",
-      items,
-      selectedIndex: 0,
-      error: null
-    });
-  }
-
-  function openJumpListPicker(): void {
-    const items = controller.getJumpList().map((entry, index) => {
-      const offset = state.mode === "insert" ? getCursorOffset(entry.selection) : getCursorOffset(entry.selection);
-      const position = state.doc.positionAt(offset);
-      const lineText = state.doc.lineAt(position.line).text.trim();
-      return {
-        label: `${index + 1}:${position.line + 1}:${position.column + 1}`,
-        detail: lineText,
-        run: () => {
-          restoreJump(entry);
-          closePicker();
-        }
-      };
-    });
-
-    if (items.length === 0) {
-      setBottomMessage({ tone: "warning", text: "Jump list is empty" });
-      return;
-    }
-
-    setPickerState({
-      active: true,
-      loading: false,
-      title: "jumps",
-      items,
-      selectedIndex: Math.max(0, items.length - 1),
-      error: null
-    });
-  }
-
-  function runCommandLineCommand(rawValue: string): void {
-    const prompt = commandLine.prompt;
-    const trimmed = rawValue.trim();
-    const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
-    const value = commandName.toLowerCase();
-    const commandArgument = argumentParts.join(" ").trim();
-
-    if (prompt === "/" || prompt === "?") {
-      closeCommandLine(false);
-      searchPreviewState = null;
-      void runSearch(trimmed, prompt === "/" ? "forward" : "backward");
-      return;
-    }
-
-    closeCommandLine();
-
-    if (!value) {
-      return;
-    }
-
-    if (value === "format" || value === "fmt") {
-      void formatDocument();
-      return;
-    }
-
-    if (value === "w" || value === "write") {
-      void saveDocument(commandArgument || filePath);
-      return;
-    }
-
-    if (value === "theme") {
-      if (!commandArgument) {
-        setBottomMessage({ tone: "warning", text: "Theme name required" });
-        return;
-      }
-
-      const normalizedArgument = commandArgument.toLowerCase();
-      const matchingThemes = availableCommandThemes.filter((entry) => entry.name.toLowerCase().startsWith(normalizedArgument));
-
-      if (matchingThemes.length === 1) {
-        setThemeByName(matchingThemes[0].name);
-        return;
-      }
-
-      if (setThemeByName(commandArgument)) {
-        return;
-      }
-
-      return;
-    }
-
-    if (value === "code-actions" || value === "codeaction" || value === "ca") {
-      void loadCodeActions();
-      return;
-    }
-
-    setBottomMessage({ tone: "warning", text: `Unknown command: ${rawValue}` });
-  }
-
-  function dispatchOffsetSelection(targetOffset: number, preferredColumn: number | null): boolean {
-    if (state.mode === "insert") {
-      controller.dispatch({
-        selection: createSelection(targetOffset, targetOffset, preferredColumn)
-      });
-      return true;
-    }
-
-    if (state.mode === "visual") {
-      const anchor = state.selection.ranges[state.selection.primaryIndex]?.anchor ?? targetOffset;
-      controller.dispatch({
-        selection: createSelection(anchor, targetOffset, preferredColumn)
-      });
-      return true;
-    }
-
-    controller.dispatch({
-      selection: createCharacterSelection(state.doc, targetOffset, preferredColumn)
-    });
-    return true;
-  }
-
-  function moveByVisualRows(delta: number): boolean {
-    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const current = getVisualRowForOffset(activeOffset);
-    const preferredColumn = state.selection.ranges[state.selection.primaryIndex]?.preferredColumn ?? current.column;
-    const targetRowIndex = Math.max(0, Math.min(visualRows.length - 1, current.rowIndex + delta));
-    const targetRow = getVisualRow(targetRowIndex);
-    const segmentLength = targetRow.segmentEnd - targetRow.segmentStart;
-    const maxColumn = state.mode === "insert" ? segmentLength : Math.max(0, segmentLength - 1);
-    const targetColumn = Math.max(0, Math.min(preferredColumn, maxColumn));
-    const targetOffset =
-      segmentLength === 0 ? targetRow.segmentStart : targetRow.segmentStart + targetColumn;
-    return dispatchOffsetSelection(targetOffset, preferredColumn);
-  }
-
-  function gotoVisibleRow(position: "top" | "center" | "bottom"): boolean {
-    const viewport = getVisibleViewport();
-    const targetRowIndex =
-      position === "top"
-        ? viewport.fromLine
-        : position === "bottom"
-          ? viewport.toLine
-          : Math.floor((viewport.fromLine + viewport.toLine) / 2);
-    const targetRow = getVisualRow(targetRowIndex);
-    return dispatchOffsetSelection(targetRow.segmentStart, 0);
-  }
-
-  function readPendingCount(): number {
-    if (!pendingCount) {
-      return 1;
-    }
-
-    const parsed = Number.parseInt(pendingCount, 10);
-    setPendingCountState("");
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-  }
-
-  function clearPendingCount(): void {
-    setPendingCountState("");
-  }
-
-  function runCommandWithCount(command: Command, explicitCount?: number): boolean {
-    const count = explicitCount ?? readPendingCount();
-    const selectedRegister = controller.getSelectedRegister();
-
-    if (command === pasteAfter && selectedRegister === "+") {
-      void pasteSystemClipboard(count);
-      return true;
-    }
-
-    let applied = false;
-
-    for (let index = 0; index < count; index += 1) {
-      const previousMode = state.mode;
-      const previousRevision = state.revision;
-      const didRun = runCommand(command);
-
-      if (!didRun) {
-        break;
-      }
-
-      applied = true;
-
-      if (state.mode !== previousMode || state.revision === previousRevision) {
-        break;
-      }
-    }
-
-    return applied;
-  }
-
-  function runCommand(command: Command): boolean {
-    setBottomMessage(null);
-    clearFlash();
-    clearHover();
-    closePicker();
-    const selectedRegister = controller.getSelectedRegister();
-
-    if (command === pasteAfter) {
-      primeRegisterForPaste();
-    }
-
-    if (softWrap) {
-      if (command === moveUp) {
-        return moveByVisualRows(-1);
-      }
-
-      if (command === moveDown) {
-        return moveByVisualRows(1);
-      }
-
-      if (command === pageUp) {
-        return moveByVisualRows(-(Math.max(1, getVisibleLineCountForViewport(getVisibleViewport()) - 1)));
-      }
-
-      if (command === pageDown) {
-        return moveByVisualRows(Math.max(1, getVisibleLineCountForViewport(getVisibleViewport()) - 1));
-      }
-
-      if (command === halfPageUp) {
-        return moveByVisualRows(-Math.max(1, Math.floor(getVisibleLineCountForViewport(getVisibleViewport()) / 2)));
-      }
-
-      if (command === halfPageDown) {
-        return moveByVisualRows(Math.max(1, Math.floor(getVisibleLineCountForViewport(getVisibleViewport()) / 2)));
-      }
-
-      if (command === gotoWindowTop) {
-        return gotoVisibleRow("top");
-      }
-
-      if (command === gotoWindowCenter) {
-        return gotoVisibleRow("center");
-      }
-
-      if (command === gotoWindowBottom) {
-        return gotoVisibleRow("bottom");
-      }
-    }
-
-    const didRun = controller.execute(command, {
-      requestFocus() {
-        textarea.focus();
-      },
-      viewport: getViewportContext()
-    });
-
-    if (didRun && [yankSelection, deleteSelection, changeSelection].includes(command)) {
-      if (selectedRegister) {
-        controller.setRegister(selectedRegister, controller.getState().yankBuffer);
-      }
-      controller.selectRegister(null);
-    }
-
-    return didRun;
-  }
-
-  function runRepeatableMotion(motion: RepeatableMotion): boolean {
-    switch (motion.kind) {
-      case "find":
-        switch (motion.variant) {
-          case "f":
-            return runCommand(findNextChar(motion.target));
-          case "F":
-            return runCommand(findPrevChar(motion.target));
-          case "t":
-            return runCommand(findTillNextChar(motion.target));
-          case "T":
-            return runCommand(findTillPrevChar(motion.target));
-        }
-      case "matching-bracket":
-        return runCommand(gotoMatchingBracket);
-      case "paragraph":
-        return runCommand(motion.direction === "next" ? gotoNextParagraph : gotoPrevParagraph);
-      case "textobject":
-        return runCommand(selectTextobject(motion.mode, motion.object));
-      case "search":
-        return repeatSearch(motion.reverse);
-    }
-
-    return false;
-  }
-
-  function recordRepeatableMotion(candidate: RepeatableMotion, didChange: boolean): void {
-    if (didChange) {
-      setLastRepeatableMotionState(candidate);
-    }
-  }
-
-  async function toggleComments(): Promise<boolean> {
-    const toggler = getCommentToggler();
-
-    if (!toggler) {
-      setBottomMessage({ tone: "warning", text: "No comment provider" });
-      return false;
-    }
-
-    let changes: readonly TextChange[];
-
-    try {
-      changes = await toggler.toggleLineComments({
-        document: getSnapshot(),
-        selection: getSelectionOffsets(state)
-      });
-    } catch {
-      setBottomMessage({ tone: "error", text: "Comment toggle failed" });
-      return false;
-    }
-
-    if (!changes.length) {
-      setBottomMessage({ tone: "info", text: "Nothing to comment" });
-      return false;
-    }
-
-    controller.dispatch({
-      changes,
-      effects: [{ type: "language.comment-toggle" }]
-    });
-    setBottomMessage({ tone: "info", text: "Toggled comments" });
-    return true;
-  }
-
-  function scrollViewportBy(rowsDelta: number): boolean {
-    if (rowsDelta === 0) {
-      return true;
-    }
-
-    controller.scrollViewportBy(rowsDelta);
-    syncViewportMirrors();
-    renderVisibleRows();
-    return true;
-  }
-
-  function alignViewportToCursor(position: "top" | "center" | "bottom"): boolean {
-    controller.alignViewportToSelection(position);
-    syncViewportMirrors();
-    renderVisibleRows();
-    return true;
-  }
-
-  function navigateDiagnostic(direction: "next" | "prev", extreme = false): boolean {
-    if (diagnostics.length === 0) {
-      setBottomMessage({ tone: "warning", text: "No diagnostics" });
-      return false;
-    }
-
-    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const ordered = [...diagnostics].sort((left, right) => left.from - right.from);
-    const target =
-      direction === "next"
-        ? extreme
-          ? ordered[ordered.length - 1]
-          : ordered.find((entry) => entry.from > activeOffset) ?? ordered[0]
-        : extreme
-          ? ordered[0]
-          : [...ordered].reverse().find((entry) => entry.to - 1 < activeOffset) ?? ordered[ordered.length - 1];
-
-    if (!target) {
-      return false;
-    }
-
-    pushCurrentJump();
-    applySelectionRange(target.from, target.to);
-    revealCursor();
-    return true;
-  }
-
-  async function selectTextobjectWithFallback(mode: SyntaxTextobjectMode, object: string): Promise<boolean> {
-    if (["w", "W", "p", "'", "\"", "`", "(", ")", "[", "]", "{", "}", "<", ">"].includes(object)) {
-      return runCommand(selectTextobject(mode, object));
-    }
-
-    const provider = getSyntaxTextobjectProvider();
-
-    if (!provider) {
-      return false;
-    }
-
-    const selection = getSelectionOffsets(state);
-    const activeOffset = getActiveCharacterOffset(state);
-    const next = await provider.selectTextobject({
-      document: getSnapshot(),
-      selection,
-      activeOffset,
-      object,
-      mode
-    });
-
-    if (!next) {
-      return false;
-    }
-
-    applySelectionRange(next.from, next.to);
-    return true;
-  }
-
-  async function navigateSyntax(direction: "next" | "prev", kind: string): Promise<boolean> {
-    const provider = getSyntaxNavigationProvider();
-    const navigate = direction === "next" ? provider?.gotoNext : provider?.gotoPrev;
-
-    if (!navigate) {
-      return false;
-    }
-
-    const next = await navigate({
-      document: getSnapshot(),
-      activeOffset: getActiveCharacterOffset(state),
-      kind
-    });
-
-    if (!next) {
-      return false;
-    }
-
-    pushCurrentJump();
-    applySelectionRange(next.from, next.to);
-    revealCursor();
-    return true;
   }
 
   function revealCursor(): void {
@@ -4431,16 +2513,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    const command = movementCommandForDelta(event.deltaY);
-
-    if (!command) {
+    if (event.deltaY === 0) {
       return;
     }
 
     event.preventDefault();
     textarea.focus();
     textarea.value = "";
-    runCommand(command);
+    controller.scrollViewportBy(event.deltaY > 0 ? 1 : -1);
   }
 
   function handlePaste(event: ClipboardEvent): void {
@@ -4456,7 +2536,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     event.preventDefault();
     textarea.value = "";
-    runCommand(insertText(pastedText));
+    void controller.handleTextInput(pastedText, {
+      themeNames: availableCommandThemes.map((entry) => entry.name),
+      readClipboardText: readSystemClipboard
+    });
   }
 
   function handleMouseMove(event: MouseEvent): void {
@@ -4479,15 +2562,18 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     const target = sourceElement?.closest<HTMLElement>("[data-wx-editor-offset]") ?? null;
-    const offset =
-      target && target.dataset.wxEditorOffset
-        ? resolveOffsetWithinRun(
-            target,
-            Number(target.dataset.wxEditorOffset),
-            target.dataset.wxEditorOffsetEnd ? Number(target.dataset.wxEditorOffsetEnd) : null,
-            event.clientX
-          )
-        : null;
+
+    if (!target?.dataset.wxEditorOffset) {
+      clearHover(true);
+      return;
+    }
+
+    const offset = resolveOffsetWithinRun(
+      target,
+      Number(target.dataset.wxEditorOffset),
+      target.dataset.wxEditorOffsetEnd ? Number(target.dataset.wxEditorOffsetEnd) : null,
+      event.clientX
+    );
 
     if (offset === null || Number.isNaN(offset)) {
       clearHover(true);
@@ -4577,10 +2663,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       textarea.focus();
     },
     format() {
-      return formatDocument();
+      return controller.formatDocument();
     },
     getCodeActions() {
-      return loadCodeActions();
+      return controller.requestCodeActions();
     },
     applyCodeAction(action: EditorCodeAction) {
       return applyCodeActionInternal(action);
@@ -4613,14 +2699,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     setTheme(nextTheme: ThemeSpec) {
       theme = nextTheme;
       controller.setThemeName(nextTheme.name);
-      setPreviewThemeState(null);
       availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
       applyRenderedTheme(theme);
       patchBottomRow();
     },
     async setValue(value: string) {
-      setAnchoredTopVisualRow(0);
       controller.replaceState(createEditorState({ value, selection: createSelection(0, 0) }));
+      controller.alignViewportToSelection("top");
       syncLanguageMirrors();
     }
   };

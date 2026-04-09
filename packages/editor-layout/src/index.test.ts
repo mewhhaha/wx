@@ -132,7 +132,7 @@ function createInput(value: string) {
         lineChangesRequestId: 0,
         hoverRequestId: 0,
         highlightCache: new Map(),
-        highlightCoverage: new Set(),
+        highlightCoverage: new Set<number>(),
         diagnostics: [],
         diagnosticsByLine: new Map(),
         lineChangesByLine: new Map(),
@@ -148,6 +148,7 @@ function createInput(value: string) {
           prompt: ":" as const
         },
         commandCompletionIndex: 0,
+        commandCompletionItems: [],
         picker: {
           active: false,
           loading: false,

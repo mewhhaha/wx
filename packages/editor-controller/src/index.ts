@@ -148,6 +148,11 @@ export interface EditorCommandLineState {
   prompt: ":" | "/" | "?";
 }
 
+export interface EditorCommandCompletionItem {
+  label: string;
+  detail?: string;
+}
+
 export interface EditorBottomMessageState {
   tone: "info" | "warning" | "error";
   text: string;
@@ -254,6 +259,7 @@ export interface EditorLanguagePresentationState {
 export interface EditorUiPresentationState {
   commandLine: EditorCommandLineState;
   commandCompletionIndex: number;
+  commandCompletionItems: readonly EditorCommandCompletionItem[];
   picker: EditorPickerState;
   bottomMessage: EditorBottomMessageState | null;
   hover: EditorHoverState;
@@ -441,7 +447,7 @@ function normalizeLanguageServices(
     return [];
   }
 
-  return Array.isArray(input) ? [...input] : [input];
+  return Array.isArray(input) ? [...(input as readonly EditorLanguageServices[])] : [input as EditorLanguageServices];
 }
 
 function commandForNormalMode(key: string): Command | null {
@@ -687,6 +693,7 @@ function createPresentationState(state: EditorState, options: CreateEditorContro
     ui: {
       commandLine: { active: false, value: "", prompt: ":" },
       commandCompletionIndex: 0,
+      commandCompletionItems: [],
       picker: {
         active: false,
         loading: false,
@@ -2188,11 +2195,11 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     ensureVisibleHighlightCoverage();
   };
 
-  const getCommandCompletionItems = (themeNames: readonly string[] = []) => {
+  const getCommandCompletionItems = (themeNames: readonly string[] = []): EditorCommandCompletionItem[] => {
     const commandLine = presentation.ui.commandLine;
 
     if (!commandLine.active || commandLine.prompt !== ":") {
-      return [] as Array<{ label: string; detail?: string }>;
+      return [];
     }
 
     const rawValue = commandLine.value;
@@ -2227,13 +2234,21 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       ].filter((entry) => entry.label.startsWith(commandName));
     }
 
-    return [] as Array<{ label: string; detail?: string }>;
+    return [];
   };
 
   const syncCommandPreviewTheme = (themeNames: readonly string[] = []) => {
     const items = getCommandCompletionItems(themeNames);
     const rawValue = presentation.ui.commandLine.value.trimStart();
     const activeCommandName = rawValue.split(/\s+/)[0]?.toLowerCase() ?? "";
+    const previousItems = presentation.ui.commandCompletionItems;
+    let changed =
+      previousItems.length !== items.length ||
+      previousItems.some((item, index) => item.label !== items[index]?.label || item.detail !== items[index]?.detail);
+
+    if (changed) {
+      presentation.ui.commandCompletionItems = items;
+    }
 
     if (
       items.length === 0 ||
@@ -2243,18 +2258,26 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     ) {
       if (presentation.ui.previewTheme !== null) {
         presentation.ui.previewTheme = null;
+        changed = true;
       }
       if (presentation.ui.commandCompletionIndex !== 0 && items.length === 0) {
         presentation.ui.commandCompletionIndex = 0;
+        changed = true;
       }
-      return presentation.themeName;
+      return { themeName: presentation.themeName, changed };
     }
 
     const index = Math.max(0, Math.min(items.length - 1, presentation.ui.commandCompletionIndex));
-    presentation.ui.commandCompletionIndex = index;
+    if (presentation.ui.commandCompletionIndex !== index) {
+      presentation.ui.commandCompletionIndex = index;
+      changed = true;
+    }
     const nextTheme = themeNames.find((entry) => entry === items[index]?.label) ?? items[index]?.label ?? null;
-    presentation.ui.previewTheme = nextTheme;
-    return nextTheme ?? presentation.themeName;
+    if (presentation.ui.previewTheme !== nextTheme) {
+      presentation.ui.previewTheme = nextTheme;
+      changed = true;
+    }
+    return { themeName: nextTheme ?? presentation.themeName, changed };
   };
 
   const applyCommandCompletion = async (themeNames: readonly string[] = []): Promise<EditorKeyInputResult | null> => {
@@ -2284,7 +2307,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         : selected.label;
     setCommandLineState({ ...presentation.ui.commandLine, value: nextValue }, "ui.command-line.input");
     presentation.ui.commandCompletionIndex = 0;
-    const themeName = syncCommandPreviewTheme(themeNames);
+    const { themeName } = syncCommandPreviewTheme(themeNames);
     emitPresentationUpdate("ui.command-line.completion");
     return { handled: true, themeName };
   };
@@ -3290,7 +3313,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
           const delta = shift ? -1 : 1;
           presentation.ui.commandCompletionIndex =
             (presentation.ui.commandCompletionIndex + delta + completionItems.length) % completionItems.length;
-          const themeName = syncCommandPreviewTheme(options.themeNames ?? []);
+          const { themeName } = syncCommandPreviewTheme(options.themeNames ?? []);
           emitPresentationUpdate("ui.command-line.completion");
           return { handled: true, themeName };
         }
@@ -3320,7 +3343,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
         const result = await controller.handleCommandLineKey(key, options);
         if (key.length === 1 || key === "Backspace" || key === "Escape") {
-          const themeName = syncCommandPreviewTheme(options.themeNames ?? []);
+          const { themeName, changed } = syncCommandPreviewTheme(options.themeNames ?? []);
+          if (changed) {
+            emitPresentationUpdate("ui.command-line.completion");
+          }
           if (result.handled) {
             return { ...result, themeName: result.themeName ?? themeName };
           }
@@ -3399,7 +3425,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       }
 
       if (ctrl && !meta && !alt && state.mode === "insert" && key === "s") {
-        historyControls.checkpoint();
+        historyControls.checkpoint?.();
         return { handled: true };
       }
 
@@ -3680,7 +3706,11 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       if ((state.mode === "normal" || state.mode === "visual") && key === ":") {
         clearPendingCount();
         controller.openCommandLine(":");
-        return { handled: true };
+        const { themeName, changed } = syncCommandPreviewTheme(options.themeNames ?? []);
+        if (changed) {
+          emitPresentationUpdate("ui.command-line.completion");
+        }
+        return { handled: true, themeName };
       }
 
       if ((state.mode === "normal" || state.mode === "visual") && key === "/") {
@@ -3812,6 +3842,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
       presentation.ui.pendingAction = null;
       presentation.ui.commandCompletionIndex = 0;
+      presentation.ui.commandCompletionItems = [];
       presentation.ui.previewTheme = null;
       setCommandLineState({ active: true, value: "", prompt }, "ui.command-line.open");
     },
@@ -3826,6 +3857,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         restoreSearchPreview();
         searchPreviewState = null;
         presentation.ui.commandCompletionIndex = 0;
+        presentation.ui.commandCompletionItems = [];
         presentation.ui.previewTheme = null;
         setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.close");
         return { handled: true };
@@ -3844,6 +3876,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         const trimmed = commandLine.value.trim();
         const prompt = commandLine.prompt;
         presentation.ui.commandCompletionIndex = 0;
+        presentation.ui.commandCompletionItems = [];
         presentation.ui.previewTheme = null;
         setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.commit");
 

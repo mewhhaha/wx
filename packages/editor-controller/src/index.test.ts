@@ -199,4 +199,38 @@ describe("editor controller", () => {
     expect(controller.getPresentationState().ui.flash.active).toBe(true);
     expect(controller.getPresentationState().ui.flash.hints.length).toBeGreaterThan(0);
   });
+
+  it("keeps command completion candidates in controller presentation state", async () => {
+    const controller = createEditorController({ value: "alpha" });
+    const themeNames = ["sunrise", "tide"];
+
+    await controller.handleKeyInput({ key: ":", text: ":" }, { themeNames });
+    expect(controller.getPresentationState().ui.commandCompletionItems.map((item) => item.label)).toContain("theme");
+
+    await controller.handleKeyInput({ key: "t", text: "t" }, { themeNames });
+    expect(controller.getPresentationState().ui.commandCompletionItems.map((item) => item.label)).toEqual(["theme"]);
+
+    await controller.handleKeyInput({ key: "Enter" }, { themeNames });
+    expect(controller.getPresentationState().ui.commandLine.value).toBe("theme ");
+
+    await controller.handleKeyInput({ key: "Tab" }, { themeNames });
+    expect(controller.getPresentationState().ui.previewTheme).toBe("tide");
+
+    const result = await controller.handleKeyInput({ key: "Enter" }, { themeNames });
+    expect(result.themeName).toBe("tide");
+    expect(controller.getPresentationState().themeName).toBe("tide");
+  });
+
+  it("reveals selection from controller-owned viewport metrics during key input", async () => {
+    const controller = createEditorController({
+      value: Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n")
+    });
+    controller.setViewportMetrics({ visibleRowCapacity: 9, wrapColumns: 80, softWrap: false });
+
+    for (let index = 0; index < 6; index += 1) {
+      await controller.handleKeyInput({ key: "j", text: "j" });
+    }
+
+    expect(controller.getPresentationState().viewport.topVisualRow).toBe(1);
+  });
 });
