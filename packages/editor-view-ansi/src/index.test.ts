@@ -253,6 +253,31 @@ describe("@wx/editor-view-ansi", () => {
     mirror.destroy();
   });
 
+  it("applies provided language services through the controller session", async () => {
+    const controller = createEditorController({ value: "const value = 1;" });
+    const highlighter = {
+      open: vi.fn(async () => {}),
+      update: vi.fn(async () => {}),
+      getHighlights: vi.fn(async () => [{ from: 0, to: 5, role: "keyword" as const }])
+    };
+    const mirror = createAnsiEditorMirror({
+      controller,
+      languageServices: { highlighter },
+      cols: 30,
+      rows: 6,
+      write: vi.fn()
+    });
+
+    mirror.mount();
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().language.visibleHighlights).toEqual([
+      { from: 0, to: 5, role: "keyword" }
+    ]);
+
+    mirror.destroy();
+  });
+
   it("can mirror a controller selection into the frame", () => {
     const controller = createEditorController({ value: "alpha\nbeta" });
     controller.setViewportMetrics({ visibleRowCapacity: 4, wrapColumns: 24, softWrap: true });
@@ -353,6 +378,46 @@ describe("@wx/editor-view-ansi", () => {
     await flushAsyncWork();
 
     expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("supports :theme switching in the terminal frontend", async () => {
+    const sunriseTheme = {
+      name: "sunrise",
+      colors: {
+        background: "#1b1410",
+        text: "#f6e7d8",
+        keyword: "#ffb86c"
+      }
+    };
+    const tideTheme = {
+      name: "tide",
+      colors: {
+        background: "#0c1824",
+        text: "#d9f0ff",
+        keyword: "#7dd3fc"
+      }
+    };
+    const controller = createEditorController({ value: "alpha" });
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      cols: 40,
+      rows: 6,
+      write: vi.fn(),
+      enterAltScreen: false,
+      theme: sunriseTheme,
+      availableThemes: [sunriseTheme, tideTheme]
+    });
+
+    terminal.mount();
+    input.emit(":");
+    input.emit("theme tide");
+    input.emit("\r");
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().themeName).toBe("tide");
+    terminal.destroy();
   });
 
   it("supports flash-target input through the shared controller path", () => {

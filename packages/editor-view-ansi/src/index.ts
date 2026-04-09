@@ -1,3 +1,6 @@
+import { createRequire } from "node:module";
+import { Worker as NodeWorker } from "node:worker_threads";
+
 import { type EditorState } from "../../editor-core/src/index";
 import {
   createEditorController,
@@ -11,6 +14,13 @@ import {
   type EditorLayoutRow,
   type EditorLayoutRun
 } from "../../editor-layout/src/index";
+import {
+  languageProviderToServices,
+  type EditorLanguageServiceInput,
+  type EditorLanguageServices,
+  type LanguageProvider
+} from "../../editor-language/src/index";
+import { createTreeSitterLanguageServices, typescriptHighlightQuery } from "../../editor-tree-sitter/src/index";
 import {
   defaultTheme,
   resolveThemeColor,
@@ -34,7 +44,10 @@ export interface RenderEditorAnsiFrameInput {
 
 export interface CreateAnsiEditorMirrorOptions {
   controller?: EditorController;
+  filePath?: string;
   value?: string;
+  language?: LanguageProvider | null;
+  languageServices?: EditorLanguageServiceInput | null;
   write(text: string): void;
   theme?: ThemeSpec;
   cols: number;
@@ -95,6 +108,13 @@ interface Cell {
   style: CellStyle;
 }
 
+interface WorkerLike {
+  addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
+  removeEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
+  postMessage(message: unknown): void;
+  terminate(): void;
+}
+
 const ANSI_RESET = "\u001b[0m";
 const ANSI_HOME = "\u001b[H";
 const ANSI_ENTER_ALT = "\u001b[?1049h\u001b[2J\u001b[H\u001b[?25l";
@@ -116,6 +136,31 @@ function normalizeIndentGuides(input: RenderEditorAnsiFrameInput["indentGuides"]
   };
 }
 
+function normalizeLanguageServices(input: EditorLanguageServiceInput | null | undefined): EditorLanguageServices[] {
+  if (!input) {
+    return [];
+  }
+
+  return Array.isArray(input) ? [...input] : [input];
+}
+
+function normalizeCommandThemes(themes: readonly ThemeSpec[] | undefined, activeTheme: ThemeSpec): ThemeSpec[] {
+  const seen = new Set<string>();
+  const nextThemes: ThemeSpec[] = [];
+
+  for (const theme of [activeTheme, defaultTheme, ...(themes ?? [])]) {
+    const key = theme.name.trim().toLowerCase();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    nextThemes.push(theme);
+  }
+
+  return nextThemes;
+}
+
 function removeListener<T extends (...args: never[]) => void>(
   target: { off?(event: string, listener: T): unknown; removeListener?(event: string, listener: T): unknown },
   event: string,
@@ -129,6 +174,43 @@ function removeListener<T extends (...args: never[]) => void>(
   if (target.removeListener) {
     target.removeListener(event, listener);
   }
+}
+
+function createNodeWorkerBridge(moduleUrl: URL): WorkerLike {
+  const worker = new NodeWorker(moduleUrl, { type: "module" });
+  const listeners = new Map<(event: { data: unknown }) => void, (data: unknown) => void>();
+
+  return {
+    addEventListener(type, listener) {
+      if (type !== "message") {
+        return;
+      }
+
+      const wrapped = (data: unknown) => listener({ data });
+      listeners.set(listener, wrapped);
+      worker.on("message", wrapped);
+    },
+    removeEventListener(type, listener) {
+      if (type !== "message") {
+        return;
+      }
+
+      const wrapped = listeners.get(listener);
+      if (!wrapped) {
+        return;
+      }
+
+      listeners.delete(listener);
+      worker.off("message", wrapped);
+    },
+    postMessage(message) {
+      worker.postMessage(message);
+    },
+    terminate() {
+      listeners.clear();
+      void worker.terminate();
+    }
+  };
 }
 
 function parseAnsiInput(chunk: Buffer | string): string[] {
@@ -589,6 +671,21 @@ export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): 
   let mounted = false;
   let pendingRender = false;
   let unsubscribe = () => {};
+  const normalizedLanguageServices = normalizeLanguageServices(
+    options.languageServices ?? languageProviderToServices(options.language ?? null)
+  );
+
+  if (options.filePath !== undefined) {
+    controller.setFilePath(options.filePath);
+  }
+
+  if (options.theme) {
+    controller.setThemeName(options.theme.name);
+  }
+
+  if (options.language !== undefined || options.languageServices !== undefined) {
+    controller.setLanguageServices(normalizedLanguageServices);
+  }
 
   const syncViewportMetrics = () => {
     const { contentCols } = getContentCols(cols, controller.getState().doc.lineCount);
@@ -683,7 +780,7 @@ export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOption
   });
   const input = options.input;
   const output = options.output;
-  const availableThemes = options.availableThemes?.length ? [...options.availableThemes] : [options.theme ?? defaultTheme];
+  const availableThemes = normalizeCommandThemes(options.availableThemes, options.theme ?? defaultTheme);
   const exit = options.exit ?? (() => {});
   let mounted = false;
   let destroyed = false;
@@ -805,25 +902,68 @@ export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOption
 
 export async function runAnsiMirrorDemo(): Promise<void> {
   const sample = [
-    "fn smooth_union(a: f32, b: f32, k: f32) -> f32 {",
-    "  let h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);",
-    "  return mix(b, a, h) - k * h * (1.0 - h);",
+    "export function smoothUnion(a: number, b: number, k: number): number {",
+    "  const h = Math.max(0, Math.min(1, 0.5 + 0.5 * (b - a) / k));",
+    "  return (1 - h) * b + h * a - k * h * (1 - h);",
     "}",
     "",
-    "@fragment",
-    "fn fs_main() -> @location(0) vec4f {",
-    "  return vec4f(1.0, 0.4, 0.1, 1.0);",
+    "export function shade(time: number) {",
+    "  return `#${Math.floor(time * 17).toString(16)}`;",
     "}"
   ].join("\n");
+  const sunriseTheme: ThemeSpec = {
+    name: "sunrise",
+    colors: {
+      background: "#1b1410",
+      currentLine: "#2a1f18",
+      text: "#f6e7d8",
+      gutter: "#b08968",
+      keyword: "#ffb86c",
+      string: "#ffd166",
+      function: "#8ecae6",
+      type: "#ffaf87",
+      comment: "#8b6f5a",
+      selection: "#5b3a2e",
+      cursor: "#fff1e6",
+      cursorText: "#1b1410"
+    }
+  };
+  const tideTheme: ThemeSpec = {
+    name: "tide",
+    colors: {
+      background: "#0c1824",
+      currentLine: "#102334",
+      text: "#d9f0ff",
+      gutter: "#6ea8c7",
+      keyword: "#7dd3fc",
+      string: "#a7f3d0",
+      function: "#93c5fd",
+      type: "#c4b5fd",
+      comment: "#5f86a0",
+      selection: "#17364a",
+      cursor: "#f8fafc",
+      cursorText: "#0c1824"
+    }
+  };
+  const require = createRequire(import.meta.url);
+  const treeSitterServices = createTreeSitterLanguageServices({
+    parserWasmUrl: require.resolve("web-tree-sitter/web-tree-sitter.wasm"),
+    languageWasmUrl: require.resolve("tree-sitter-typescript/tree-sitter-typescript.wasm"),
+    query: typescriptHighlightQuery,
+    createWorker: () =>
+      createNodeWorkerBridge(new URL("./treeSitterNodeWorker.js", import.meta.url)) as unknown as Worker
+  });
 
   const controller = createEditorController({ value: sample });
-  controller.setFilePath("examples/demo.wgsl");
+  controller.setFilePath("examples/demo.ts");
+  controller.setLanguageServices([treeSitterServices]);
   const terminal = createAnsiEditorTerminal({
     controller,
     input: process.stdin,
     output: process.stdout,
     write: (text) => process.stdout.write(text),
-    theme: defaultTheme,
+    theme: sunriseTheme,
+    availableThemes: [sunriseTheme, tideTheme],
     cols: process.stdout.columns ?? 100,
     rows: process.stdout.rows ?? 28,
     enterAltScreen: true,

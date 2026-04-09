@@ -13,13 +13,17 @@
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup src/index.ts src/demo.ts src/treeSitterNodeWorker.ts --format esm --out-dir dist",
     "demo": "pnpm build && node dist/demo.js"
   },
   "dependencies": {
     "@wx/editor-controller": "workspace:*",
     "@wx/editor-core": "workspace:*",
+    "@wx/editor-language": "workspace:*",
     "@wx/editor-layout": "workspace:*",
-    "@wx/editor-theme": "workspace:*"
+    "@wx/editor-theme": "workspace:*",
+    "@wx/editor-tree-sitter": "workspace:*",
+    "tree-sitter-typescript": "^0.23.2",
+    "web-tree-sitter": "^0.26.8"
   }
 }

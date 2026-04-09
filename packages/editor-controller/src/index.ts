@@ -51,11 +51,11 @@ import type {
   SyntaxTextobjectMode
 } from "@wx/editor-language";
 import {
-  buildFlashLabels,
   buildVisualRows,
   getVisualRowForOffset,
   type EditorVisualRow
 } from "../../editor-layout/src/index";
+import { buildFlashLabels } from "./flash-labels";
 import {
   commandForBracketPrefix,
   commandForGotoPrefix,

@@ -200,6 +200,19 @@ describe("editor controller", () => {
     expect(controller.getPresentationState().ui.flash.hints.length).toBeGreaterThan(0);
   });
 
+  it("assigns distinct first-pass labels to visible flash targets", () => {
+    const controller = createEditorController({ value: "ta ta ta ta\nta ta ta ta" });
+    controller.setViewportMetrics({ visibleRowCapacity: 6, wrapColumns: 80, softWrap: false });
+
+    controller.beginFlashTarget();
+    controller.handleFlashKey("t");
+
+    const labels = controller.getPresentationState().ui.flash.hints.map((hint) => hint.label);
+
+    expect(labels.length).toBeGreaterThan(3);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
   it("keeps command completion candidates in controller presentation state", async () => {
     const controller = createEditorController({ value: "alpha" });
     const themeNames = ["sunrise", "tide"];

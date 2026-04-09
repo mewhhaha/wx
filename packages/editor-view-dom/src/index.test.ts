@@ -121,6 +121,23 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-flash-hint]")).toBeNull();
   });
 
+  it("renders distinct labels for multiple visible flash targets", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, { value: "ta ta ta ta\nta ta ta ta" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
+
+    const labels = [...container.querySelectorAll<HTMLElement>("[data-wx-editor-flash-hint]")]
+      .map((node) => node.dataset.wxEditorFlashHint ?? node.textContent ?? "");
+
+    expect(labels.length).toBeGreaterThan(3);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
   it("closes visible jump labels on escape", () => {
     const container = document.createElement("div");
     document.body.append(container);
