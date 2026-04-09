@@ -1,0 +1,25 @@
+{
+  "name": "@wx/editor-view-ansi",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "demo": "pnpm build && node dist/demo.js"
+  },
+  "dependencies": {
+    "@wx/editor-controller": "workspace:*",
+    "@wx/editor-core": "workspace:*",
+    "@wx/editor-layout": "workspace:*",
+    "@wx/editor-theme": "workspace:*"
+  }
+}

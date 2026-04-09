@@ -7,6 +7,7 @@
     { "path": "./packages/editor-layout" },
     { "path": "./packages/editor-theme" },
     { "path": "./packages/editor-tree-sitter" },
+    { "path": "./packages/editor-view-ansi" },
     { "path": "./packages/editor-view-dom" },
     { "path": "./packages/editor-element" },
     { "path": "./apps/playground" }

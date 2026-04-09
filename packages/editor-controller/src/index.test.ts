@@ -165,4 +165,38 @@ describe("editor controller", () => {
     expect(highlighter.open).not.toHaveBeenCalled();
     expect(highlighter.update).not.toHaveBeenCalled();
   });
+
+  it("handles shared command-line search preview in the controller", async () => {
+    const controller = createEditorController({ value: "alpha\nbeta\nalpha" });
+    controller.setViewportMetrics({ visibleRowCapacity: 3, wrapColumns: 40, softWrap: true });
+
+    controller.openCommandLine("/");
+    await controller.handleCommandLineKey("b");
+    await controller.handleCommandLineKey("e");
+    await controller.handleCommandLineKey("t");
+    await controller.handleCommandLineKey("a");
+
+    expect(controller.getPresentationState().ui.commandLine.value).toBe("beta");
+    expect(controller.getState().doc.positionAt(controller.getState().selection.ranges[0]?.head ?? 0)).toEqual({
+      line: 1,
+      column: 3
+    });
+
+    await controller.handleCommandLineKey("Enter");
+    expect(controller.getSearchState().query).toBe("beta");
+    expect(controller.getPresentationState().ui.commandLine.active).toBe(false);
+  });
+
+  it("handles flash-target state in the controller", () => {
+    const controller = createEditorController({ value: "alpha beta gamma" });
+    controller.setViewportMetrics({ visibleRowCapacity: 3, wrapColumns: 40, softWrap: true });
+
+    controller.beginFlashTarget();
+    expect(controller.getPresentationState().ui.pendingAction).toEqual({ kind: "flash-target" });
+
+    const handled = controller.handleFlashKey("a");
+    expect(handled).toBe(true);
+    expect(controller.getPresentationState().ui.flash.active).toBe(true);
+    expect(controller.getPresentationState().ui.flash.hints.length).toBeGreaterThan(0);
+  });
 });

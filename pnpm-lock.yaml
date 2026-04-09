@@ -125,6 +125,21 @@ importers:
         specifier: ^0.26.8
         version: 0.26.8
 
+  packages/editor-view-ansi:
+    dependencies:
+      '@wx/editor-controller':
+        specifier: workspace:*
+        version: link:../editor-controller
+      '@wx/editor-core':
+        specifier: workspace:*
+        version: link:../editor-core
+      '@wx/editor-layout':
+        specifier: workspace:*
+        version: link:../editor-layout
+      '@wx/editor-theme':
+        specifier: workspace:*
+        version: link:../editor-theme
+
   packages/editor-view-dom:
     dependencies:
       '@wx/editor-controller':

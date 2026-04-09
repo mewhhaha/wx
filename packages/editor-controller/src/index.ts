@@ -1,14 +1,66 @@
 import {
+  addSurround,
   applyTransaction,
+  appendInsertMode,
   clampCharacterOffset,
   clampInsertionOffset,
+  changeSelection,
   createCharacterSelection,
   createEditorState,
+  createSelection,
+  deleteBackwardIndentAware,
+  deleteForward,
+  deleteSelection,
+  deleteSurround,
+  enterInsertMode,
+  enterNormalMode,
+  findNextChar,
+  findPrevChar,
+  findTillNextChar,
+  findTillPrevChar,
   getActiveCharacterOffset,
   getCursorOffset,
   getSelectionOffsets,
+  gotoFileStart,
+  gotoFirstNonWhitespace,
+  gotoLastLine,
+  gotoLineEnd,
+  gotoLineStart,
+  gotoMatchingBracket,
+  gotoNextParagraph,
+  gotoPrevParagraph,
+  gotoWindowBottom,
+  gotoWindowCenter,
+  gotoWindowTop,
+  halfPageDown,
+  halfPageUp,
+  insertNewline,
+  insertText,
   mapOffsetThroughChanges,
+  moveDown,
+  moveLeft,
+  moveNextLongWordEnd,
+  moveNextLongWordStart,
+  moveNextWordStart,
+  movePrevLongWordStart,
+  moveRight,
+  moveUp,
+  moveWordBackward,
+  moveWordForward,
   normalizeSelection,
+  openAbove,
+  openBelow,
+  pageDown,
+  pageUp,
+  pasteAfter,
+  redo,
+  replaceSurround,
+  selectAll,
+  selectLineBelow,
+  selectTextobject,
+  toggleVisualMode,
+  undo,
+  yankSelection,
   type Command,
   type CommandContext,
   type EditorState,
@@ -25,9 +77,11 @@ import type {
   EditorLineRange,
   EditorLanguageServiceInput,
   EditorLanguageServices,
-  HighlightSpan
+  HighlightSpan,
+  SyntaxTextobjectMode
 } from "@wx/editor-language";
 import {
+  buildFlashLabels,
   buildVisualRows,
   getVisualRowForOffset,
   type EditorLineVisualRange,
@@ -225,6 +279,34 @@ export interface EditorPresentationState {
   registers: EditorRegisterState;
 }
 
+export interface EditorCommandLineKeyOptions {
+  themeNames?: readonly string[];
+}
+
+export interface EditorCommandLineKeyResult {
+  handled: boolean;
+  quit?: boolean;
+  themeName?: string | null;
+}
+
+export interface EditorKeyInput {
+  key: string;
+  ctrl?: boolean;
+  alt?: boolean;
+  meta?: boolean;
+  shift?: boolean;
+  text?: string;
+  source?: "dom" | "ansi";
+}
+
+export interface EditorKeyInputOptions extends EditorCommandLineKeyOptions {
+  readClipboardText?: () => Promise<string | null>;
+}
+
+export interface EditorKeyInputResult extends EditorCommandLineKeyResult {
+  handled: boolean;
+}
+
 export type EditorUpdateListener = (update: EditorUpdate) => void;
 
 export interface HistoryPlugin {
@@ -266,6 +348,13 @@ export interface EditorController {
   setHostServices(host: EditorHostServices | null): void;
   setFilePath(filePath: string): void;
   setThemeName(themeName: string | null): void;
+  handleKeyInput(input: EditorKeyInput, options?: EditorKeyInputOptions): Promise<EditorKeyInputResult>;
+  handleTextInput(text: string, options?: EditorKeyInputOptions): Promise<EditorKeyInputResult>;
+  openCommandLine(prompt: ":" | "/" | "?"): void;
+  handleCommandLineKey(key: string, options?: EditorCommandLineKeyOptions): Promise<EditorCommandLineKeyResult>;
+  repeatSearch(reverseAgainstDirection?: boolean): boolean;
+  beginFlashTarget(): void;
+  handleFlashKey(key: string): boolean;
   refreshLanguage(options?: {
     changes?: readonly TextChange[];
     forceDocumentSync?: boolean;
@@ -291,6 +380,12 @@ export interface CreateEditorControllerOptions {
   theme?: string;
   filePath?: string;
   history?: HistoryPlugin | false;
+}
+
+interface PickerActionItem {
+  label: string;
+  detail?: string;
+  run: () => Promise<void> | void;
 }
 
 function createHistoryEntry(state: EditorState): HistoryEntry {
@@ -347,6 +442,202 @@ function normalizeLanguageServices(
   }
 
   return Array.isArray(input) ? [...input] : [input];
+}
+
+function commandForNormalMode(key: string): Command | null {
+  switch (key) {
+    case "%":
+      return selectAll;
+    case "B":
+      return movePrevLongWordStart;
+    case "E":
+      return moveNextLongWordEnd;
+    case "End":
+      return gotoLineEnd;
+    case "Home":
+      return gotoLineStart;
+    case "PageDown":
+      return pageDown;
+    case "PageUp":
+      return pageUp;
+    case "W":
+      return moveNextLongWordStart;
+    case "a":
+      return appendInsertMode;
+    case "ArrowLeft":
+    case "h":
+      return moveLeft;
+    case "ArrowRight":
+    case "l":
+      return moveRight;
+    case "ArrowUp":
+    case "k":
+      return moveUp;
+    case "ArrowDown":
+    case "j":
+      return moveDown;
+    case "b":
+      return moveWordBackward;
+    case "c":
+      return changeSelection;
+    case "d":
+      return deleteSelection;
+    case "e":
+      return moveWordForward;
+    case "i":
+      return enterInsertMode;
+    case "o":
+      return openBelow;
+    case "O":
+      return openAbove;
+    case "p":
+      return pasteAfter;
+    case "u":
+      return undo;
+    case "U":
+      return redo;
+    case "v":
+      return toggleVisualMode;
+    case "w":
+      return moveNextWordStart;
+    case "x":
+      return selectLineBelow;
+    case "y":
+      return yankSelection;
+    default:
+      return null;
+  }
+}
+
+function commandForVisualMode(key: string): Command | null {
+  switch (key) {
+    case "%":
+      return selectAll;
+    case "B":
+      return movePrevLongWordStart;
+    case "E":
+      return moveNextLongWordEnd;
+    case "Escape":
+      return enterNormalMode;
+    case "End":
+      return gotoLineEnd;
+    case "Home":
+      return gotoLineStart;
+    case "PageDown":
+      return pageDown;
+    case "PageUp":
+      return pageUp;
+    case "W":
+      return moveNextLongWordStart;
+    case "ArrowLeft":
+    case "h":
+      return moveLeft;
+    case "ArrowRight":
+    case "l":
+      return moveRight;
+    case "ArrowUp":
+    case "k":
+      return moveUp;
+    case "ArrowDown":
+    case "j":
+      return moveDown;
+    case "b":
+      return moveWordBackward;
+    case "c":
+      return changeSelection;
+    case "d":
+      return deleteSelection;
+    case "e":
+      return moveWordForward;
+    case "o":
+      return openBelow;
+    case "O":
+      return openAbove;
+    case "p":
+      return pasteAfter;
+    case "u":
+      return undo;
+    case "U":
+      return redo;
+    case "v":
+      return toggleVisualMode;
+    case "w":
+      return moveNextWordStart;
+    case "x":
+      return selectLineBelow;
+    case "y":
+      return yankSelection;
+    default:
+      return null;
+  }
+}
+
+function commandForInsertMode(key: string): Command | null {
+  switch (key) {
+    case "Escape":
+      return enterNormalMode;
+    case "Tab":
+      return insertText("  ");
+    case "ArrowLeft":
+      return moveLeft;
+    case "ArrowRight":
+      return moveRight;
+    case "ArrowUp":
+      return moveUp;
+    case "ArrowDown":
+      return moveDown;
+    case "Backspace":
+      return deleteBackwardIndentAware("  ");
+    case "Delete":
+      return deleteForward;
+    case "Enter":
+      return insertNewline;
+    default:
+      if (key.length === 1) {
+        return insertText(key);
+      }
+
+      return null;
+  }
+}
+
+function commandForGotoPrefix(key: string): Command | null {
+  switch (key) {
+    case "g":
+      return gotoFileStart;
+    case "b":
+      return gotoWindowBottom;
+    case "c":
+      return gotoWindowCenter;
+    case "e":
+      return gotoLastLine;
+    case "h":
+      return gotoLineStart;
+    case "j":
+      return moveDown;
+    case "k":
+      return moveUp;
+    case "l":
+      return gotoLineEnd;
+    case "s":
+      return gotoFirstNonWhitespace;
+    case "t":
+      return gotoWindowTop;
+    default:
+      return null;
+  }
+}
+
+function commandForBracketPrefix(direction: "[" | "]", key: string): Command | null {
+  if (key !== "p") {
+    return null;
+  }
+
+  return direction === "[" ? gotoPrevParagraph : gotoNextParagraph;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function transactionRequiresFullDocumentLanguageSync(transaction: Transaction): boolean {
@@ -817,12 +1108,47 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let viewportModelSoftWrap = presentation.viewport.softWrap;
   let inFlightVisibleHighlightRequestKey: string | null = null;
   let inFlightVisibleHighlightRequest: Promise<void> | null = null;
+  let pickerActions: readonly PickerActionItem[] = [];
+  let controller!: EditorController;
+  let searchPreviewState:
+    | null
+    | {
+        active: true;
+        direction: "forward" | "backward";
+        selection: SelectionSet;
+        mode: EditorState["mode"];
+        search: EditorSearchState;
+        startOffset: number;
+      } = null;
   let pendingDeferredPresentationUpdate = false;
   let deferredPresentationEffectType = "presentation.update";
 
   const refreshSearchMatchCache = (targetState: EditorState = state) => {
     searchMatchCache = collectSearchMatches(targetState.doc.text, presentation.search.query);
     presentation.search.matches = searchMatchCache;
+  };
+
+  const applySearchState = (next: Partial<EditorSearchState>, effectType = "search.update") => {
+    Object.assign(searchState, next);
+    refreshSearchMatchCache();
+    syncVisibleLanguageDecorations();
+    emitPresentationUpdate(effectType);
+  };
+
+  const applyRegisterValue = (name: string | null, value: string | null, effectType = "register.update") => {
+    const normalized = normalizeRegisterName(name);
+
+    if (!normalized) {
+      registers.unnamed = value;
+    } else if (normalized === "/") {
+      registers.search = value;
+    } else if (value === null) {
+      delete registers.named[normalized];
+    } else {
+      registers.named[normalized] = value;
+    }
+
+    emitPresentationUpdate(effectType);
   };
 
   const syncVisibleViewportRows = (): boolean => {
@@ -1150,8 +1476,1015 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   const getDiagnosticsSource = () => presentation.language.services.find((services) => services.diagnostics)?.diagnostics;
   const getCodeActionSource = () => presentation.language.services.find((services) => services.codeActions)?.codeActions;
   const getFormatter = () => presentation.language.services.find((services) => services.formatter)?.formatter;
+  const getCommentToggler = () => presentation.language.services.find((services) => services.comments)?.comments;
+  const getSyntaxSelector = () => presentation.language.services.find((services) => services.syntaxSelector)?.syntaxSelector;
+  const getSyntaxTextobjectProvider = () =>
+    presentation.language.services.find((services) => services.syntaxTextobjects)?.syntaxTextobjects;
+  const getSyntaxNavigationProvider = () =>
+    presentation.language.services.find((services) => services.syntaxNavigation)?.syntaxNavigation;
 
   const getActiveOffset = () => (state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state));
+
+  const setBottomMessage = (message: EditorBottomMessageState | null, effectType = "ui.bottom-message") => {
+    const current = presentation.ui.bottomMessage;
+
+    if (
+      current?.tone === message?.tone &&
+      current?.text === message?.text &&
+      (!!current === !!message)
+    ) {
+      return;
+    }
+
+    presentation.ui.bottomMessage = message;
+    emitPresentationUpdate(effectType);
+  };
+
+  const setCommandLineState = (next: EditorCommandLineState, effectType = "ui.command-line") => {
+    const current = presentation.ui.commandLine;
+    if (current.active === next.active && current.value === next.value && current.prompt === next.prompt) {
+      return;
+    }
+
+    presentation.ui.commandLine = next;
+    emitPresentationUpdate(effectType);
+  };
+
+  const setCommandCompletionIndex = (next: number, effectType = "ui.command-completion-index") => {
+    if (presentation.ui.commandCompletionIndex === next) {
+      return;
+    }
+
+    presentation.ui.commandCompletionIndex = next;
+    emitPresentationUpdate(effectType);
+  };
+
+  const setPendingActionState = (next: EditorPendingAction, effectType = "ui.pending-action") => {
+    if (presentation.ui.pendingAction === next) {
+      return;
+    }
+
+    presentation.ui.pendingAction = next;
+    emitPresentationUpdate(effectType);
+  };
+
+  const setPendingCountState = (next: string, effectType = "ui.pending-count") => {
+    if (presentation.ui.pendingCount === next) {
+      return;
+    }
+
+    presentation.ui.pendingCount = next;
+    emitPresentationUpdate(effectType);
+  };
+
+  const clearPendingCount = () => {
+    setPendingCountState("");
+  };
+
+  const readPendingCount = () => {
+    if (!presentation.ui.pendingCount) {
+      return 1;
+    }
+
+    const parsed = Number.parseInt(presentation.ui.pendingCount, 10);
+    presentation.ui.pendingCount = "";
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  };
+
+  const setStickyViewMode = (next: boolean, effectType = "ui.sticky-view-mode") => {
+    if (presentation.ui.stickyViewMode === next) {
+      return;
+    }
+
+    presentation.ui.stickyViewMode = next;
+    emitPresentationUpdate(effectType);
+  };
+
+  const setLastRepeatableMotion = (next: EditorRepeatableMotion | null, effectType = "ui.repeatable-motion") => {
+    presentation.ui.lastRepeatableMotion = next;
+    emitPresentationUpdate(effectType);
+  };
+
+  const setPreviewThemeName = (next: string | null, effectType = "ui.preview-theme") => {
+    if (presentation.ui.previewTheme === next) {
+      return;
+    }
+
+    presentation.ui.previewTheme = next;
+    emitPresentationUpdate(effectType);
+  };
+
+  const setPickerState = (
+    next: Omit<EditorPickerState, "items"> & { items: readonly PickerActionItem[] },
+    effectType = "ui.picker"
+  ) => {
+    const previous = presentation.ui.picker;
+    const itemsChanged =
+      previous.items.length !== next.items.length ||
+      previous.items.some(
+        (item, index) => item.label !== next.items[index]?.label || item.detail !== next.items[index]?.detail
+      );
+
+    if (
+      !itemsChanged &&
+      previous.active === next.active &&
+      previous.loading === next.loading &&
+      previous.title === next.title &&
+      previous.selectedIndex === next.selectedIndex &&
+      previous.error === next.error
+    ) {
+      return;
+    }
+
+    pickerActions = next.items;
+    presentation.ui.picker = {
+      active: next.active,
+      loading: next.loading,
+      title: next.title,
+      items: next.items.map((item, index) => ({
+        label: item.label,
+        detail: item.detail,
+        selected: index === next.selectedIndex
+      })),
+      selectedIndex: next.selectedIndex,
+      error: next.error
+    };
+    emitPresentationUpdate(effectType);
+  };
+
+  const closePicker = (effectType = "ui.picker.close") => {
+    setPickerState(
+      {
+        active: false,
+        loading: false,
+        title: "",
+        items: [],
+        selectedIndex: 0,
+        error: null
+      },
+      effectType
+    );
+  };
+
+  const clearFlashState = (effectType = "ui.flash") => {
+    if (!presentation.ui.flash.active) {
+      return;
+    }
+
+    presentation.ui.flash = {
+      active: false,
+      target: "",
+      input: "",
+      hints: []
+    };
+    emitPresentationUpdate(effectType);
+  };
+
+  const findSearchMatch = (
+    matches: readonly { from: number; to: number }[],
+    offset: number,
+    direction: "forward" | "backward",
+    reverse = false
+  ): { from: number; to: number } | null => {
+    const forward = reverse ? direction === "backward" : direction === "forward";
+
+    return forward
+      ? matches.find((entry) => entry.from > offset || (entry.from <= offset && offset < entry.to)) ?? matches[0] ?? null
+      : [...matches].reverse().find((entry) => entry.to - 1 < offset || (entry.from <= offset && offset < entry.to)) ??
+          matches[matches.length - 1] ??
+          null;
+  };
+
+  const applySelectionRange = (from: number, to: number) => {
+    if (state.mode === "visual") {
+      const anchor = state.selection.ranges[state.selection.primaryIndex]?.anchor ?? from;
+      dispatch({
+        selection: createSelection(anchor, Math.max(from, to - 1)),
+        mode: "visual"
+      });
+      return;
+    }
+
+    dispatch({
+      selection: createSelection(from, Math.max(from, to - 1)),
+      mode: "normal"
+    });
+  };
+
+  const restoreSearchPreview = () => {
+    if (!searchPreviewState?.active) {
+      searchPreviewState = null;
+      return;
+    }
+
+    applySearchState(searchPreviewState.search, "search.restore");
+    dispatch({
+      selection: searchPreviewState.selection,
+      mode: searchPreviewState.mode
+    });
+    searchPreviewState = null;
+  };
+
+  const runSearch = (
+    query: string,
+    direction: "forward" | "backward",
+    reverse = false,
+    startOffset?: number
+  ): boolean => {
+    const previousSearch = { ...searchState };
+    applySearchState(
+      {
+        query,
+        direction,
+        lastMatch: null
+      },
+      "search.update"
+    );
+
+    if (presentation.search.matches.length === 0) {
+      applySearchState(previousSearch, "search.restore");
+      setBottomMessage({ tone: "warning", text: `No matches for ${query}` });
+      return false;
+    }
+
+    const offset = startOffset ?? getActiveOffset();
+    const match = findSearchMatch(presentation.search.matches, offset, direction, reverse);
+
+    if (!match) {
+      applySearchState(previousSearch, "search.restore");
+      return false;
+    }
+
+    applySearchState({
+      query,
+      direction,
+      lastMatch: match
+    }, "search.match");
+    applyRegisterValue("/", query, "register.search");
+    applySelectionRange(match.from, match.to);
+    revealSelectionWithinViewport();
+    syncVisibleViewportRows();
+    syncVisibleLanguageDecorations();
+    ensureVisibleHighlightCoverage();
+    setBottomMessage(null);
+    return true;
+  };
+
+  const repeatSearch = (reverseAgainstDirection = false): boolean => {
+    if (!searchState.query) {
+      setBottomMessage({ tone: "warning", text: "No active search" });
+      return false;
+    }
+
+    const baseOffset = searchState.lastMatch
+      ? reverseAgainstDirection
+        ? searchState.lastMatch.from - 1
+        : searchState.lastMatch.to
+      : undefined;
+
+    return runSearch(searchState.query, searchState.direction, reverseAgainstDirection, baseOffset);
+  };
+
+  const dispatchOffsetSelection = (targetOffset: number, preferredColumn: number | null): boolean => {
+    if (state.mode === "insert") {
+      dispatch({
+        selection: createSelection(targetOffset, targetOffset, preferredColumn)
+      });
+      return true;
+    }
+
+    if (state.mode === "visual") {
+      const anchor = state.selection.ranges[state.selection.primaryIndex]?.anchor ?? targetOffset;
+      dispatch({
+        selection: createSelection(anchor, targetOffset, preferredColumn),
+        mode: "visual"
+      });
+      return true;
+    }
+
+    dispatch({
+      selection: createCharacterSelection(state.doc, targetOffset, preferredColumn)
+    });
+    return true;
+  };
+
+  const getVisualRow = (visualRowIndex: number): EditorVisualRow => {
+    return presentation.viewport.visualRows[Math.max(0, Math.min(presentation.viewport.visualRows.length - 1, visualRowIndex))] ?? {
+      docLine: 0,
+      visualRowIndex: 0,
+      segmentStart: 0,
+      segmentEnd: 0,
+      startColumn: 0,
+      isContinuation: false,
+      isLastSegment: true
+    };
+  };
+
+  const getVisibleLineCount = () => Math.max(1, presentation.viewport.visibleVisualRows.length || presentation.viewport.visibleRowCapacity);
+
+  const moveByVisualRows = (delta: number): boolean => {
+    rebuildViewportModel();
+    const activeOffset = getActiveOffset();
+    const current = getVisualRowForOffset(
+      state,
+      presentation.viewport.visualRows,
+      presentation.viewport.lineVisualRanges,
+      activeOffset,
+      presentation.viewport.softWrap,
+      presentation.viewport.wrapColumns
+    );
+    const preferredColumn = state.selection.ranges[state.selection.primaryIndex]?.preferredColumn ?? current.column;
+    const targetRowIndex = Math.max(0, Math.min(presentation.viewport.visualRows.length - 1, current.rowIndex + delta));
+    const targetRow = getVisualRow(targetRowIndex);
+    const segmentLength = targetRow.segmentEnd - targetRow.segmentStart;
+    const maxColumn = state.mode === "insert" ? segmentLength : Math.max(0, segmentLength - 1);
+    const targetColumn = Math.max(0, Math.min(preferredColumn, maxColumn));
+    const targetOffset = segmentLength === 0 ? targetRow.segmentStart : targetRow.segmentStart + targetColumn;
+    return dispatchOffsetSelection(targetOffset, preferredColumn);
+  };
+
+  const gotoVisibleRow = (position: "top" | "center" | "bottom"): boolean => {
+    rebuildViewportModel();
+    const rows = presentation.viewport.visibleVisualRows;
+    const targetRow =
+      rows.length === 0
+        ? getVisualRow(0)
+        : position === "top"
+          ? rows[0]
+          : position === "bottom"
+            ? rows[rows.length - 1]
+            : rows[Math.floor(rows.length / 2)] ?? rows[0];
+    return dispatchOffsetSelection(targetRow.segmentStart, 0);
+  };
+
+  const restoreJump = (entry: EditorJumpEntry | null): boolean => {
+    if (!entry) {
+      return false;
+    }
+
+    dispatch({
+      selection: entry.selection,
+      mode: entry.mode
+    });
+    revealSelectionWithinViewport();
+    syncVisibleViewportRows();
+    syncVisibleLanguageDecorations();
+    return true;
+  };
+
+  const primeRegisterForPaste = () => {
+    const selected = registers.selected;
+    registers.selected = null;
+    if (!selected) {
+      return;
+    }
+
+    const value = controller.getRegister(selected);
+    dispatch({
+      yankBuffer: value
+    });
+  };
+
+  const executeEditorCommand = (command: Command): boolean => {
+    setBottomMessage(null);
+    clearFlashState("flash.clear");
+    closePicker("ui.picker.close");
+    const selectedRegister = registers.selected;
+
+    if (command === pasteAfter) {
+      primeRegisterForPaste();
+    }
+
+    if (presentation.viewport.softWrap) {
+      if (command === moveUp) {
+        return moveByVisualRows(-1);
+      }
+
+      if (command === moveDown) {
+        return moveByVisualRows(1);
+      }
+
+      if (command === pageUp) {
+        return moveByVisualRows(-(Math.max(1, getVisibleLineCount() - 1)));
+      }
+
+      if (command === pageDown) {
+        return moveByVisualRows(Math.max(1, getVisibleLineCount() - 1));
+      }
+
+      if (command === halfPageUp) {
+        return moveByVisualRows(-Math.max(1, Math.floor(getVisibleLineCount() / 2)));
+      }
+
+      if (command === halfPageDown) {
+        return moveByVisualRows(Math.max(1, Math.floor(getVisibleLineCount() / 2)));
+      }
+
+      if (command === gotoWindowTop) {
+        return gotoVisibleRow("top");
+      }
+
+      if (command === gotoWindowCenter) {
+        return gotoVisibleRow("center");
+      }
+
+      if (command === gotoWindowBottom) {
+        return gotoVisibleRow("bottom");
+      }
+    }
+
+    const viewport = getVisibleLineViewport();
+    const didRun = command(state, dispatch, {
+      history: historyControls,
+      viewport: {
+        fromLine: viewport.fromLine,
+        toLine: viewport.toLine,
+        visibleLineCount: Math.max(1, viewport.toLine - viewport.fromLine + 1)
+      }
+    });
+
+    if (didRun && [yankSelection, deleteSelection, changeSelection].includes(command)) {
+      if (selectedRegister) {
+        controller.setRegister(selectedRegister, controller.getState().yankBuffer);
+      }
+      controller.selectRegister(null);
+    }
+
+    return didRun;
+  };
+
+  const executeCommandWithCount = async (
+    command: Command,
+    options: EditorKeyInputOptions = {}
+  ): Promise<boolean> => {
+    const count = readPendingCount();
+    const selectedRegister = controller.getSelectedRegister();
+
+    if (command === pasteAfter && selectedRegister === "+" && options.readClipboardText) {
+      const value = await options.readClipboardText();
+      controller.selectRegister(null);
+
+      if (!value) {
+        setBottomMessage({ tone: "warning", text: 'Register "+" is empty' });
+        return false;
+      }
+
+      dispatch({ yankBuffer: value });
+    }
+
+    let applied = false;
+    for (let index = 0; index < count; index += 1) {
+      const previousMode = state.mode;
+      const previousRevision = state.revision;
+      const didRun = executeEditorCommand(command);
+
+      if (!didRun) {
+        break;
+      }
+
+      applied = true;
+
+      if (state.mode !== previousMode || state.revision === previousRevision) {
+        break;
+      }
+    }
+
+    return applied;
+  };
+
+  const executeCommandWithCountSync = (command: Command): boolean => {
+    const count = readPendingCount();
+    let applied = false;
+
+    for (let index = 0; index < count; index += 1) {
+      const previousMode = state.mode;
+      const previousRevision = state.revision;
+      const didRun = executeEditorCommand(command);
+
+      if (!didRun) {
+        break;
+      }
+
+      applied = true;
+
+      if (state.mode !== previousMode || state.revision === previousRevision) {
+        break;
+      }
+    }
+
+    return applied;
+  };
+
+  const runRepeatableMotion = async (motion: EditorRepeatableMotion, options: EditorKeyInputOptions = {}): Promise<boolean> => {
+    switch (motion.kind) {
+      case "find":
+        return executeEditorCommand(
+          motion.variant === "f"
+            ? findNextChar(motion.target)
+            : motion.variant === "F"
+              ? findPrevChar(motion.target)
+              : motion.variant === "t"
+                ? findTillNextChar(motion.target)
+                : findTillPrevChar(motion.target)
+        );
+      case "matching-bracket":
+        return executeEditorCommand(gotoMatchingBracket);
+      case "paragraph":
+        return executeEditorCommand(motion.direction === "next" ? gotoNextParagraph : gotoPrevParagraph);
+      case "textobject":
+        return executeEditorCommand(selectTextobject(motion.mode, motion.object));
+      case "search":
+        return repeatSearch(motion.reverse);
+    }
+
+    return false;
+  };
+
+  const recordRepeatableMotion = (candidate: EditorRepeatableMotion, didChange: boolean) => {
+    if (didChange) {
+      setLastRepeatableMotion(candidate);
+    }
+  };
+
+  const searchFromSelection = (reverse = false): boolean => {
+    const selection = getSelectionOffsets(state);
+    const query = escapeRegex(state.doc.slice(selection.from, selection.to));
+
+    if (!query) {
+      return false;
+    }
+
+    return runSearch(query, reverse ? "backward" : "forward");
+  };
+
+  const navigateDiagnostic = (direction: "next" | "prev", extreme = false): boolean => {
+    if (presentation.language.diagnostics.length === 0) {
+      setBottomMessage({ tone: "warning", text: "No diagnostics" });
+      return false;
+    }
+
+    const activeOffset = getActiveOffset();
+    const ordered = [...presentation.language.diagnostics].sort((left, right) => left.from - right.from);
+    const target =
+      direction === "next"
+        ? extreme
+          ? ordered[ordered.length - 1]
+          : ordered.find((entry) => entry.from > activeOffset) ?? ordered[0]
+        : extreme
+          ? ordered[0]
+          : [...ordered].reverse().find((entry) => entry.to - 1 < activeOffset) ?? ordered[ordered.length - 1];
+
+    if (!target) {
+      return false;
+    }
+
+    pushJumpEntry(createJumpEntry(state));
+    applySelectionRange(target.from, target.to);
+    revealSelectionWithinViewport();
+    syncVisibleViewportRows();
+    syncVisibleLanguageDecorations();
+    emitPresentationUpdate("diagnostic.navigate");
+    return true;
+  };
+
+  const toggleComments = async (): Promise<boolean> => {
+    const toggler = getCommentToggler();
+
+    if (!toggler) {
+      setBottomMessage({ tone: "warning", text: "No comment provider" });
+      return false;
+    }
+
+    let changes: readonly TextChange[];
+
+    try {
+      changes = await toggler.toggleLineComments({
+        document: getSnapshot(),
+        selection: getSelectionOffsets(state)
+      });
+    } catch {
+      setBottomMessage({ tone: "error", text: "Comment toggle failed" });
+      return false;
+    }
+
+    if (changes.length === 0) {
+      setBottomMessage({ tone: "info", text: "Nothing to comment" });
+      return false;
+    }
+
+    dispatch({
+      changes,
+      effects: [{ type: "language.comment-toggle" }]
+    });
+    setBottomMessage({ tone: "info", text: "Toggled comments" });
+    return true;
+  };
+
+  const selectTextobjectWithFallback = async (mode: SyntaxTextobjectMode, object: string): Promise<boolean> => {
+    if (["w", "W", "p", "'", "\"", "`", "(", ")", "[", "]", "{", "}", "<", ">"].includes(object)) {
+      return executeEditorCommand(selectTextobject(mode, object));
+    }
+
+    const provider = getSyntaxTextobjectProvider();
+    if (!provider) {
+      return false;
+    }
+
+    const next = await provider.selectTextobject({
+      document: getSnapshot(),
+      selection: getSelectionOffsets(state),
+      activeOffset: getActiveCharacterOffset(state),
+      object,
+      mode
+    });
+
+    if (!next) {
+      return false;
+    }
+
+    applySelectionRange(next.from, next.to);
+    return true;
+  };
+
+  const navigateSyntax = async (direction: "next" | "prev", kind: string): Promise<boolean> => {
+    const provider = getSyntaxNavigationProvider();
+    const navigate = direction === "next" ? provider?.gotoNext : provider?.gotoPrev;
+
+    if (!navigate) {
+      return false;
+    }
+
+    const next = await navigate({
+      document: getSnapshot(),
+      activeOffset: getActiveCharacterOffset(state),
+      kind
+    });
+
+    if (!next) {
+      return false;
+    }
+
+    pushJumpEntry(createJumpEntry(state));
+    applySelectionRange(next.from, next.to);
+    revealSelectionWithinViewport();
+    syncVisibleViewportRows();
+    syncVisibleLanguageDecorations();
+    emitPresentationUpdate("syntax.navigate");
+    return true;
+  };
+
+  const previewSearch = (rawQuery: string, direction: "forward" | "backward") => {
+    if (!searchPreviewState?.active) {
+      return;
+    }
+
+    const query = rawQuery.trim();
+
+    if (!query) {
+      applySearchState(searchPreviewState.search, "search.restore");
+      dispatch({
+        selection: searchPreviewState.selection,
+        mode: searchPreviewState.mode
+      });
+      return;
+    }
+
+    applySearchState({
+      query,
+      direction,
+      lastMatch: null
+    }, "search.preview");
+
+    const matches = presentation.search.matches;
+
+    if (matches.length === 0) {
+      applySearchState(searchPreviewState.search, "search.restore");
+      dispatch({
+        selection: searchPreviewState.selection,
+        mode: searchPreviewState.mode
+      });
+      return;
+    }
+
+    const match = findSearchMatch(matches, searchPreviewState.startOffset, direction);
+    if (!match) {
+      applySearchState(searchPreviewState.search, "search.restore");
+      dispatch({
+        selection: searchPreviewState.selection,
+        mode: searchPreviewState.mode
+      });
+      return;
+    }
+
+    applySearchState({
+      query,
+      direction,
+      lastMatch: match
+    }, "search.preview");
+    applySelectionRange(match.from, match.to);
+    revealSelectionWithinViewport();
+    syncVisibleViewportRows();
+    syncVisibleLanguageDecorations();
+    ensureVisibleHighlightCoverage();
+  };
+
+  const getCommandCompletionItems = (themeNames: readonly string[] = []) => {
+    const commandLine = presentation.ui.commandLine;
+
+    if (!commandLine.active || commandLine.prompt !== ":") {
+      return [] as Array<{ label: string; detail?: string }>;
+    }
+
+    const rawValue = commandLine.value;
+    const trimmedStart = rawValue.trimStart();
+
+    if (!trimmedStart) {
+      return [
+        { label: "theme", detail: "switch theme" },
+        { label: "write", detail: "save document" },
+        { label: "format", detail: "format document" },
+        { label: "code-actions", detail: "show code actions" }
+      ];
+    }
+
+    const parts = trimmedStart.split(/\s+/);
+    const commandName = (parts[0] ?? "").toLowerCase();
+    const hasArgumentSpace = /\s$/.test(rawValue);
+    const commandArgument = trimmedStart.slice(parts[0]?.length ?? 0).trim();
+
+    if (commandName === "theme") {
+      return themeNames
+        .filter((entry) => entry.toLowerCase().includes(commandArgument.toLowerCase()))
+        .map((entry) => ({ label: entry, detail: "theme" }));
+    }
+
+    if (!hasArgumentSpace) {
+      return [
+        { label: "theme", detail: "switch theme" },
+        { label: "write", detail: "save document" },
+        { label: "format", detail: "format document" },
+        { label: "code-actions", detail: "show code actions" }
+      ].filter((entry) => entry.label.startsWith(commandName));
+    }
+
+    return [] as Array<{ label: string; detail?: string }>;
+  };
+
+  const syncCommandPreviewTheme = (themeNames: readonly string[] = []) => {
+    const items = getCommandCompletionItems(themeNames);
+    const rawValue = presentation.ui.commandLine.value.trimStart();
+    const activeCommandName = rawValue.split(/\s+/)[0]?.toLowerCase() ?? "";
+
+    if (
+      items.length === 0 ||
+      !presentation.ui.commandLine.active ||
+      presentation.ui.commandLine.prompt !== ":" ||
+      activeCommandName !== "theme"
+    ) {
+      if (presentation.ui.previewTheme !== null) {
+        presentation.ui.previewTheme = null;
+      }
+      if (presentation.ui.commandCompletionIndex !== 0 && items.length === 0) {
+        presentation.ui.commandCompletionIndex = 0;
+      }
+      return presentation.themeName;
+    }
+
+    const index = Math.max(0, Math.min(items.length - 1, presentation.ui.commandCompletionIndex));
+    presentation.ui.commandCompletionIndex = index;
+    const nextTheme = themeNames.find((entry) => entry === items[index]?.label) ?? items[index]?.label ?? null;
+    presentation.ui.previewTheme = nextTheme;
+    return nextTheme ?? presentation.themeName;
+  };
+
+  const applyCommandCompletion = async (themeNames: readonly string[] = []): Promise<EditorKeyInputResult | null> => {
+    const items = getCommandCompletionItems(themeNames);
+    if (items.length === 0) {
+      return null;
+    }
+
+    const selected = items[Math.max(0, Math.min(items.length - 1, presentation.ui.commandCompletionIndex))];
+    if (!selected) {
+      return null;
+    }
+
+    if (presentation.ui.commandLine.prompt !== ":") {
+      return null;
+    }
+
+    if (selected.detail === "theme" && presentation.ui.commandLine.value.trimStart().toLowerCase().startsWith("theme")) {
+      setCommandLineState({ ...presentation.ui.commandLine, value: `theme ${selected.label}` }, "ui.command-line.input");
+      const result = await controller.handleCommandLineKey("Enter", { themeNames });
+      return { ...result, themeName: result.themeName ?? presentation.themeName };
+    }
+
+    const nextValue =
+      selected.label === "theme" || selected.label === "write"
+        ? `${selected.label} `
+        : selected.label;
+    setCommandLineState({ ...presentation.ui.commandLine, value: nextValue }, "ui.command-line.input");
+    presentation.ui.commandCompletionIndex = 0;
+    const themeName = syncCommandPreviewTheme(themeNames);
+    emitPresentationUpdate("ui.command-line.completion");
+    return { handled: true, themeName };
+  };
+
+  const hasRunnableCommandLineValue = (rawValue: string, themeNames: readonly string[] = []): boolean => {
+    const trimmed = rawValue.trim();
+
+    if (!trimmed) {
+      return false;
+    }
+
+    const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
+    const value = commandName.toLowerCase();
+    const commandArgument = argumentParts.join(" ").trim();
+
+    if (["format", "fmt", "w", "write", "code-actions", "codeaction", "ca", "q", "quit"].includes(value)) {
+      return true;
+    }
+
+    if (value !== "theme") {
+      return false;
+    }
+
+    if (!commandArgument) {
+      return true;
+    }
+
+    const normalizedArgument = commandArgument.toLowerCase();
+    return themeNames.some(
+      (entry) => entry.toLowerCase() === normalizedArgument || entry.toLowerCase().startsWith(normalizedArgument)
+    );
+  };
+
+  const openDiagnosticsPicker = () => {
+    const items = presentation.language.diagnostics.map((entry) => {
+      const position = state.doc.positionAt(entry.from);
+      const lineText = state.doc.lineAt(position.line).text.trim();
+      return {
+        label: `${position.line + 1}:${position.column + 1} ${entry.message}`,
+        detail: lineText,
+        run: () => {
+          pushJumpEntry(createJumpEntry(state));
+          applySelectionRange(entry.from, entry.to);
+          revealSelectionWithinViewport();
+          syncVisibleViewportRows();
+          syncVisibleLanguageDecorations();
+          closePicker("ui.picker.close");
+        }
+      };
+    });
+
+    if (items.length === 0) {
+      setBottomMessage({ tone: "warning", text: "No diagnostics" });
+      return false;
+    }
+
+    setPickerState(
+      {
+        active: true,
+        loading: false,
+        title: "diagnostics",
+        items,
+        selectedIndex: 0,
+        error: null
+      },
+      "ui.picker"
+    );
+    return true;
+  };
+
+  const openJumpListPicker = () => {
+    const items = controller.getJumpList().map((entry, index) => {
+      const offset = getCursorOffset(entry.selection);
+      const position = state.doc.positionAt(offset);
+      const lineText = state.doc.lineAt(position.line).text.trim();
+      return {
+        label: `${index + 1}:${position.line + 1}:${position.column + 1}`,
+        detail: lineText,
+        run: () => {
+          restoreJump(entry);
+          closePicker("ui.picker.close");
+        }
+      };
+    });
+
+    if (items.length === 0) {
+      setBottomMessage({ tone: "warning", text: "Jump list is empty" });
+      return false;
+    }
+
+    setPickerState(
+      {
+        active: true,
+        loading: false,
+        title: "jumps",
+        items,
+        selectedIndex: Math.max(0, items.length - 1),
+        error: null
+      },
+      "ui.picker"
+    );
+    return true;
+  };
+
+  const loadCodeActions = async (): Promise<boolean> => {
+    setPickerState(
+      {
+        active: true,
+        loading: true,
+        title: "code actions",
+        items: [],
+        selectedIndex: 0,
+        error: null
+      },
+      "ui.picker"
+    );
+
+    let actions: readonly EditorCodeAction[];
+    try {
+      actions = await controller.requestCodeActions();
+    } catch {
+      closePicker("ui.picker.close");
+      setBottomMessage({ tone: "error", text: "Code actions request failed" });
+      return false;
+    }
+
+    const items = actions.map((action) => ({
+      label: action.title,
+      run: async () => {
+        const applied = await controller.applyCodeAction(action);
+        if (!applied) {
+          setBottomMessage({ tone: "warning", text: `No edits for ${action.title}` });
+          return;
+        }
+
+        closePicker("ui.picker.close");
+        setBottomMessage({ tone: "info", text: `Applied ${action.title}` });
+      }
+    }));
+
+    setPickerState(
+      {
+        active: true,
+        loading: false,
+        title: "code actions",
+        items,
+        selectedIndex: 0,
+        error: items.length === 0 ? "No code actions" : null
+      },
+      "ui.picker"
+    );
+
+    if (items.length === 0) {
+      closePicker("ui.picker.close");
+      setBottomMessage({ tone: "warning", text: "No code actions available" });
+    }
+
+    return items.length > 0;
+  };
+
+  const isFlashJumpOffset = (offset: number, target: string) => {
+    const character = state.doc.text[offset] ?? "";
+
+    if (!character || character !== target) {
+      return false;
+    }
+
+    return offset !== getActiveOffset();
+  };
+
+  const collectVisibleFlashHints = (target: string): readonly EditorFlashHintState[] => {
+    const offsets: number[] = [];
+
+    for (const visualRow of presentation.viewport.visibleVisualRows) {
+      for (let offset = visualRow.segmentStart; offset < visualRow.segmentEnd; offset += 1) {
+        if (isFlashJumpOffset(offset, target)) {
+          offsets.push(offset);
+        }
+      }
+    }
+
+    const labels = buildFlashLabels(target, offsets.length);
+    return offsets.map((offset, index) => ({
+      offset,
+      label: labels[index] ?? ""
+    }));
+  };
+
+  const applyFlashJump = (targetOffset: number) => {
+    clearFlashState("flash.clear");
+    const targetPosition = state.doc.positionAt(targetOffset);
+    dispatch({
+      selection:
+        state.mode === "insert"
+          ? createSelection(targetOffset, targetOffset, targetPosition.column)
+          : state.mode === "visual"
+            ? createSelection(state.selection.ranges[state.selection.primaryIndex]?.anchor ?? targetOffset, targetOffset, targetPosition.column)
+            : createCharacterSelection(state.doc, targetOffset, targetPosition.column)
+    });
+  };
 
   const hasMissingHighlightCoverage = (viewport: EditorLineRange): boolean => {
     for (let lineIndex = viewport.fromLine; lineIndex <= viewport.toLine; lineIndex += 1) {
@@ -1620,7 +2953,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   rebuildViewportModel();
   syncVisibleLanguageDecorations();
 
-  return {
+  controller = {
     getState() {
       return state;
     },
@@ -1670,21 +3003,20 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       return searchState;
     },
     setSearchState(next) {
-      Object.assign(searchState, next);
+      applySearchState(next, "search.update");
       if (typeof next.query === "string") {
         registers.search = next.query;
       }
-      refreshSearchMatchCache();
-      syncVisibleLanguageDecorations();
-      emitPresentationUpdate("search.update");
     },
     clearSearchState() {
-      searchState.query = "";
-      searchState.direction = "forward";
-      searchState.lastMatch = null;
-      refreshSearchMatchCache();
-      syncVisibleLanguageDecorations();
-      emitPresentationUpdate("search.clear");
+      applySearchState(
+        {
+          query: "",
+          direction: "forward",
+          lastMatch: null
+        },
+        "search.clear"
+      );
     },
     pushJump() {
       const pushed = pushJumpEntry(createJumpEntry(state));
@@ -1738,20 +3070,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       return registers.named[normalized] ?? null;
     },
     setRegister(name, value) {
-      const normalized = normalizeRegisterName(name);
-      if (!normalized || normalized === "\"") {
-        registers.unnamed = value;
-        return;
-      }
-      if (normalized === "/") {
-        registers.search = value;
-        return;
-      }
-      if (value === null) {
-        delete registers.named[normalized];
-      } else {
-        registers.named[normalized] = value;
-      }
+      applyRegisterValue(name, value, "register.update");
     },
     selectRegister(name) {
       registers.selected = normalizeRegisterName(name);
@@ -1886,6 +3205,804 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       presentation.themeName = themeName;
       emitPresentationUpdate("presentation.theme-name");
     },
+    async handleKeyInput(input, options = {}) {
+      const key = input.key;
+      const ctrl = !!input.ctrl;
+      const alt = !!input.alt;
+      const meta = !!input.meta;
+      const shift = !!input.shift;
+
+      if (presentation.ui.flash.active || presentation.ui.pendingAction?.kind === "flash-target") {
+        const handled = controller.handleFlashKey(key);
+        if (handled) {
+          return { handled: true };
+        }
+      }
+
+      if (presentation.ui.picker.active) {
+        if (key === "Escape") {
+          closePicker("ui.picker.close");
+          return { handled: true };
+        }
+
+        if (key === "ArrowLeft" || key === "h" || key === "ArrowUp" || key === "k") {
+          if (presentation.ui.picker.items.length > 0) {
+            setPickerState(
+              {
+                active: true,
+                loading: presentation.ui.picker.loading,
+                title: presentation.ui.picker.title,
+                items: pickerActions,
+                selectedIndex: Math.max(0, presentation.ui.picker.selectedIndex - 1),
+                error: presentation.ui.picker.error
+              },
+              "ui.picker"
+            );
+          }
+          return { handled: true };
+        }
+
+        if (key === "ArrowRight" || key === "l" || key === "ArrowDown" || key === "j") {
+          if (presentation.ui.picker.items.length > 0) {
+            setPickerState(
+              {
+                active: true,
+                loading: presentation.ui.picker.loading,
+                title: presentation.ui.picker.title,
+                items: pickerActions,
+                selectedIndex: Math.min(presentation.ui.picker.items.length - 1, presentation.ui.picker.selectedIndex + 1),
+                error: presentation.ui.picker.error
+              },
+              "ui.picker"
+            );
+          }
+          return { handled: true };
+        }
+
+        if (key === "Enter") {
+          const item = pickerActions[presentation.ui.picker.selectedIndex];
+          if (item) {
+            await item.run();
+          } else {
+            closePicker("ui.picker.close");
+          }
+          return { handled: true };
+        }
+
+        if (/^[1-9]$/.test(key)) {
+          const item = pickerActions[Number(key) - 1];
+          if (item) {
+            await item.run();
+          }
+          return { handled: true };
+        }
+
+        return { handled: false };
+      }
+
+      if (presentation.ui.commandLine.active) {
+        if (key === "Tab") {
+          const completionItems = getCommandCompletionItems(options.themeNames ?? []);
+          if (completionItems.length === 0) {
+            return { handled: false };
+          }
+
+          const delta = shift ? -1 : 1;
+          presentation.ui.commandCompletionIndex =
+            (presentation.ui.commandCompletionIndex + delta + completionItems.length) % completionItems.length;
+          const themeName = syncCommandPreviewTheme(options.themeNames ?? []);
+          emitPresentationUpdate("ui.command-line.completion");
+          return { handled: true, themeName };
+        }
+
+      if (key === "Enter") {
+        const completionItems = getCommandCompletionItems(options.themeNames ?? []);
+        const nextValue = presentation.ui.commandLine.value;
+        const selectedCompletion = completionItems[presentation.ui.commandCompletionIndex];
+        const shouldTakeThemeCompletion =
+            !!selectedCompletion &&
+            presentation.ui.commandLine.prompt === ":" &&
+            /^\s*theme\s+$/i.test(nextValue);
+
+        if (shouldTakeThemeCompletion) {
+          const result = await applyCommandCompletion(options.themeNames ?? []);
+          return result ?? { handled: true, themeName: presentation.themeName };
+        }
+
+        if (selectedCompletion && !hasRunnableCommandLineValue(nextValue, options.themeNames ?? [])) {
+          const result = await applyCommandCompletion(options.themeNames ?? []);
+          return result ?? { handled: true, themeName: presentation.themeName };
+        }
+
+          const result = await controller.handleCommandLineKey("Enter", options);
+          return { ...result, themeName: result.themeName ?? presentation.themeName };
+        }
+
+        const result = await controller.handleCommandLineKey(key, options);
+        if (key.length === 1 || key === "Backspace" || key === "Escape") {
+          const themeName = syncCommandPreviewTheme(options.themeNames ?? []);
+          if (result.handled) {
+            return { ...result, themeName: result.themeName ?? themeName };
+          }
+        }
+        return result;
+      }
+
+      if (presentation.ui.hover.active && key === "Escape") {
+        presentation.ui.hover = {
+          ...presentation.ui.hover,
+          active: false,
+          pinned: false,
+          offset: null,
+          content: ""
+        };
+        emitPresentationUpdate("ui.hover.clear");
+        clearPendingCount();
+        return { handled: true };
+      }
+
+      if (presentation.ui.stickyViewMode && (state.mode === "normal" || state.mode === "visual")) {
+        if (key === "Escape") {
+          setStickyViewMode(false);
+          return { handled: true };
+        }
+
+        if (key === "j" || key === "ArrowDown") {
+          controller.scrollViewportBy(1);
+          return { handled: true };
+        }
+
+        if (key === "k" || key === "ArrowUp") {
+          controller.scrollViewportBy(-1);
+          return { handled: true };
+        }
+      }
+
+      if (alt && !meta && !ctrl && state.mode !== "insert" && (key === "ArrowUp" || key === "ArrowDown")) {
+        const syntaxSelector = getSyntaxSelector();
+        const syntaxSelection =
+          key === "ArrowUp"
+            ? syntaxSelector?.expandSelection?.bind(syntaxSelector)
+            : syntaxSelector?.shrinkSelection?.bind(syntaxSelector);
+
+        if (!syntaxSelection) {
+          return { handled: false };
+        }
+
+        const revision = state.revision;
+        const syntaxRevision = presentation.language.languageRevision;
+        const selection = getSelectionOffsets(state);
+        const activeOffset = getActiveCharacterOffset(state);
+        const nextSelection = await syntaxSelection(selection, activeOffset, syntaxRevision);
+        if (!nextSelection || state.revision !== revision || nextSelection.to <= nextSelection.from) {
+          return { handled: true };
+        }
+
+        dispatch({
+          selection: createSelection(nextSelection.from, Math.max(nextSelection.from, nextSelection.to - 1))
+        });
+        return { handled: true };
+      }
+
+      if (alt && !meta && !ctrl && state.mode !== "insert" && key === ".") {
+        if (!presentation.ui.lastRepeatableMotion) {
+          return { handled: false };
+        }
+
+        await runRepeatableMotion(presentation.ui.lastRepeatableMotion, options);
+        return { handled: true };
+      }
+
+      if (alt && !meta && !ctrl && state.mode !== "insert" && key === "*") {
+        searchFromSelection(true);
+        return { handled: true };
+      }
+
+      if (ctrl && !meta && !alt && state.mode === "insert" && key === "s") {
+        historyControls.checkpoint();
+        return { handled: true };
+      }
+
+      if (ctrl && !meta && !alt && state.mode === "insert" && key === "r") {
+        setPendingActionState({ kind: "register-select", insert: true });
+        return { handled: true };
+      }
+
+      if (ctrl && !meta && !alt && state.mode !== "insert" && key === "s") {
+        pushJumpEntry(createJumpEntry(state));
+        setBottomMessage({ tone: "info", text: "Saved jump" });
+        return { handled: true };
+      }
+
+      if (ctrl && !meta && !alt && state.mode !== "insert" && key === "o") {
+        restoreJump(controller.jumpBackward());
+        return { handled: true };
+      }
+
+      if (ctrl && !meta && !alt && state.mode !== "insert" && key === "i") {
+        restoreJump(controller.jumpForward());
+        return { handled: true };
+      }
+
+      if (ctrl && !meta && !alt && (state.mode !== "insert" || presentation.ui.stickyViewMode) && ["b", "d", "f", "u"].includes(key)) {
+        if (presentation.ui.stickyViewMode) {
+          const delta =
+            key === "b"
+              ? -(Math.max(1, getVisibleLineCount() - 1))
+              : key === "f"
+                ? Math.max(1, getVisibleLineCount() - 1)
+                : key === "u"
+                  ? -Math.max(1, Math.floor(getVisibleLineCount() / 2))
+                  : Math.max(1, Math.floor(getVisibleLineCount() / 2));
+          controller.scrollViewportBy(delta);
+          return { handled: true };
+        }
+
+        const command = key === "b" ? pageUp : key === "f" ? pageDown : key === "u" ? halfPageUp : halfPageDown;
+        executeCommandWithCountSync(command);
+        return { handled: true };
+      }
+
+      if (meta || ctrl || alt) {
+        return { handled: false };
+      }
+
+      if (presentation.ui.pendingAction) {
+        const nextPending = presentation.ui.pendingAction;
+
+        if (key === "Escape") {
+          if (nextPending.kind === "flash-target") {
+            controller.handleFlashKey("Escape");
+          } else {
+            setPendingActionState(null);
+          }
+          clearPendingCount();
+          return { handled: true };
+        }
+
+        if (nextPending.kind !== "flash-target") {
+          setPendingActionState(null);
+        }
+
+        if (nextPending.kind === "g") {
+          if (key === "c") {
+            await toggleComments();
+            return { handled: true };
+          }
+
+          const chordCommand = commandForGotoPrefix(key);
+          if (chordCommand) {
+            executeCommandWithCountSync(chordCommand);
+            return { handled: true };
+          }
+        }
+
+        if (nextPending.kind === "[" || nextPending.kind === "]") {
+          if (key === "d" || key === "D") {
+            navigateDiagnostic(nextPending.kind === "]" ? "next" : "prev", key === "D");
+            return { handled: true };
+          }
+
+          if (["f", "t", "a", "c", "T", "g", "x"].includes(key)) {
+            await navigateSyntax(nextPending.kind === "]" ? "next" : "prev", key);
+            return { handled: true };
+          }
+
+          const chordCommand = commandForBracketPrefix(nextPending.kind, key);
+          if (chordCommand) {
+            const previousRevision = state.revision;
+            executeCommandWithCountSync(chordCommand);
+            recordRepeatableMotion(
+              { kind: "paragraph", direction: nextPending.kind === "]" ? "next" : "prev" },
+              state.revision !== previousRevision
+            );
+            return { handled: true };
+          }
+        }
+
+        if (nextPending.kind === "m") {
+          if (key === "m") {
+            const previousRevision = state.revision;
+            executeEditorCommand(gotoMatchingBracket);
+            recordRepeatableMotion({ kind: "matching-bracket" }, state.revision !== previousRevision);
+            return { handled: true };
+          }
+
+          if (key === "a" || key === "i") {
+            setPendingActionState({ kind: "textobject", mode: key === "a" ? "around" : "inside" });
+            return { handled: true };
+          }
+
+          if (key === "s") {
+            setPendingActionState({ kind: "surround-add" });
+            return { handled: true };
+          }
+
+          if (key === "d") {
+            setPendingActionState({ kind: "surround-delete" });
+            return { handled: true };
+          }
+
+          if (key === "r") {
+            setPendingActionState({ kind: "surround-replace-from" });
+            return { handled: true };
+          }
+        }
+
+        if (nextPending.kind === "space") {
+          if (key === "a") {
+            await loadCodeActions();
+            return { handled: true };
+          }
+
+          if (key === "d") {
+            openDiagnosticsPicker();
+            return { handled: true };
+          }
+
+          if (key === "j") {
+            openJumpListPicker();
+            return { handled: true };
+          }
+
+          if (key === "k") {
+            const hoverOffset = getActiveOffset();
+            const activeDiagnostic =
+              presentation.language.diagnostics.find((entry) => hoverOffset >= entry.from && hoverOffset < entry.to) ?? null;
+
+            if (activeDiagnostic) {
+              presentation.ui.hover = {
+                active: true,
+                pinned: true,
+                offset: activeDiagnostic.from,
+                content: activeDiagnostic.message,
+                source: activeDiagnostic.source,
+                tone: activeDiagnostic.severity === "error" ? "error" : activeDiagnostic.severity === "warning" ? "warning" : "info",
+                left: presentation.ui.hover.left,
+                top: presentation.ui.hover.top
+              };
+              emitPresentationUpdate("ui.hover");
+              return { handled: true };
+            }
+
+            const nextHover = await controller.requestHover(hoverOffset);
+            if (!nextHover || !nextHover.content.trim()) {
+              setBottomMessage({ tone: "info", text: "No hover information" });
+              return { handled: true };
+            }
+
+            presentation.ui.hover = {
+              active: true,
+              pinned: true,
+              offset: hoverOffset,
+              content: nextHover.content,
+              source: nextHover.source,
+              tone: "info",
+              left: presentation.ui.hover.left,
+              top: presentation.ui.hover.top
+            };
+            emitPresentationUpdate("ui.hover");
+            return { handled: true };
+          }
+        }
+
+        if (nextPending.kind === "find") {
+          const previousRevision = state.revision;
+          executeEditorCommand(
+            nextPending.variant === "f"
+              ? findNextChar(key)
+              : nextPending.variant === "F"
+                ? findPrevChar(key)
+                : nextPending.variant === "t"
+                  ? findTillNextChar(key)
+                  : findTillPrevChar(key)
+          );
+          recordRepeatableMotion(
+            { kind: "find", variant: nextPending.variant, target: key },
+            state.revision !== previousRevision
+          );
+          return { handled: true };
+        }
+
+        if (nextPending.kind === "textobject") {
+          const previousRevision = state.revision;
+          const didRun = await selectTextobjectWithFallback(nextPending.mode, key);
+          recordRepeatableMotion(
+            { kind: "textobject", mode: nextPending.mode, object: key },
+            didRun || state.revision !== previousRevision
+          );
+          return { handled: true };
+        }
+
+        if (nextPending.kind === "surround-add") {
+          executeEditorCommand(addSurround(key));
+          return { handled: true };
+        }
+
+        if (nextPending.kind === "surround-delete") {
+          executeEditorCommand(deleteSurround(key));
+          return { handled: true };
+        }
+
+        if (nextPending.kind === "surround-replace-from") {
+          setPendingActionState({ kind: "surround-replace-to", fromObject: key });
+          return { handled: true };
+        }
+
+        if (nextPending.kind === "surround-replace-to") {
+          executeEditorCommand(replaceSurround(nextPending.fromObject, key));
+          return { handled: true };
+        }
+
+        if (nextPending.kind === "register-select") {
+          if (nextPending.insert && state.mode === "insert") {
+            const value = key === "+" ? await options.readClipboardText?.() ?? null : controller.getRegister(key);
+            controller.selectRegister(null);
+
+            if (!value) {
+              setBottomMessage({ tone: "warning", text: `Register ${key} is empty` });
+              return { handled: true };
+            }
+
+            executeEditorCommand(insertText(value));
+          } else {
+            controller.selectRegister(key);
+            setBottomMessage({ tone: "info", text: `Register "${key}" selected` });
+          }
+          return { handled: true };
+        }
+
+        if (nextPending.kind === "z") {
+          if (key === "Escape") {
+            setStickyViewMode(false);
+            return { handled: true };
+          }
+
+          if (key === "z" || key === "c" || key === "m") {
+            controller.alignViewportToSelection("center");
+          } else if (key === "t") {
+            controller.alignViewportToSelection("top");
+          } else if (key === "b") {
+            controller.alignViewportToSelection("bottom");
+          } else if (key === "j") {
+            controller.scrollViewportBy(1);
+          } else if (key === "k") {
+            controller.scrollViewportBy(-1);
+          }
+
+          if (!nextPending.sticky) {
+            setStickyViewMode(false);
+          }
+          return { handled: true };
+        }
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === ":") {
+        clearPendingCount();
+        controller.openCommandLine(":");
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === "/") {
+        clearPendingCount();
+        controller.openCommandLine("/");
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === "?") {
+        clearPendingCount();
+        controller.openCommandLine("?");
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === "\"") {
+        setPendingActionState({ kind: "register-select", insert: false });
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && /^[0-9]$/.test(key) && !(presentation.ui.pendingCount === "" && key === "0")) {
+        setPendingCountState(`${presentation.ui.pendingCount}${key}`);
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === " ") {
+        setPendingActionState({ kind: "space" });
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === ",") {
+        controller.beginFlashTarget();
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === "z") {
+        setStickyViewMode(false);
+        setPendingActionState({ kind: "z", sticky: false });
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === "Z") {
+        setStickyViewMode(true);
+        setPendingActionState({ kind: "z", sticky: true });
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === "n") {
+        controller.repeatSearch(false);
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === "N") {
+        controller.repeatSearch(true);
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === "*") {
+        searchFromSelection(false);
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === "g") {
+        setPendingActionState({ kind: "g" });
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && (key === "[" || key === "]")) {
+        setPendingActionState({ kind: key });
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && key === "m") {
+        setPendingActionState({ kind: "m" });
+        return { handled: true };
+      }
+
+      if ((state.mode === "normal" || state.mode === "visual") && ["f", "F", "t", "T"].includes(key)) {
+        setPendingActionState({ kind: "find", variant: key as "f" | "F" | "t" | "T" });
+        return { handled: true };
+      }
+
+      const command =
+        state.mode === "normal"
+          ? commandForNormalMode(key)
+          : state.mode === "visual"
+            ? commandForVisualMode(key)
+            : commandForInsertMode(key);
+
+      if (!command) {
+        return { handled: false };
+      }
+
+      if (command === pasteAfter && controller.getSelectedRegister() === "+" && options.readClipboardText) {
+        await executeCommandWithCount(command, options);
+      } else {
+        executeCommandWithCountSync(command);
+      }
+      return { handled: true };
+    },
+    async handleTextInput(text, options = {}) {
+      let handled = false;
+      let themeName: string | null | undefined;
+      let quit = false;
+
+      for (const char of text) {
+        const result = await controller.handleKeyInput({ key: char, text: char }, options);
+        handled = handled || result.handled;
+        if (result.themeName !== undefined) {
+          themeName = result.themeName;
+        }
+        quit = quit || !!result.quit;
+      }
+
+      return { handled, themeName, quit };
+    },
+    openCommandLine(prompt) {
+      if (prompt === "/" || prompt === "?") {
+        searchPreviewState = {
+          active: true,
+          direction: prompt === "/" ? "forward" : "backward",
+          selection: state.selection,
+          mode: state.mode,
+          search: { ...searchState },
+          startOffset: getActiveOffset()
+        };
+      } else {
+        searchPreviewState = null;
+      }
+
+      presentation.ui.pendingAction = null;
+      presentation.ui.commandCompletionIndex = 0;
+      presentation.ui.previewTheme = null;
+      setCommandLineState({ active: true, value: "", prompt }, "ui.command-line.open");
+    },
+    async handleCommandLineKey(key, options = {}) {
+      const commandLine = presentation.ui.commandLine;
+
+      if (!commandLine.active) {
+        return { handled: false };
+      }
+
+      if (key === "Escape") {
+        restoreSearchPreview();
+        searchPreviewState = null;
+        presentation.ui.commandCompletionIndex = 0;
+        presentation.ui.previewTheme = null;
+        setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.close");
+        return { handled: true };
+      }
+
+      if (key === "Backspace") {
+        const nextValue = commandLine.value.slice(0, -1);
+        setCommandLineState({ ...commandLine, value: nextValue }, "ui.command-line.input");
+        if (commandLine.prompt === "/" || commandLine.prompt === "?") {
+          previewSearch(nextValue, commandLine.prompt === "/" ? "forward" : "backward");
+        }
+        return { handled: true };
+      }
+
+      if (key === "Enter") {
+        const trimmed = commandLine.value.trim();
+        const prompt = commandLine.prompt;
+        presentation.ui.commandCompletionIndex = 0;
+        presentation.ui.previewTheme = null;
+        setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.commit");
+
+        if (prompt === "/" || prompt === "?") {
+          searchPreviewState = null;
+          if (!trimmed) {
+            return { handled: true };
+          }
+          runSearch(trimmed, prompt === "/" ? "forward" : "backward");
+          return { handled: true };
+        }
+
+        if (!trimmed) {
+          return { handled: true };
+        }
+
+        const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
+        const value = commandName.toLowerCase();
+        const commandArgument = argumentParts.join(" ").trim();
+
+        if (value === "q" || value === "quit") {
+          return { handled: true, quit: true };
+        }
+
+        if (value === "format" || value === "fmt") {
+          const didFormat = await controller.formatDocument();
+          setBottomMessage({ tone: "info", text: didFormat ? "Formatted document" : "Already formatted" });
+          return { handled: true };
+        }
+
+        if (value === "w" || value === "write") {
+          const targetPath = commandArgument || presentation.filePath;
+          const didSave = await controller.saveDocument(targetPath);
+          setBottomMessage({
+            tone: didSave ? "info" : "error",
+            text: didSave ? `Wrote ${targetPath}` : `Write failed for ${targetPath}`
+          });
+          return { handled: true };
+        }
+
+        if (value === "theme") {
+          if (!commandArgument) {
+            setBottomMessage({ tone: "warning", text: "Theme name required" });
+            return { handled: true };
+          }
+
+          const normalizedArgument = commandArgument.toLowerCase();
+          const matchedTheme =
+            options.themeNames?.find((entry) => entry.toLowerCase() === normalizedArgument) ??
+            options.themeNames?.find((entry) => entry.toLowerCase().startsWith(normalizedArgument)) ??
+            commandArgument;
+
+          if (!matchedTheme) {
+            setBottomMessage({ tone: "warning", text: `Unknown theme: ${commandArgument}` });
+            return { handled: true };
+          }
+
+          presentation.themeName = matchedTheme;
+          setBottomMessage({ tone: "info", text: `Theme ${matchedTheme}` });
+          emitPresentationUpdate("presentation.theme-name");
+          return { handled: true, themeName: matchedTheme };
+        }
+
+        if (value === "code-actions" || value === "codeaction" || value === "ca") {
+          await loadCodeActions();
+          return { handled: true };
+        }
+
+        setBottomMessage({ tone: "warning", text: `Unknown command: ${trimmed}` });
+        return { handled: true };
+      }
+
+      if (key.length === 1) {
+        const nextValue = `${commandLine.value}${key}`;
+        setCommandLineState({ ...commandLine, value: nextValue }, "ui.command-line.input");
+        if (commandLine.prompt === "/" || commandLine.prompt === "?") {
+          previewSearch(nextValue, commandLine.prompt === "/" ? "forward" : "backward");
+        }
+        return { handled: true };
+      }
+
+      return { handled: false };
+    },
+    repeatSearch(reverseAgainstDirection = false) {
+      return repeatSearch(reverseAgainstDirection);
+    },
+    beginFlashTarget() {
+      presentation.ui.pendingAction = { kind: "flash-target" };
+      emitPresentationUpdate("flash.pending");
+    },
+    handleFlashKey(key) {
+      if (presentation.ui.flash.active) {
+        if (key === "Escape" || key === "Backspace") {
+          clearFlashState("flash.cancel");
+          return true;
+        }
+
+        if (!/^[a-z]$/i.test(key)) {
+          clearFlashState("flash.cancel");
+          return true;
+        }
+
+        const matchingHints = presentation.ui.flash.hints.filter((hint) => hint.label === key.toLowerCase());
+
+        if (matchingHints.length === 0) {
+          return true;
+        }
+
+        if (matchingHints.length === 1) {
+          applyFlashJump(matchingHints[0]!.offset);
+          return true;
+        }
+
+        const narrowedLabels = buildFlashLabels(key.toLowerCase(), matchingHints.length);
+        presentation.ui.flash = {
+          ...presentation.ui.flash,
+          input: `${presentation.ui.flash.input}${key.toLowerCase()}`,
+          hints: matchingHints.map((hint, index) => ({
+            offset: hint.offset,
+            label: narrowedLabels[index] ?? narrowedLabels[0] ?? presentation.ui.flash.target
+          }))
+        };
+        emitPresentationUpdate("flash.narrow");
+        return true;
+      }
+
+      if (presentation.ui.pendingAction?.kind !== "flash-target") {
+        return false;
+      }
+
+      presentation.ui.pendingAction = null;
+
+      if (key === "Escape") {
+        emitPresentationUpdate("flash.cancel");
+        return true;
+      }
+
+      if (!/^[a-z]$/i.test(key)) {
+        emitPresentationUpdate("flash.cancel");
+        return false;
+      }
+
+      const hints = collectVisibleFlashHints(key);
+
+      if (hints.length === 0) {
+        setBottomMessage({ tone: "warning", text: `No visible '${key}' targets` });
+        return true;
+      }
+
+      presentation.ui.flash = {
+        active: true,
+        target: key,
+        input: "",
+        hints
+      };
+      setBottomMessage(null);
+      emitPresentationUpdate("flash.start");
+      return true;
+    },
     async refreshLanguage(options = {}) {
       await syncLanguage(options);
     },
@@ -1993,4 +4110,6 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         .catch(() => false);
     }
   };
+
+  return controller;
 }

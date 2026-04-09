@@ -1661,6 +1661,18 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     pendingAction = uiState.pendingAction;
     pendingCount = uiState.pendingCount;
     lastRepeatableMotion = uiState.lastRepeatableMotion;
+    pickerState = {
+      active: uiState.picker.active,
+      loading: uiState.picker.loading,
+      title: uiState.picker.title,
+      items: uiState.picker.items.map((item) => ({
+        label: item.label,
+        detail: item.detail,
+        run() {}
+      })),
+      selectedIndex: uiState.picker.selectedIndex,
+      error: uiState.picker.error
+    };
     commandCompletionIndex = uiState.commandCompletionIndex;
     previewTheme = uiState.previewTheme
       ? availableCommandThemes.find((entry) => entry.name === uiState.previewTheme) ?? null
@@ -2974,11 +2986,13 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     state = nextState;
     syncPresentationMirrors();
+    syncRenderedThemeFromPresentation();
 
     if (isPresentationOnlyUpdate) {
       renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
+      patchTooltip();
       return;
     }
 
@@ -2998,6 +3012,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       renderVisibleRows(true);
       patchStatus();
       patchBottomRow();
+      patchTooltip();
       return;
     }
 
@@ -3010,6 +3025,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     if (dirtyLines && tryPatchSimpleCursorMove(previousState, nextState)) {
       patchStatus();
+      patchTooltip();
       return;
     }
 
@@ -3018,6 +3034,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       if (update.modeChanged) {
         patchBottomRow();
       }
+      patchTooltip();
       return;
     }
 
@@ -3026,6 +3043,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     if (update.modeChanged) {
       patchBottomRow();
     }
+    patchTooltip();
   }
 
   function openCommandLine(prompt: ":" | "/" | "?" = ":"): void {
@@ -3053,6 +3071,30 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     applyThemeVariables(root, nextTheme);
     renderVisibleRows(true);
     patchStatus();
+  }
+
+  function syncRenderedThemeFromPresentation(): void {
+    const previewName = presentation.ui.previewTheme;
+    if (previewName) {
+      const nextTheme = availableCommandThemes.find((entry) => entry.name === previewName);
+      if (nextTheme) {
+        applyThemeVariables(root, nextTheme);
+        return;
+      }
+    }
+
+    const committedName = presentation.themeName;
+    if (committedName) {
+      const nextTheme = availableCommandThemes.find((entry) => entry.name === committedName);
+      if (nextTheme) {
+        theme = nextTheme;
+        availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
+        applyThemeVariables(root, nextTheme);
+        return;
+      }
+    }
+
+    applyThemeVariables(root, theme);
   }
 
   function previewThemeByName(name: string | null): void {
@@ -4286,680 +4328,102 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     syncViewportMirrors();
   }
 
+  function keyboardInputForEvent(event: KeyboardEvent) {
+    return {
+      key: event.key,
+      ctrl: event.ctrlKey,
+      alt: event.altKey,
+      meta: event.metaKey,
+      shift: event.shiftKey,
+      text: event.key.length === 1 ? event.key : undefined,
+      source: "dom" as const
+    };
+  }
+
+  function isControllerHandledModifierKey(event: KeyboardEvent): boolean {
+    if (event.metaKey && !event.ctrlKey && !event.altKey) {
+      return false;
+    }
+
+    if (event.altKey && !event.ctrlKey && !event.metaKey) {
+      return (
+        state.mode !== "insert" &&
+        (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "." || event.key === "*")
+      );
+    }
+
+    if (event.ctrlKey && !event.metaKey && !event.altKey) {
+      return ["s", "r", "o", "i", "b", "d", "f", "u"].includes(event.key);
+    }
+
+    return false;
+  }
+
+  function syncKeyboardHoverAnchor(): void {
+    if (!hoverState.active || !hoverState.pinned) {
+      return;
+    }
+
+    if (hoverState.left !== 16 || hoverState.top !== 16) {
+      return;
+    }
+
+    const anchorElement = root.querySelector<HTMLElement>("[data-wx-editor-cursor='true']");
+    const anchorRect = anchorElement?.getBoundingClientRect() ?? root.getBoundingClientRect();
+    setHoverState({
+      ...hoverState,
+      ...getTooltipAnchorForRect(anchorRect)
+    });
+  }
+
+  async function forwardKeydownToController(event: KeyboardEvent): Promise<void> {
+    const result = await controller.handleKeyInput(keyboardInputForEvent(event), {
+      themeNames: availableCommandThemes.map((entry) => entry.name),
+      readClipboardText: readSystemClipboard
+    });
+
+    if (destroyed) {
+      return;
+    }
+
+    syncPresentationMirrors();
+    syncRenderedThemeFromPresentation();
+    syncKeyboardHoverAnchor();
+
+    if (result.themeName !== undefined) {
+      syncRenderedThemeFromPresentation();
+      patchBottomRow();
+    }
+  }
+
   function handleKeydown(event: KeyboardEvent): void {
-    if (flashState.active) {
-      const handled = handleFlashInput(event.key);
-
-      if (handled) {
-        event.preventDefault();
-        textarea.value = "";
-        return;
-      }
-    }
-
-    if (!commandLine.active && (state.mode === "normal" || state.mode === "visual") && event.key === "/") {
-      event.preventDefault();
-      textarea.value = "";
-      clearPendingCount();
-      openCommandLine("/");
-      return;
-    }
-
-    if (!commandLine.active && (state.mode === "normal" || state.mode === "visual") && event.key === "?") {
-      event.preventDefault();
-      textarea.value = "";
-      clearPendingCount();
-      openCommandLine("?");
-      return;
-    }
-
-    if (
-      event.altKey &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      state.mode !== "insert" &&
-      (event.key === "ArrowUp" || event.key === "ArrowDown")
-    ) {
-      const syntaxSelector = getSyntaxSelector();
-      const syntaxSelection =
-        event.key === "ArrowUp"
-          ? syntaxSelector?.expandSelection?.bind(syntaxSelector)
-          : syntaxSelector?.shrinkSelection?.bind(syntaxSelector);
-
-      if (syntaxSelection) {
-        const revision = state.revision;
-        const syntaxRevision = languageRevision;
-        const selection = getSelectionOffsets(state);
-        const activeOffset = getActiveCharacterOffset(state);
-
-        event.preventDefault();
-        void syntaxSelection(selection, activeOffset, syntaxRevision).then((nextSelection) => {
-          if (!nextSelection || destroyed || state.revision !== revision || nextSelection.to <= nextSelection.from) {
-            return;
-          }
-
-          controller.dispatch({
-            selection: selectionFromSyntaxRange(nextSelection.from, nextSelection.to)
-          });
-        });
-      }
-      return;
-    }
-
-    if (
-      event.altKey &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      state.mode !== "insert" &&
-      event.key === "."
-    ) {
-      if (!lastRepeatableMotion) {
-        return;
-      }
-
-      event.preventDefault();
-      textarea.value = "";
-      runRepeatableMotion(lastRepeatableMotion);
-      return;
-    }
-
-    if (event.altKey && !event.metaKey && !event.ctrlKey && state.mode !== "insert" && event.key === "*") {
-      event.preventDefault();
-      textarea.value = "";
-      searchFromSelection(true);
-      return;
-    }
-
-    if (
-      event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey &&
+    const browserPasteShortcut =
       state.mode === "insert" &&
-      event.key === "s"
-    ) {
-      event.preventDefault();
-      textarea.value = "";
-      controller.execute((_state, _dispatch, context) => context.history?.checkpoint() ?? false);
-      return;
-    }
-
-    if (
-      event.ctrlKey &&
-      !event.metaKey &&
+      !commandLine.active &&
+      !pickerState.active &&
       !event.altKey &&
-      state.mode === "insert" &&
-      event.key === "r"
-    ) {
-      event.preventDefault();
-      setPendingActionState({ kind: "register-select", insert: true });
-      patchBottomRow();
+      ((event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "v") ||
+        (event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "v"));
+
+    if (browserPasteShortcut) {
       return;
     }
 
-    if (
-      event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey &&
-      state.mode !== "insert" &&
-      event.key === "s"
-    ) {
-      event.preventDefault();
-      pushCurrentJump();
-      setBottomMessage({ tone: "info", text: "Saved jump" });
-      return;
-    }
-
-    if (
-      event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey &&
-      state.mode !== "insert" &&
-      event.key === "o"
-    ) {
-      event.preventDefault();
-      jumpBackward();
-      return;
-    }
-
-    if (
-      event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey &&
-      state.mode !== "insert" &&
-      event.key === "i"
-    ) {
-      event.preventDefault();
-      jumpForward();
-      return;
-    }
-
-    if (
-      event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey &&
-      (state.mode !== "insert" || stickyViewMode) &&
-      ["b", "d", "f", "u"].includes(event.key)
-    ) {
-      if (stickyViewMode) {
-        event.preventDefault();
-        const delta =
-          event.key === "b"
-            ? -(Math.max(1, getVisibleLineCountForViewport(getVisibleViewport()) - 1))
-            : event.key === "f"
-              ? Math.max(1, getVisibleLineCountForViewport(getVisibleViewport()) - 1)
-              : event.key === "u"
-                ? -Math.max(1, Math.floor(getVisibleLineCountForViewport(getVisibleViewport()) / 2))
-                : Math.max(1, Math.floor(getVisibleLineCountForViewport(getVisibleViewport()) / 2));
-        scrollViewportBy(delta);
-        return;
-      }
-
-      const command =
-        event.key === "b" ? pageUp : event.key === "f" ? pageDown : event.key === "u" ? halfPageUp : halfPageDown;
-
-      event.preventDefault();
-      textarea.value = "";
-      runCommandWithCount(command);
-      return;
-    }
-
-    if (event.metaKey || event.ctrlKey || event.altKey) {
-      return;
-    }
-
-    if (pickerState.active) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closePicker();
-        return;
-      }
-
-      if (event.key === "ArrowLeft" || event.key === "h" || event.key === "ArrowUp" || event.key === "k") {
-        event.preventDefault();
-        if (pickerState.items.length > 0) {
-          setPickerState({
-            ...pickerState,
-            selectedIndex: Math.max(0, pickerState.selectedIndex - 1)
-          });
-        }
-        return;
-      }
-
-      if (event.key === "ArrowRight" || event.key === "l" || event.key === "ArrowDown" || event.key === "j") {
-        event.preventDefault();
-        if (pickerState.items.length > 0) {
-          setPickerState({
-            ...pickerState,
-            selectedIndex: Math.min(pickerState.items.length - 1, pickerState.selectedIndex + 1)
-          });
-        }
-        return;
-      }
-
-      if (event.key === "Enter") {
-        event.preventDefault();
-        const item = pickerState.items[pickerState.selectedIndex];
-        if (item) {
-          void item.run();
-        } else {
-          closePicker();
-        }
-        return;
-      }
-
-      if (/^[1-9]$/.test(event.key)) {
-        event.preventDefault();
-        const item = pickerState.items[Number(event.key) - 1];
-        if (item) {
-          void item.run();
-        }
-        return;
-      }
-
-      return;
-    }
-
-    if (commandLine.active) {
-      const completionItems = getCommandCompletionItems();
-
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeCommandLine();
-        textarea.focus();
-        return;
-      }
-
-      if (event.key === "Tab") {
-        if (completionItems.length === 0) {
-          return;
-        }
-
-        event.preventDefault();
-        const delta = event.shiftKey ? -1 : 1;
-        setCommandCompletionIndexState(
-          (commandCompletionIndex + delta + completionItems.length) % completionItems.length
-        );
-        patchBottomRow();
-        return;
-      }
-
-      if (event.key === "Enter") {
-        event.preventDefault();
-        const nextValue = commandLine.value;
-        const selectedCompletion = completionItems[commandCompletionIndex];
-        const shouldTakeCompletion =
-          !!selectedCompletion &&
-          commandLine.prompt === ":" &&
-          /^\s*theme\s+$/i.test(nextValue);
-
-        if (shouldTakeCompletion) {
-          selectedCompletion.run();
-        } else if (hasRunnableCommandLineValue(nextValue) || !selectedCompletion) {
-          runCommandLineCommand(nextValue);
-        } else {
-          selectedCompletion.run();
-        }
-        textarea.focus();
-        return;
-      }
-
-      if (event.key === "Backspace") {
-        event.preventDefault();
-        updateCommandLineValue(commandLine.value.slice(0, -1));
-        return;
-      }
-
-      if (event.key.length === 1) {
-        event.preventDefault();
-        updateCommandLineValue(`${commandLine.value}${event.key}`);
-      }
-      return;
-    }
-
-    if (hoverState.active && event.key === "Escape") {
-      event.preventDefault();
-      clearHover();
-      clearPendingCount();
-      return;
-    }
-
-    if (stickyViewMode && (state.mode === "normal" || state.mode === "visual")) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-          setStickyViewModeState(false);
-          patchBottomRow();
-          return;
-      }
-
-      if (event.key === "j" || event.key === "ArrowDown") {
-        event.preventDefault();
-        scrollViewportBy(1);
-        return;
-      }
-
-      if (event.key === "k" || event.key === "ArrowUp") {
-        event.preventDefault();
-        scrollViewportBy(-1);
-        return;
-      }
-    }
-
-    if (pendingAction) {
-      const nextPending = pendingAction;
-      setPendingActionState(null);
-      patchBottomRow();
-
-      if (event.key === "Escape") {
-        event.preventDefault();
-        clearPendingCount();
-        return;
-      }
-
-      if (nextPending.kind === "g") {
-        if (event.key === "c") {
-          event.preventDefault();
-          void toggleComments();
-          return;
-        }
-        const chordCommand = commandForGotoPrefix(event.key);
-
-        if (chordCommand) {
-          event.preventDefault();
-          textarea.value = "";
-          runCommandWithCount(chordCommand);
-          return;
-        }
-      }
-
-      if (nextPending.kind === "[" || nextPending.kind === "]") {
-        if (event.key === "d" || event.key === "D") {
-          event.preventDefault();
-          navigateDiagnostic(nextPending.kind === "]" ? "next" : "prev", event.key === "D");
-          return;
-        }
-
-        if (["f", "t", "a", "c", "T", "g", "x"].includes(event.key)) {
-          event.preventDefault();
-          void navigateSyntax(nextPending.kind === "]" ? "next" : "prev", event.key);
-          return;
-        }
-
-        const chordCommand = commandForBracketPrefix(nextPending.kind, event.key);
-
-        if (chordCommand) {
-          event.preventDefault();
-          textarea.value = "";
-          const previousRevision = state.revision;
-          runCommandWithCount(chordCommand);
-          recordRepeatableMotion(
-            { kind: "paragraph", direction: nextPending.kind === "]" ? "next" : "prev" },
-            state.revision !== previousRevision
-          );
-          return;
-        }
-      }
-
-      if (nextPending.kind === "m") {
-        if (event.key === "m") {
-          event.preventDefault();
-          textarea.value = "";
-          const previousRevision = state.revision;
-          runCommandWithCount(gotoMatchingBracket);
-          recordRepeatableMotion({ kind: "matching-bracket" }, state.revision !== previousRevision);
-          return;
-        }
-
-        if (event.key === "a" || event.key === "i") {
-          event.preventDefault();
-          setPendingActionState({
-            kind: "textobject",
-            mode: event.key === "a" ? "around" : "inside"
-          });
-          return;
-        }
-
-        if (event.key === "s") {
-          event.preventDefault();
-          setPendingActionState({ kind: "surround-add" });
-          patchBottomRow();
-          return;
-        }
-
-        if (event.key === "d") {
-          event.preventDefault();
-          setPendingActionState({ kind: "surround-delete" });
-          patchBottomRow();
-          return;
-        }
-
-        if (event.key === "r") {
-          event.preventDefault();
-          setPendingActionState({ kind: "surround-replace-from" });
-          patchBottomRow();
-          return;
-        }
-      }
-
-      if (nextPending.kind === "space") {
-        event.preventDefault();
-        if (event.key === "a") {
-          void loadCodeActions();
-          return;
-        }
-
-        if (event.key === "d") {
-          openDiagnosticsPicker();
-          return;
-        }
-
-        if (event.key === "j") {
-          openJumpListPicker();
-          return;
-        }
-
-        if (event.key === "k") {
-          const hoverOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-          const anchorElement = root.querySelector<HTMLElement>("[data-wx-editor-cursor='true']");
-          const anchorRect = anchorElement?.getBoundingClientRect() ?? root.getBoundingClientRect();
-          const activeDiagnostic = diagnostics.find((entry) => hoverOffset >= entry.from && hoverOffset < entry.to) ?? null;
-
-          if (activeDiagnostic) {
-            showDiagnosticTooltip(activeDiagnostic, anchorRect, true);
-          } else {
-            void requestHover(hoverOffset, anchorRect, true);
-          }
-          return;
-        }
-      }
-
-      if (nextPending.kind === "flash-target") {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          patchBottomRow();
-          return;
-        }
-
-        if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
-          event.preventDefault();
-          startFlashJump(event.key);
-          return;
-        }
-      }
-
-      if (nextPending.kind === "find") {
-        event.preventDefault();
-        textarea.value = "";
-        const previousRevision = state.revision;
-        const command =
-          nextPending.variant === "f"
-            ? findNextChar(event.key)
-            : nextPending.variant === "F"
-              ? findPrevChar(event.key)
-              : nextPending.variant === "t"
-                ? findTillNextChar(event.key)
-                : findTillPrevChar(event.key);
-        runCommandWithCount(command);
-        recordRepeatableMotion(
-          { kind: "find", variant: nextPending.variant, target: event.key },
-          state.revision !== previousRevision
-        );
-        return;
-      }
-
-      if (nextPending.kind === "textobject") {
-        event.preventDefault();
-        textarea.value = "";
-        const previousRevision = state.revision;
-        void selectTextobjectWithFallback(nextPending.mode, event.key).then((didRun) => {
-          recordRepeatableMotion(
-            { kind: "textobject", mode: nextPending.mode, object: event.key },
-            didRun || state.revision !== previousRevision
-          );
-        });
-        return;
-      }
-
-      if (nextPending.kind === "surround-add") {
-        event.preventDefault();
-        textarea.value = "";
-        runCommand(addSurround(event.key));
-        return;
-      }
-
-      if (nextPending.kind === "surround-delete") {
-        event.preventDefault();
-        textarea.value = "";
-        runCommand(deleteSurround(event.key));
-        return;
-      }
-
-      if (nextPending.kind === "surround-replace-from") {
-        event.preventDefault();
-        setPendingActionState({ kind: "surround-replace-to", fromObject: event.key });
-        patchBottomRow();
-        return;
-      }
-
-      if (nextPending.kind === "surround-replace-to") {
-        event.preventDefault();
-        textarea.value = "";
-        runCommand(replaceSurround(nextPending.fromObject, event.key));
-        return;
-      }
-
-      if (nextPending.kind === "register-select") {
-        event.preventDefault();
-        if (nextPending.insert && state.mode === "insert") {
-          void insertRegisterValue(event.key);
-        } else {
-          selectRegisterForNext(event.key);
-        }
-        return;
-      }
-
-      if (nextPending.kind === "z") {
-        event.preventDefault();
-        if (event.key === "Escape") {
-          setStickyViewModeState(false);
-          return;
-        }
-
-        if (event.key === "z" || event.key === "c" || event.key === "m") {
-          alignViewportToCursor("center");
-        } else if (event.key === "t") {
-          alignViewportToCursor("top");
-        } else if (event.key === "b") {
-          alignViewportToCursor("bottom");
-        } else if (event.key === "j") {
-          scrollViewportBy(1);
-        } else if (event.key === "k") {
-          scrollViewportBy(-1);
-        }
-
-        if (!nextPending.sticky) {
-          setStickyViewModeState(false);
-        }
-        return;
-      }
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === ":") {
-      event.preventDefault();
-      textarea.value = "";
-      clearPendingCount();
-      openCommandLine();
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === "\"") {
-      event.preventDefault();
-      setPendingActionState({ kind: "register-select", insert: false });
-      patchBottomRow();
-      return;
-    }
-
-    if (
-      (state.mode === "normal" || state.mode === "visual") &&
-      /^[0-9]$/.test(event.key) &&
-      !(pendingCount === "" && event.key === "0")
-    ) {
-      event.preventDefault();
-      setPendingCountState(`${pendingCount}${event.key}`);
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === " ") {
-      event.preventDefault();
-      setPendingActionState({ kind: "space" });
-      patchBottomRow();
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === ",") {
-      event.preventDefault();
-      setPendingActionState({ kind: "flash-target" });
-      patchBottomRow();
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === "z") {
-      event.preventDefault();
-      setStickyViewModeState(false);
-      setPendingActionState({ kind: "z", sticky: false });
-      patchBottomRow();
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === "Z") {
-      event.preventDefault();
-      setStickyViewModeState(true);
-      setPendingActionState({ kind: "z", sticky: true });
-      patchBottomRow();
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === "n") {
-      event.preventDefault();
-      textarea.value = "";
-      repeatSearch(false);
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === "N") {
-      event.preventDefault();
-      textarea.value = "";
-      repeatSearch(true);
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === "*") {
-      event.preventDefault();
-      textarea.value = "";
-      searchFromSelection(false);
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === "g") {
-      event.preventDefault();
-      setPendingActionState({ kind: "g" });
-      patchBottomRow();
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && (event.key === "[" || event.key === "]")) {
-      event.preventDefault();
-      setPendingActionState({ kind: event.key });
-      patchBottomRow();
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && event.key === "m") {
-      event.preventDefault();
-      setPendingActionState({ kind: "m" });
-      patchBottomRow();
-      return;
-    }
-
-    if ((state.mode === "normal" || state.mode === "visual") && ["f", "F", "t", "T"].includes(event.key)) {
-      event.preventDefault();
-      setPendingActionState({ kind: "find", variant: event.key as "f" | "F" | "t" | "T" });
-      return;
-    }
-
-    const command =
-      state.mode === "normal"
-        ? commandForNormalMode(event.key)
-        : state.mode === "visual"
-          ? commandForVisualMode(event.key)
-          : commandForInsertMode(event.key);
-
-    if (!command) {
+    const hasCommandState =
+      flashState.active || commandLine.active || pickerState.active || !!pendingAction || stickyViewMode || hoverState.active;
+    const plainEditorKey = !event.metaKey && !event.ctrlKey && !event.altKey;
+    const shouldRoute =
+      hasCommandState ||
+      plainEditorKey ||
+      isControllerHandledModifierKey(event);
+
+    if (!shouldRoute) {
       return;
     }
 
     event.preventDefault();
     textarea.value = "";
-    runCommandWithCount(command);
+    void forwardKeydownToController(event);
   }
 
   function handleWheel(event: WheelEvent): void {
