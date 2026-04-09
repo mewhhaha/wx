@@ -1,19 +1,12 @@
 import {
   addSurround,
   applyTransaction,
-  appendInsertMode,
-  clampCharacterOffset,
-  clampInsertionOffset,
   changeSelection,
   createCharacterSelection,
   createEditorState,
   createSelection,
-  deleteBackwardIndentAware,
-  deleteForward,
   deleteSelection,
   deleteSurround,
-  enterInsertMode,
-  enterNormalMode,
   findNextChar,
   findPrevChar,
   findTillNextChar,
@@ -21,9 +14,7 @@ import {
   getActiveCharacterOffset,
   getCursorOffset,
   getSelectionOffsets,
-  gotoFileStart,
   gotoFirstNonWhitespace,
-  gotoLastLine,
   gotoLineEnd,
   gotoLineStart,
   gotoMatchingBracket,
@@ -34,49 +25,28 @@ import {
   gotoWindowTop,
   halfPageDown,
   halfPageUp,
-  insertNewline,
   insertText,
   mapOffsetThroughChanges,
   moveDown,
-  moveLeft,
-  moveNextLongWordEnd,
-  moveNextLongWordStart,
-  moveNextWordStart,
-  movePrevLongWordStart,
-  moveRight,
   moveUp,
-  moveWordBackward,
-  moveWordForward,
-  normalizeSelection,
-  openAbove,
-  openBelow,
   pageDown,
   pageUp,
   pasteAfter,
-  redo,
   replaceSurround,
-  selectAll,
-  selectLineBelow,
   selectTextobject,
-  toggleVisualMode,
-  undo,
   yankSelection,
   type Command,
   type CommandContext,
   type EditorState,
-  type InsertSession,
   type SelectionSet,
   type TextChange,
   type Transaction
 } from "@wx/editor-core";
 import type {
-  DiagnosticSeverity,
   EditorCodeAction,
   EditorDiagnostic,
   EditorHover,
   EditorLineRange,
-  EditorLanguageServiceInput,
-  EditorLanguageServices,
   HighlightSpan,
   SyntaxTextobjectMode
 } from "@wx/editor-language";
@@ -84,309 +54,94 @@ import {
   buildFlashLabels,
   buildVisualRows,
   getVisualRowForOffset,
-  type EditorLineVisualRange,
   type EditorVisualRow
 } from "../../editor-layout/src/index";
-
-export interface HistoryEntry {
-  doc: EditorState["doc"];
-  selection: SelectionSet;
-  mode: EditorState["mode"];
-  insertSession: InsertSession | null;
-  yankBuffer: string | null;
-  lastDeletedFrom: number | null;
-}
-
-export interface EditorUpdate {
-  prevState: EditorState;
-  nextState: EditorState;
-  transaction: Transaction;
-  docChanged: boolean;
-  selectionChanged: boolean;
-  modeChanged: boolean;
-}
-
-export interface EditorSearchState {
-  query: string;
-  direction: "forward" | "backward";
-  lastMatch: { from: number; to: number } | null;
-}
-
-export interface EditorSearchPresentationState extends EditorSearchState {
-  matches: readonly { from: number; to: number }[];
-  visibleMatchesByLine: Map<number, { from: number; to: number }[]>;
-}
-
-export interface EditorJumpEntry {
-  selection: SelectionSet;
-  mode: EditorState["mode"];
-}
-
-export interface EditorRegisterState {
-  unnamed: string | null;
-  search: string | null;
-  named: Record<string, string>;
-  selected: string | null;
-}
-
-export type EditorLineChangeKind = "added" | "modified" | "deleted";
-
-export interface EditorLineChange {
-  line: number;
-  kind: EditorLineChangeKind;
-}
-
-export interface EditorHostServices {
-  writeFile?(context: { filePath: string; text: string }): Promise<void>;
-  getLineChanges?(context: { filePath: string; text: string }): Promise<readonly EditorLineChange[]>;
-  didWriteFile?(context: { filePath: string; text: string }): Promise<void> | void;
-}
-
-export interface EditorCommandLineState {
-  active: boolean;
-  value: string;
-  prompt: ":" | "/" | "?";
-}
-
-export interface EditorCommandCompletionItem {
-  label: string;
-  detail?: string;
-}
-
-export interface EditorBottomMessageState {
-  tone: "info" | "warning" | "error";
-  text: string;
-}
-
-export interface EditorPickerItemState {
-  label: string;
-  detail?: string;
-  selected?: boolean;
-}
-
-export interface EditorPickerState {
-  active: boolean;
-  loading: boolean;
-  title: string;
-  items: readonly EditorPickerItemState[];
-  selectedIndex: number;
-  error: string | null;
-}
-
-export interface EditorHoverState {
-  active: boolean;
-  pinned: boolean;
-  offset: number | null;
-  content: string;
-  source?: string;
-  tone: "info" | "warning" | "error";
-  left: number;
-  top: number;
-}
-
-export interface EditorFlashHintState {
-  offset: number;
-  label: string;
-}
-
-export interface EditorFlashState {
-  active: boolean;
-  target: string;
-  input: string;
-  hints: readonly EditorFlashHintState[];
-}
-
-export type EditorPendingAction =
-  | null
-  | { kind: "g" }
-  | { kind: "[" | "]" }
-  | { kind: "m" }
-  | { kind: "space" }
-  | { kind: "flash-target" }
-  | { kind: "z"; sticky: boolean }
-  | { kind: "find"; variant: "f" | "F" | "t" | "T" }
-  | { kind: "textobject"; mode: "around" | "inside" }
-  | { kind: "surround-add" }
-  | { kind: "surround-delete" }
-  | { kind: "surround-replace-from" }
-  | { kind: "surround-replace-to"; fromObject: string }
-  | { kind: "register-select"; insert: boolean };
-
-export type EditorRepeatableMotion =
-  | { kind: "find"; variant: "f" | "F" | "t" | "T"; target: string }
-  | { kind: "matching-bracket" }
-  | { kind: "paragraph"; direction: "next" | "prev" }
-  | { kind: "textobject"; mode: "around" | "inside"; object: string }
-  | { kind: "search"; reverse: boolean };
-
-export interface EditorLineChangeState {
-  kind: Exclude<EditorLineChangeKind, "deleted"> | null;
-  deleted: boolean;
-}
-
-export interface EditorViewportPresentationState {
-  topVisualRow: number;
-  visibleRowCapacity: number;
-  scrolloffRows: number;
-  wrapColumns: number;
-  softWrap: boolean;
-  visualRows: readonly EditorVisualRow[];
-  visibleVisualRows: readonly EditorVisualRow[];
-  lineVisualRanges: readonly EditorLineVisualRange[];
-  wrapRevision: number;
-}
-
-export interface EditorLanguagePresentationState {
-  services: readonly EditorLanguageServices[];
-  host: EditorHostServices | null;
-  languageRevision: number;
-  lastHighlightedRevision: number;
-  highlightRequestId: number;
-  diagnosticsRequestId: number;
-  lineChangesRequestId: number;
-  hoverRequestId: number;
-  highlightCache: Map<number, HighlightSpan[]>;
-  highlightCoverage: Set<number>;
-  diagnostics: readonly EditorDiagnostic[];
-  diagnosticsByLine: Map<number, EditorDiagnostic[]>;
-  lineChangesByLine: Map<number, EditorLineChangeState>;
-  visibleHighlights: readonly HighlightSpan[];
-  visibleHighlightsByLine: Map<number, HighlightSpan[]>;
-  visibleDiagnostics: readonly EditorDiagnostic[];
-  visibleLineChanges: readonly EditorLineChange[];
-}
-
-export interface EditorUiPresentationState {
-  commandLine: EditorCommandLineState;
-  commandCompletionIndex: number;
-  commandCompletionItems: readonly EditorCommandCompletionItem[];
-  picker: EditorPickerState;
-  bottomMessage: EditorBottomMessageState | null;
-  hover: EditorHoverState;
-  flash: EditorFlashState;
-  pendingAction: EditorPendingAction;
-  pendingCount: string;
-  stickyViewMode: boolean;
-  previewTheme: string | null;
-  lastRepeatableMotion: EditorRepeatableMotion | null;
-}
-
-export interface EditorPresentationState {
-  filePath: string;
-  themeName: string | null;
-  viewport: EditorViewportPresentationState;
-  language: EditorLanguagePresentationState;
-  ui: EditorUiPresentationState;
-  search: EditorSearchPresentationState;
-  jumps: {
-    items: readonly EditorJumpEntry[];
-    cursor: number;
-  };
-  registers: EditorRegisterState;
-}
-
-export interface EditorCommandLineKeyOptions {
-  themeNames?: readonly string[];
-}
-
-export interface EditorCommandLineKeyResult {
-  handled: boolean;
-  quit?: boolean;
-  themeName?: string | null;
-}
-
-export interface EditorKeyInput {
-  key: string;
-  ctrl?: boolean;
-  alt?: boolean;
-  meta?: boolean;
-  shift?: boolean;
-  text?: string;
-  source?: "dom" | "ansi";
-}
-
-export interface EditorKeyInputOptions extends EditorCommandLineKeyOptions {
-  readClipboardText?: () => Promise<string | null>;
-}
-
-export interface EditorKeyInputResult extends EditorCommandLineKeyResult {
-  handled: boolean;
-}
-
-export type EditorUpdateListener = (update: EditorUpdate) => void;
-
-export interface HistoryPlugin {
-  record(update: EditorUpdate, options?: { checkpoint?: boolean }): void;
-  undo(currentState: EditorState): HistoryEntry | null;
-  redo(currentState: EditorState): HistoryEntry | null;
-  checkpoint(): boolean;
-  clear(): void;
-}
-
-export interface EditorController {
-  getState(): EditorState;
-  getPresentationState(): EditorPresentationState;
-  dispatch(transaction: Transaction): void;
-  replaceState(nextState: EditorState, transaction?: Transaction): void;
-  execute(command: Command, context?: Omit<CommandContext, "history">): boolean;
-  subscribe(listener: EditorUpdateListener): () => void;
-  getSearchState(): EditorSearchState;
-  setSearchState(next: Partial<EditorSearchState>): void;
-  clearSearchState(): void;
-  pushJump(): boolean;
-  jumpBackward(): EditorJumpEntry | null;
-  jumpForward(): EditorJumpEntry | null;
-  getJumpList(): readonly EditorJumpEntry[];
-  getRegister(name?: string | null): string | null;
-  setRegister(name: string | null, value: string | null): void;
-  selectRegister(name: string | null): void;
-  getSelectedRegister(): string | null;
-  updatePresentationState(
-    updater: (state: EditorPresentationState) => void,
-    effectType?: string,
-    options?: { defer?: boolean }
-  ): void;
-  setViewportMetrics(metrics: { visibleRowCapacity: number; wrapColumns: number; softWrap: boolean }): void;
-  scrollViewportBy(rowsDelta: number): boolean;
-  alignViewportToSelection(position: "top" | "center" | "bottom"): boolean;
-  revealSelection(): void;
-  setLanguageServices(languageServices: EditorLanguageServiceInput | readonly EditorLanguageServices[] | null): void;
-  setHostServices(host: EditorHostServices | null): void;
-  setFilePath(filePath: string): void;
-  setThemeName(themeName: string | null): void;
-  handleKeyInput(input: EditorKeyInput, options?: EditorKeyInputOptions): Promise<EditorKeyInputResult>;
-  handleTextInput(text: string, options?: EditorKeyInputOptions): Promise<EditorKeyInputResult>;
-  openCommandLine(prompt: ":" | "/" | "?"): void;
-  handleCommandLineKey(key: string, options?: EditorCommandLineKeyOptions): Promise<EditorCommandLineKeyResult>;
-  repeatSearch(reverseAgainstDirection?: boolean): boolean;
-  beginFlashTarget(): void;
-  handleFlashKey(key: string): boolean;
-  refreshLanguage(options?: {
-    changes?: readonly TextChange[];
-    forceDocumentSync?: boolean;
-    highlightViewport?: EditorLineRange;
-    refreshHighlights?: boolean;
-    refreshDiagnostics?: boolean;
-    refreshLineChanges?: boolean;
-  }): Promise<void>;
-  requestHover(offset: number): Promise<EditorHover | null>;
-  dismissHover(): void;
-  requestCodeActions(): Promise<readonly EditorCodeAction[]>;
-  applyCodeAction(action: EditorCodeAction): Promise<boolean>;
-  formatDocument(): Promise<boolean>;
-  saveDocument(targetPath?: string): Promise<boolean>;
-}
-
-export interface CreateEditorControllerOptions {
-  state?: EditorState;
-  value?: string;
-  selection?: SelectionSet;
-  mode?: EditorState["mode"];
-  language?: string;
-  theme?: string;
-  filePath?: string;
-  history?: HistoryPlugin | false;
-}
+import {
+  commandForBracketPrefix,
+  commandForGotoPrefix,
+  commandForInsertMode,
+  commandForNormalMode,
+  commandForVisualMode
+} from "./keymap";
+import { createSnapshotHistory, restoreEditorState } from "./history";
+import {
+  buildDiagnosticsCache,
+  buildHighlightCache,
+  buildLineChangesMap,
+  diagnosticsEqual,
+  highlightMapsEqual,
+  lineChangesEqual,
+  remapHighlightSpans,
+  spansEqual
+} from "./language-state";
+import { createPresentationState } from "./presentation";
+import { collectSearchMatches, escapeRegex, searchMatchesByLineEqual } from "./search";
+import {
+  createJumpEntry,
+  jumpEntryEquals,
+  normalizeLanguageServices,
+  normalizeRegisterName,
+  selectionEquals,
+  transactionRequiresFullDocumentLanguageSync
+} from "./session";
+import type {
+  CreateEditorControllerOptions,
+  EditorBottomMessageState,
+  EditorCommandCompletionItem,
+  EditorCommandLineKeyOptions,
+  EditorCommandLineKeyResult,
+  EditorController,
+  EditorFlashHintState,
+  EditorHostServices,
+  EditorJumpEntry,
+  EditorKeyInputOptions,
+  EditorKeyInputResult,
+  EditorLineChange,
+  EditorPendingAction,
+  EditorPickerState,
+  EditorPresentationState,
+  EditorRepeatableMotion,
+  EditorSearchState,
+  EditorUpdate,
+  EditorUpdateListener,
+  HistoryEntry,
+  HistoryPlugin
+} from "./types";
+export type {
+  CreateEditorControllerOptions,
+  EditorBottomMessageState,
+  EditorCommandCompletionItem,
+  EditorCommandLineKeyOptions,
+  EditorCommandLineKeyResult,
+  EditorCommandLineState,
+  EditorController,
+  EditorFlashHintState,
+  EditorFlashState,
+  EditorHostServices,
+  EditorHoverState,
+  EditorJumpEntry,
+  EditorKeyInput,
+  EditorKeyInputOptions,
+  EditorKeyInputResult,
+  EditorLanguagePresentationState,
+  EditorLineChange,
+  EditorLineChangeKind,
+  EditorLineChangeState,
+  EditorPendingAction,
+  EditorPickerItemState,
+  EditorPickerState,
+  EditorPresentationState,
+  EditorRegisterState,
+  EditorRepeatableMotion,
+  EditorSearchPresentationState,
+  EditorSearchState,
+  EditorUiPresentationState,
+  EditorUpdate,
+  EditorUpdateListener,
+  EditorViewportPresentationState,
+  HistoryEntry,
+  HistoryPlugin
+} from "./types";
 
 interface PickerActionItem {
   label: string;
@@ -394,703 +149,7 @@ interface PickerActionItem {
   run: () => Promise<void> | void;
 }
 
-function createHistoryEntry(state: EditorState): HistoryEntry {
-  return {
-    doc: state.doc,
-    selection: state.selection,
-    mode: state.mode,
-    insertSession: state.insertSession,
-    yankBuffer: state.yankBuffer,
-    lastDeletedFrom: state.lastDeletedFrom
-  };
-}
-
-function selectionEquals(left: SelectionSet, right: SelectionSet): boolean {
-  if (left.primaryIndex !== right.primaryIndex || left.ranges.length !== right.ranges.length) {
-    return false;
-  }
-
-  return left.ranges.every((range, index) => {
-    const other = right.ranges[index];
-    return (
-      !!other &&
-      range.anchor === other.anchor &&
-      range.head === other.head &&
-      range.preferredColumn === other.preferredColumn
-    );
-  });
-}
-
-function jumpEntryEquals(left: EditorJumpEntry, right: EditorJumpEntry): boolean {
-  return left.mode === right.mode && selectionEquals(left.selection, right.selection);
-}
-
-function createJumpEntry(state: EditorState): EditorJumpEntry {
-  return {
-    selection: state.selection,
-    mode: state.mode
-  };
-}
-
-function normalizeRegisterName(name: string | null | undefined): string | null {
-  if (!name) {
-    return null;
-  }
-
-  return name.toLowerCase();
-}
-
-function normalizeLanguageServices(
-  input: EditorLanguageServiceInput | readonly EditorLanguageServices[] | null | undefined
-): EditorLanguageServices[] {
-  if (!input) {
-    return [];
-  }
-
-  return Array.isArray(input) ? [...(input as readonly EditorLanguageServices[])] : [input as EditorLanguageServices];
-}
-
-function commandForNormalMode(key: string): Command | null {
-  switch (key) {
-    case "%":
-      return selectAll;
-    case "B":
-      return movePrevLongWordStart;
-    case "E":
-      return moveNextLongWordEnd;
-    case "End":
-      return gotoLineEnd;
-    case "Home":
-      return gotoLineStart;
-    case "PageDown":
-      return pageDown;
-    case "PageUp":
-      return pageUp;
-    case "W":
-      return moveNextLongWordStart;
-    case "a":
-      return appendInsertMode;
-    case "ArrowLeft":
-    case "h":
-      return moveLeft;
-    case "ArrowRight":
-    case "l":
-      return moveRight;
-    case "ArrowUp":
-    case "k":
-      return moveUp;
-    case "ArrowDown":
-    case "j":
-      return moveDown;
-    case "b":
-      return moveWordBackward;
-    case "c":
-      return changeSelection;
-    case "d":
-      return deleteSelection;
-    case "e":
-      return moveWordForward;
-    case "i":
-      return enterInsertMode;
-    case "o":
-      return openBelow;
-    case "O":
-      return openAbove;
-    case "p":
-      return pasteAfter;
-    case "u":
-      return undo;
-    case "U":
-      return redo;
-    case "v":
-      return toggleVisualMode;
-    case "w":
-      return moveNextWordStart;
-    case "x":
-      return selectLineBelow;
-    case "y":
-      return yankSelection;
-    default:
-      return null;
-  }
-}
-
-function commandForVisualMode(key: string): Command | null {
-  switch (key) {
-    case "%":
-      return selectAll;
-    case "B":
-      return movePrevLongWordStart;
-    case "E":
-      return moveNextLongWordEnd;
-    case "Escape":
-      return enterNormalMode;
-    case "End":
-      return gotoLineEnd;
-    case "Home":
-      return gotoLineStart;
-    case "PageDown":
-      return pageDown;
-    case "PageUp":
-      return pageUp;
-    case "W":
-      return moveNextLongWordStart;
-    case "ArrowLeft":
-    case "h":
-      return moveLeft;
-    case "ArrowRight":
-    case "l":
-      return moveRight;
-    case "ArrowUp":
-    case "k":
-      return moveUp;
-    case "ArrowDown":
-    case "j":
-      return moveDown;
-    case "b":
-      return moveWordBackward;
-    case "c":
-      return changeSelection;
-    case "d":
-      return deleteSelection;
-    case "e":
-      return moveWordForward;
-    case "o":
-      return openBelow;
-    case "O":
-      return openAbove;
-    case "p":
-      return pasteAfter;
-    case "u":
-      return undo;
-    case "U":
-      return redo;
-    case "v":
-      return toggleVisualMode;
-    case "w":
-      return moveNextWordStart;
-    case "x":
-      return selectLineBelow;
-    case "y":
-      return yankSelection;
-    default:
-      return null;
-  }
-}
-
-function commandForInsertMode(key: string): Command | null {
-  switch (key) {
-    case "Escape":
-      return enterNormalMode;
-    case "Tab":
-      return insertText("  ");
-    case "ArrowLeft":
-      return moveLeft;
-    case "ArrowRight":
-      return moveRight;
-    case "ArrowUp":
-      return moveUp;
-    case "ArrowDown":
-      return moveDown;
-    case "Backspace":
-      return deleteBackwardIndentAware("  ");
-    case "Delete":
-      return deleteForward;
-    case "Enter":
-      return insertNewline;
-    default:
-      if (key.length === 1) {
-        return insertText(key);
-      }
-
-      return null;
-  }
-}
-
-function commandForGotoPrefix(key: string): Command | null {
-  switch (key) {
-    case "g":
-      return gotoFileStart;
-    case "b":
-      return gotoWindowBottom;
-    case "c":
-      return gotoWindowCenter;
-    case "e":
-      return gotoLastLine;
-    case "h":
-      return gotoLineStart;
-    case "j":
-      return moveDown;
-    case "k":
-      return moveUp;
-    case "l":
-      return gotoLineEnd;
-    case "s":
-      return gotoFirstNonWhitespace;
-    case "t":
-      return gotoWindowTop;
-    default:
-      return null;
-  }
-}
-
-function commandForBracketPrefix(direction: "[" | "]", key: string): Command | null {
-  if (key !== "p") {
-    return null;
-  }
-
-  return direction === "[" ? gotoPrevParagraph : gotoNextParagraph;
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function transactionRequiresFullDocumentLanguageSync(transaction: Transaction): boolean {
-  if ((transaction.changes?.length ?? 0) > 0) {
-    return false;
-  }
-
-  return (transaction.effects ?? []).some((effect) => {
-    return effect.type === "controller.replace-state" || effect.type.startsWith("history.");
-  });
-}
-
-function createPresentationState(state: EditorState, options: CreateEditorControllerOptions): EditorPresentationState {
-  return {
-    filePath: options.filePath ?? "untitled.ts",
-    themeName: options.theme ?? null,
-    viewport: {
-      topVisualRow: 0,
-      visibleRowCapacity: 1,
-      scrolloffRows: 3,
-      wrapColumns: Number.MAX_SAFE_INTEGER,
-      softWrap: false,
-      visualRows: [],
-      visibleVisualRows: [],
-      lineVisualRanges: [],
-      wrapRevision: -1
-    },
-    language: {
-      services: [],
-      host: null,
-      languageRevision: -1,
-      lastHighlightedRevision: -1,
-      highlightRequestId: 0,
-      diagnosticsRequestId: 0,
-      lineChangesRequestId: 0,
-      hoverRequestId: 0,
-      highlightCache: new Map(),
-      highlightCoverage: new Set(),
-      diagnostics: [],
-      diagnosticsByLine: new Map(),
-      lineChangesByLine: new Map(),
-      visibleHighlights: [],
-      visibleHighlightsByLine: new Map(),
-      visibleDiagnostics: [],
-      visibleLineChanges: []
-    },
-    ui: {
-      commandLine: { active: false, value: "", prompt: ":" },
-      commandCompletionIndex: 0,
-      commandCompletionItems: [],
-      picker: {
-        active: false,
-        loading: false,
-        title: "",
-        items: [],
-        selectedIndex: 0,
-        error: null
-      },
-      bottomMessage: null,
-      hover: {
-        active: false,
-        pinned: false,
-        offset: null,
-        content: "",
-        tone: "info",
-        left: 16,
-        top: 16
-      },
-      flash: {
-        active: false,
-        target: "",
-        input: "",
-        hints: []
-      },
-      pendingAction: null,
-      pendingCount: "",
-      stickyViewMode: false,
-      previewTheme: null,
-      lastRepeatableMotion: null
-    },
-    search: {
-      query: "",
-      direction: "forward",
-      lastMatch: null,
-      matches: [],
-      visibleMatchesByLine: new Map()
-    },
-    jumps: {
-      items: [],
-      cursor: 0
-    },
-    registers: {
-      unnamed: state.yankBuffer,
-      search: null,
-      named: {},
-      selected: null
-    }
-  };
-}
-
-function normalizeHistoryRestoreEntry(entry: HistoryEntry): HistoryEntry {
-  if (entry.mode !== "insert") {
-    return entry;
-  }
-
-  const cursor = clampInsertionOffset(entry.doc, getCursorOffset(entry.selection));
-  const position = entry.doc.positionAt(cursor);
-  const previousCharacter = cursor > 0 ? entry.doc.text[cursor - 1] : undefined;
-  const nextCursor =
-    entry.doc.length === 0
-      ? 0
-      : clampCharacterOffset(entry.doc, cursor > 0 && position.column > 0 && previousCharacter !== "\n" ? cursor - 1 : cursor);
-
-  return {
-    ...entry,
-    mode: "normal",
-    selection: createCharacterSelection(entry.doc, nextCursor),
-    insertSession: null
-  };
-}
-
-function restoreEditorState(state: EditorState, entry: HistoryEntry): EditorState {
-  const normalized = normalizeHistoryRestoreEntry(entry);
-
-  return {
-    ...state,
-    doc: normalized.doc,
-    selection: normalizeSelection(normalized.doc, normalized.selection, normalized.mode),
-    mode: normalized.mode,
-    yankBuffer: normalized.yankBuffer,
-    lastDeletedFrom: normalized.lastDeletedFrom,
-    insertSession: normalized.mode === "insert" ? normalized.insertSession : null,
-    revision: state.revision + 1
-  };
-}
-
-function buildHighlightCache(doc: EditorState["doc"], spans: readonly HighlightSpan[]): Map<number, HighlightSpan[]> {
-  const cache = new Map<number, HighlightSpan[]>();
-
-  for (const span of spans) {
-    if (span.to <= span.from) {
-      continue;
-    }
-
-    const startLine = doc.positionAt(span.from).line;
-    const endLine = doc.positionAt(span.to - 1).line;
-
-    for (let line = startLine; line <= endLine; line += 1) {
-      const lineInfo = doc.lineAt(line);
-      const from = Math.max(span.from, lineInfo.start);
-      const to = Math.min(span.to, lineInfo.end);
-
-      if (to <= from) {
-        continue;
-      }
-
-      const entry = cache.get(line);
-      const clipped = { from, to, role: span.role };
-
-      if (entry) {
-        entry.push(clipped);
-      } else {
-        cache.set(line, [clipped]);
-      }
-    }
-  }
-
-  return cache;
-}
-
-function spansEqual(left: readonly HighlightSpan[], right: readonly HighlightSpan[]): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every((span, index) => {
-    const other = right[index];
-    return !!other && span.from === other.from && span.to === other.to && span.role === other.role;
-  });
-}
-
-function highlightMapsEqual(
-  left: ReadonlyMap<number, readonly HighlightSpan[]>,
-  right: ReadonlyMap<number, readonly HighlightSpan[]>
-): boolean {
-  if (left.size !== right.size) {
-    return false;
-  }
-
-  for (const [line, spans] of left) {
-    const other = right.get(line);
-    if (!other || !spansEqual(spans, other)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function buildDiagnosticsCache(doc: EditorState["doc"], diagnostics: readonly EditorDiagnostic[]): Map<number, EditorDiagnostic[]> {
-  const nextByLine = new Map<number, EditorDiagnostic[]>();
-
-  for (const diagnostic of diagnostics) {
-    const safeFrom = Math.max(0, Math.min(doc.length, diagnostic.from));
-    const safeTo = Math.max(safeFrom, Math.min(doc.length, Math.max(diagnostic.from + 1, diagnostic.to)));
-    const startLine = doc.positionAt(safeFrom).line;
-    const endLine = doc.positionAt(Math.max(safeFrom, safeTo - 1)).line;
-
-    for (let line = startLine; line <= endLine; line += 1) {
-      const entry = nextByLine.get(line);
-
-      if (entry) {
-        entry.push({ ...diagnostic, from: safeFrom, to: safeTo });
-      } else {
-        nextByLine.set(line, [{ ...diagnostic, from: safeFrom, to: safeTo }]);
-      }
-    }
-  }
-
-  return nextByLine;
-}
-
-function buildLineChangesMap(changes: readonly EditorLineChange[]): Map<number, EditorLineChangeState> {
-  const next = new Map<number, EditorLineChangeState>();
-
-  for (const change of changes) {
-    if (change.line < 0 || !Number.isFinite(change.line)) {
-      continue;
-    }
-
-    if (change.kind === "deleted") {
-      const previous = next.get(change.line) ?? { kind: null, deleted: false };
-      next.set(change.line, { ...previous, deleted: true });
-      continue;
-    }
-
-    const previous = next.get(change.line) ?? { kind: null, deleted: false };
-    next.set(change.line, {
-      kind: change.kind === "modified" || previous.kind === "modified" ? "modified" : change.kind,
-      deleted: previous.deleted
-    });
-  }
-
-  return next;
-}
-
-function compileSearchPattern(query: string): RegExp | null {
-  if (!query) {
-    return null;
-  }
-
-  try {
-    return new RegExp(query, "gu");
-  } catch {
-    return null;
-  }
-}
-
-function collectSearchMatches(text: string, query: string): Array<{ from: number; to: number }> {
-  const pattern = compileSearchPattern(query);
-
-  if (!pattern) {
-    return [];
-  }
-
-  const matches: Array<{ from: number; to: number }> = [];
-  let result = pattern.exec(text);
-
-  while (result) {
-    const matchedText = result[0] ?? "";
-    const from = result.index;
-    const to = from + Math.max(1, matchedText.length);
-    matches.push({ from, to });
-
-    if (matchedText.length === 0) {
-      pattern.lastIndex = from + 1;
-    }
-
-    result = pattern.exec(text);
-  }
-
-  return matches;
-}
-
-function searchMatchesEqual(
-  left: readonly { from: number; to: number }[],
-  right: readonly { from: number; to: number }[]
-): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every((entry, index) => {
-    const other = right[index];
-    return !!other && entry.from === other.from && entry.to === other.to;
-  });
-}
-
-function searchMatchesByLineEqual(
-  left: ReadonlyMap<number, readonly { from: number; to: number }[]>,
-  right: ReadonlyMap<number, readonly { from: number; to: number }[]>
-): boolean {
-  if (left.size !== right.size) {
-    return false;
-  }
-
-  for (const [line, matches] of left) {
-    const other = right.get(line);
-    if (!other || !searchMatchesEqual(matches, other)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function diagnosticsEqual(left: readonly EditorDiagnostic[], right: readonly EditorDiagnostic[]): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every((diagnostic, index) => {
-    const other = right[index];
-    return (
-      !!other &&
-      diagnostic.from === other.from &&
-      diagnostic.to === other.to &&
-      diagnostic.severity === other.severity &&
-      diagnostic.message === other.message &&
-      diagnostic.source === other.source
-    );
-  });
-}
-
-function lineChangesEqual(left: readonly EditorLineChange[], right: readonly EditorLineChange[]): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every((change, index) => {
-    const other = right[index];
-    return !!other && change.line === other.line && change.kind === other.kind;
-  });
-}
-
-function remapHighlightSpans(
-  doc: EditorState["doc"],
-  spans: readonly HighlightSpan[],
-  changes: readonly TextChange[]
-): HighlightSpan[] {
-  const next: HighlightSpan[] = [];
-
-  for (const span of spans) {
-    const originalLength = Math.max(0, span.to - span.from);
-    const hasOverlappingChange = changes.some((change) => change.from < span.to && change.to > span.from);
-    const startAffinity = changes.some(
-      (change) => change.from === span.from && change.to === span.from && change.insert.length > 0
-    )
-      ? "right"
-      : "left";
-    const from = Math.max(0, Math.min(doc.length, mapOffsetThroughChanges(span.from, changes, startAffinity)));
-    const mappedTo = Math.max(from, Math.min(doc.length, mapOffsetThroughChanges(span.to, changes, "right")));
-    const to = hasOverlappingChange
-      ? mappedTo
-      : Math.max(from, Math.min(doc.length, from + originalLength));
-
-    if (to <= from) {
-      continue;
-    }
-
-    next.push({
-      from,
-      to,
-      role: span.role
-    });
-  }
-
-  return next;
-}
-
-export function createSnapshotHistory(): HistoryPlugin {
-  const undoStack: HistoryEntry[] = [];
-  const redoStack: HistoryEntry[] = [];
-  let pendingInsertGroup: HistoryEntry | null = null;
-
-  const flushPendingInsertGroup = (): boolean => {
-    if (!pendingInsertGroup) {
-      return false;
-    }
-
-    undoStack.push(pendingInsertGroup);
-    pendingInsertGroup = null;
-    return true;
-  };
-
-  return {
-    record(update, options = {}) {
-      if (options.checkpoint) {
-        flushPendingInsertGroup();
-      }
-
-      if (!update.docChanged) {
-        return;
-      }
-
-      if (update.nextState.mode === "insert") {
-        pendingInsertGroup ??= createHistoryEntry(update.prevState);
-        redoStack.length = 0;
-        return;
-      }
-
-      flushPendingInsertGroup();
-      undoStack.push(createHistoryEntry(update.prevState));
-      redoStack.length = 0;
-    },
-    undo(currentState) {
-      flushPendingInsertGroup();
-      const previous = undoStack.pop() ?? null;
-
-      if (!previous) {
-        return null;
-      }
-
-      redoStack.push(createHistoryEntry(currentState));
-      return previous;
-    },
-    redo(currentState) {
-      flushPendingInsertGroup();
-      const next = redoStack.pop() ?? null;
-
-      if (!next) {
-        return null;
-      }
-
-      undoStack.push(createHistoryEntry(currentState));
-      return next;
-    },
-    checkpoint() {
-      return flushPendingInsertGroup();
-    },
-    clear() {
-      undoStack.length = 0;
-      redoStack.length = 0;
-      pendingInsertGroup = null;
-    }
-  };
-}
+export { createSnapshotHistory };
 
 export function createEditorController(options: CreateEditorControllerOptions = {}): EditorController {
   let state =

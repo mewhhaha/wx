@@ -1,5 +1,4 @@
 import { getActiveCharacterOffset, getCursorOffset, getSelectionOffsets, type EditorState } from "../../editor-core/src/index";
-import type { EditorPresentationState } from "../../editor-controller/src/index";
 import type { DiagnosticSeverity, EditorDiagnostic, HighlightRole, HighlightSpan } from "../../editor-language/src/index";
 
 export type EditorLayoutToken =
@@ -176,9 +175,103 @@ export interface EditorVisualRowsInput {
   softWrap: boolean;
 }
 
+export interface EditorLayoutLineChangeState {
+  kind: "added" | "modified" | null;
+  deleted: boolean;
+}
+
+export interface EditorLayoutCommandLineState {
+  active: boolean;
+  value: string;
+  prompt: ":" | "/" | "?";
+}
+
+export interface EditorLayoutPickerItemState {
+  label: string;
+  detail?: string;
+  selected?: boolean;
+}
+
+export interface EditorLayoutPickerState {
+  active: boolean;
+  loading: boolean;
+  title: string;
+  items: readonly EditorLayoutPickerItemState[];
+  selectedIndex: number;
+  error: string | null;
+}
+
+export interface EditorLayoutBottomMessageState {
+  tone: "info" | "warning" | "error";
+  text: string;
+}
+
+export interface EditorLayoutHoverState {
+  active: boolean;
+  content: string;
+  source?: string;
+  tone: "info" | "warning" | "error";
+}
+
+export interface EditorLayoutFlashHintState {
+  offset: number;
+  label: string;
+}
+
+export interface EditorLayoutFlashState {
+  active: boolean;
+  target: string;
+  input: string;
+  hints: readonly EditorLayoutFlashHintState[];
+}
+
+export type EditorLayoutPendingAction =
+  | null
+  | { kind: "g" | "[" | "]" | "m" | "space" | "flash-target" }
+  | { kind: "z"; sticky: boolean }
+  | { kind: "find"; variant: "f" | "F" | "t" | "T" }
+  | { kind: "textobject"; mode: "around" | "inside" }
+  | { kind: "surround-add" }
+  | { kind: "surround-delete" }
+  | { kind: "surround-replace-from" }
+  | { kind: "surround-replace-to"; fromObject: string }
+  | { kind: "register-select"; insert: boolean };
+
+export interface EditorLayoutPresentationState {
+  filePath: string;
+  viewport: {
+    topVisualRow: number;
+    visibleRowCapacity: number;
+    wrapColumns: number;
+    softWrap: boolean;
+    visualRows: readonly EditorVisualRow[];
+    visibleVisualRows: readonly EditorVisualRow[];
+    lineVisualRanges: readonly EditorLineVisualRange[];
+  };
+  language: {
+    diagnostics: readonly EditorDiagnostic[];
+    diagnosticsByLine: ReadonlyMap<number, readonly EditorDiagnostic[]>;
+    lineChangesByLine: ReadonlyMap<number, EditorLayoutLineChangeState>;
+    visibleHighlightsByLine: ReadonlyMap<number, readonly HighlightSpan[]>;
+  };
+  search: {
+    lastMatch: { from: number; to: number } | null;
+    visibleMatchesByLine: ReadonlyMap<number, readonly { from: number; to: number }[]>;
+  };
+  ui: {
+    commandLine: EditorLayoutCommandLineState;
+    picker: EditorLayoutPickerState;
+    bottomMessage: EditorLayoutBottomMessageState | null;
+    hover: EditorLayoutHoverState;
+    flash: EditorLayoutFlashState;
+    pendingAction: EditorLayoutPendingAction;
+    pendingCount: string;
+  };
+}
+
 export interface EditorLayoutInput {
   state: EditorState;
-  presentation: EditorPresentationState;
+  presentation: EditorLayoutPresentationState;
   hoverAnchor: {
     col: number;
     row: number;

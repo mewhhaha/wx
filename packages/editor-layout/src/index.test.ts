@@ -389,6 +389,7 @@ describe("buildEditorLayout", () => {
     expect(source.includes("document.")).toBe(false);
     expect(source.includes("window.")).toBe(false);
     expect(source.includes("HTMLElement")).toBe(false);
+    expect(source.includes("editor-controller")).toBe(false);
   });
 
   it("provides stable flash labels", () => {

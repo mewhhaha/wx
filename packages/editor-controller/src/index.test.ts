@@ -221,6 +221,55 @@ describe("editor controller", () => {
     expect(controller.getPresentationState().themeName).toBe("tide");
   });
 
+  it("keeps compatibility command-line wrappers on the shared key-input session state", async () => {
+    const wrapped = createEditorController({ value: "alpha\nbeta\nalpha" });
+    const keyed = createEditorController({ value: "alpha\nbeta\nalpha" });
+
+    wrapped.setViewportMetrics({ visibleRowCapacity: 3, wrapColumns: 40, softWrap: true });
+    keyed.setViewportMetrics({ visibleRowCapacity: 3, wrapColumns: 40, softWrap: true });
+
+    wrapped.openCommandLine("/");
+    await wrapped.handleCommandLineKey("b");
+    await wrapped.handleCommandLineKey("e");
+
+    await keyed.handleKeyInput({ key: "/", text: "/" });
+    await keyed.handleKeyInput({ key: "b", text: "b" });
+    await keyed.handleKeyInput({ key: "e", text: "e" });
+
+    expect(wrapped.getPresentationState().ui.commandLine).toEqual(keyed.getPresentationState().ui.commandLine);
+    expect(wrapped.getState().selection).toEqual(keyed.getState().selection);
+  });
+
+  it("does not sync the language document during rapid engine-backed movement keys", async () => {
+    const highlighter = {
+      open: vi.fn(async () => {}),
+      update: vi.fn(async () => {}),
+      getHighlights: vi.fn(async () => [{ from: 0, to: 5, role: "keyword" as const }])
+    };
+    const controller = createEditorController({
+      value: Array.from({ length: 8 }, (_, index) => `line ${index} alpha beta`).join("\n")
+    });
+
+    controller.setLanguageServices([{ highlighter }]);
+    controller.setViewportMetrics({ visibleRowCapacity: 20, wrapColumns: 80, softWrap: false });
+    await controller.refreshLanguage({
+      forceDocumentSync: true,
+      highlightViewport: { fromLine: 0, toLine: 7 },
+      refreshDiagnostics: false,
+      refreshLineChanges: false
+    });
+
+    highlighter.open.mockClear();
+    highlighter.update.mockClear();
+
+    for (const key of ["j", "j", "l", "l", "h", "k", "j", "l", "h", "k"]) {
+      await controller.handleKeyInput({ key, text: key });
+    }
+
+    expect(highlighter.open).not.toHaveBeenCalled();
+    expect(highlighter.update).not.toHaveBeenCalled();
+  });
+
   it("reveals selection from controller-owned viewport metrics during key input", async () => {
     const controller = createEditorController({
       value: Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n")
