@@ -1,5 +1,7 @@
-import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { Worker as NodeWorker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
 
 import { type EditorState } from "../../editor-core/src/index";
 import {
@@ -18,9 +20,11 @@ import {
   languageProviderToServices,
   type EditorLanguageServiceInput,
   type EditorLanguageServices,
+  type EditorLineRange,
+  type HighlightSpan,
   type LanguageProvider
 } from "../../editor-language/src/index";
-import { createTreeSitterLanguageServices, typescriptHighlightQuery } from "../../editor-tree-sitter/src/index";
+import { typescriptHighlightQuery } from "../../editor-tree-sitter/src/highlightQuery";
 import {
   defaultTheme,
   resolveThemeColor,
@@ -113,6 +117,12 @@ interface WorkerLike {
   removeEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
   postMessage(message: unknown): void;
   terminate(): void;
+}
+
+interface NodeTreeSitterLanguageOptions {
+  parserWasmUrl: string;
+  languageWasmUrl: string;
+  query: string;
 }
 
 const ANSI_RESET = "\u001b[0m";
@@ -211,6 +221,138 @@ function createNodeWorkerBridge(moduleUrl: URL): WorkerLike {
       void worker.terminate();
     }
   };
+}
+
+function createNodeTreeSitterLanguageServices(options: NodeTreeSitterLanguageOptions): EditorLanguageServices {
+  const worker = createNodeWorkerBridge(new URL("./treeSitterNodeWorker.js", import.meta.url));
+  const pendingHighlights = new Map<number, (spans: HighlightSpan[]) => void>();
+  const pendingSelections = new Map<number, (selection: { from: number; to: number } | null) => void>();
+  let nextRequestId = 1;
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
+  const handleMessage = (event: { data: unknown }) => {
+    const payload = event.data as
+      | { type: "ready" }
+      | { type: "highlights"; requestId: number; spans: HighlightSpan[] }
+      | { type: "selection"; requestId: number; selection: { from: number; to: number } | null };
+
+    if (payload.type === "ready") {
+      resolveReady();
+      return;
+    }
+
+    if (payload.type === "highlights") {
+      const pending = pendingHighlights.get(payload.requestId);
+      if (pending) {
+        pending(payload.spans);
+        pendingHighlights.delete(payload.requestId);
+      }
+      return;
+    }
+
+    if (payload.type === "selection") {
+      const pending = pendingSelections.get(payload.requestId);
+      if (pending) {
+        pending(payload.selection);
+        pendingSelections.delete(payload.requestId);
+      }
+    }
+  };
+
+  worker.addEventListener("message", handleMessage);
+  worker.postMessage({
+    type: "init",
+    parserWasmUrl: options.parserWasmUrl,
+    languageWasmUrl: options.languageWasmUrl,
+    query: options.query
+  });
+
+  return {
+    highlighter: {
+      async open(document) {
+        await ready;
+        worker.postMessage({
+          type: "open",
+          revision: document.revision,
+          text: document.doc.text
+        });
+      },
+      async update(document, changes) {
+        await ready;
+        worker.postMessage({
+          type: "update",
+          revision: document.revision,
+          text: document.doc.text,
+          changes
+        });
+      },
+      async getHighlights(lines: EditorLineRange, revision: number): Promise<HighlightSpan[]> {
+        await ready;
+        const requestId = nextRequestId++;
+        return await new Promise<HighlightSpan[]>((resolve) => {
+          pendingHighlights.set(requestId, resolve);
+          worker.postMessage({
+            type: "highlight",
+            revision,
+            requestId,
+            lines
+          });
+        });
+      },
+      destroy() {
+        worker.removeEventListener("message", handleMessage);
+        pendingHighlights.clear();
+        pendingSelections.clear();
+        worker.terminate();
+      }
+    },
+    syntaxSelector: {
+      async expandSelection(selection, activeOffset, revision) {
+        await ready;
+        const requestId = nextRequestId++;
+        return await new Promise<{ from: number; to: number } | null>((resolve) => {
+          pendingSelections.set(requestId, resolve);
+          worker.postMessage({
+            type: "expand-selection",
+            revision,
+            requestId,
+            selection,
+            activeOffset
+          });
+        });
+      },
+      async shrinkSelection(selection, activeOffset, revision) {
+        await ready;
+        const requestId = nextRequestId++;
+        return await new Promise<{ from: number; to: number } | null>((resolve) => {
+          pendingSelections.set(requestId, resolve);
+          worker.postMessage({
+            type: "shrink-selection",
+            revision,
+            requestId,
+            selection,
+            activeOffset
+          });
+        });
+      }
+    }
+  };
+}
+
+function resolveDemoAssetPath(candidates: readonly string[]): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const workspaceRoot = resolve(here, "..", "..", "..");
+
+  for (const candidate of candidates) {
+    const absolute = resolve(workspaceRoot, candidate);
+    if (existsSync(absolute)) {
+      return absolute;
+    }
+  }
+
+  throw new Error(`Could not locate demo asset. Tried: ${candidates.join(", ")}`);
 }
 
 function parseAnsiInput(chunk: Buffer | string): string[] {
@@ -945,13 +1087,16 @@ export async function runAnsiMirrorDemo(): Promise<void> {
       cursorText: "#0c1824"
     }
   };
-  const require = createRequire(import.meta.url);
-  const treeSitterServices = createTreeSitterLanguageServices({
-    parserWasmUrl: require.resolve("web-tree-sitter/web-tree-sitter.wasm"),
-    languageWasmUrl: require.resolve("tree-sitter-typescript/tree-sitter-typescript.wasm"),
-    query: typescriptHighlightQuery,
-    createWorker: () =>
-      createNodeWorkerBridge(new URL("./treeSitterNodeWorker.js", import.meta.url)) as unknown as Worker
+  const treeSitterServices = createNodeTreeSitterLanguageServices({
+    parserWasmUrl: resolveDemoAssetPath([
+      "apps/playground/src/assets/web-tree-sitter.wasm",
+      "node_modules/.pnpm/web-tree-sitter@0.26.8/node_modules/web-tree-sitter/web-tree-sitter.wasm"
+    ]),
+    languageWasmUrl: resolveDemoAssetPath([
+      "apps/playground/src/assets/tree-sitter-typescript.wasm",
+      "node_modules/.pnpm/tree-sitter-typescript@0.23.2/node_modules/tree-sitter-typescript/tree-sitter-typescript.wasm"
+    ]),
+    query: typescriptHighlightQuery
   });
 
   const controller = createEditorController({ value: sample });
