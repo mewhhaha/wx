@@ -858,8 +858,15 @@ export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOption
       mirror.renderNow();
       return;
     }
-    const ctrl = key.startsWith("Ctrl+");
-    const normalizedKey = ctrl ? key.slice(5) : key;
+    const presentationBeforeKey = controller.getPresentationState();
+    const stateBeforeKey = controller.getState();
+    const terminalCtrlIAsTab =
+      key === "Tab" &&
+      stateBeforeKey.mode !== "insert" &&
+      !presentationBeforeKey.ui.commandLine.active &&
+      !presentationBeforeKey.ui.picker.active;
+    const ctrl = key.startsWith("Ctrl+") || terminalCtrlIAsTab;
+    const normalizedKey = terminalCtrlIAsTab ? "i" : ctrl ? key.slice(5) : key;
     const result = await controller.handleKeyInput(
       {
         key: normalizedKey,

@@ -516,4 +516,31 @@ describe("@wx/editor-view-ansi", () => {
       terminal.destroy();
     });
   });
+
+  it("supports Ctrl-o and terminal Ctrl-i jumplist navigation through the shared controller path", async () => {
+    const controller = createEditorController({ value: "one\ntwo\nthree" });
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      cols: 40,
+      rows: 6,
+      write: vi.fn(),
+      enterAltScreen: false
+    });
+
+    terminal.mount();
+    input.emit("l");
+    input.emit("\u0013");
+    input.emit("j");
+    input.emit("\u000f");
+    await flushAsyncWork();
+
+    expect(controller.getState().selection.ranges[0]?.head).toBe(1);
+
+    input.emit("\t");
+    await flushAsyncWork();
+    expect(controller.getState().selection.ranges[0]?.head).toBe(5);
+    terminal.destroy();
+  });
 });

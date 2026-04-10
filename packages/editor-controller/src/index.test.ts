@@ -317,4 +317,29 @@ describe("editor controller", () => {
 
     expect(controller.getPresentationState().viewport.topVisualRow).toBe(1);
   });
+
+  it("treats Ctrl-o on an empty jumplist as a handled no-op", async () => {
+    const controller = createEditorController({ value: "alpha\nbeta" });
+    const beforeState = controller.getState();
+
+    const result = await controller.handleKeyInput({ key: "o", ctrl: true });
+
+    expect(result).toEqual({ handled: true });
+    expect(controller.getState()).toEqual(beforeState);
+    expect(controller.getJumpList()).toEqual([]);
+  });
+
+  it("round-trips jump entries through Ctrl-o and Ctrl-i", async () => {
+    const controller = createEditorController({ value: "one\ntwo\nthree" });
+
+    await controller.handleKeyInput({ key: "l", text: "l" });
+    await controller.handleKeyInput({ key: "s", ctrl: true });
+    await controller.handleKeyInput({ key: "j", text: "j" });
+    await controller.handleKeyInput({ key: "o", ctrl: true });
+
+    expect(controller.getState().selection.ranges[0]?.head).toBe(1);
+
+    await controller.handleKeyInput({ key: "i", ctrl: true });
+    expect(controller.getState().selection.ranges[0]?.head).toBe(5);
+  });
 });
