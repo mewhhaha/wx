@@ -23,6 +23,7 @@ import {
 } from "../../editor-language/src/index";
 import { typescriptHighlightQuery } from "../../editor-tree-sitter/src/highlightQuery";
 import { createNodeTreeSitterLanguageServices } from "../../editor-tree-sitter/src/node";
+import { graphiteTheme, mintTheme, phTheme } from "../../../apps/playground/src/phTheme";
 import {
   defaultTheme,
   resolveThemeColor,
@@ -112,7 +113,7 @@ interface Cell {
 
 const ANSI_RESET = "\u001b[0m";
 const ANSI_HOME = "\u001b[H";
-const ANSI_ENTER_ALT = "\u001b[?1049h\u001b[2J\u001b[H\u001b[?25l";
+const ANSI_ENTER_ALT = "\u001b[?1049h\u001b[2J\u001b[H";
 const ANSI_EXIT_ALT = "\u001b[0m\u001b[?25h\u001b[?1049l";
 const SEARCH_MATCH_BG = "#5b4b00";
 const CURRENT_SEARCH_BG = "#a16207";
@@ -377,6 +378,24 @@ function styleForThemeRole(theme: ThemeSpec, role: ThemeRole, background?: strin
   return makeStyle(resolveThemeColor(theme, role), background ?? resolveThemeColor(theme, "background"), bold);
 }
 
+function styleForStatusMode(theme: ThemeSpec, label: string): CellStyle {
+  const mode = label.trim();
+
+  if (mode === "INS") {
+    return makeStyle(resolveThemeColor(theme, "background"), resolveThemeColor(theme, "string"), true);
+  }
+
+  if (mode === "VIS") {
+    return makeStyle(resolveThemeColor(theme, "background"), resolveThemeColor(theme, "keyword"), true);
+  }
+
+  if (mode === "JMP") {
+    return makeStyle(resolveThemeColor(theme, "background"), resolveThemeColor(theme, "type"), true);
+  }
+
+  return makeStyle(resolveThemeColor(theme, "cursorText"), resolveThemeColor(theme, "cursor"), true);
+}
+
 function styleForToken(
   theme: ThemeSpec,
   token: EditorLayoutRun["token"],
@@ -426,8 +445,6 @@ function styleForToken(
       return styleForThemeRole(theme, "diagnosticHint", rowBg);
     case "status":
       return makeStyle(resolveThemeColor(theme, "text"), STATUS_BG);
-    case "status-mode":
-      return makeStyle(resolveThemeColor(theme, "cursorText"), resolveThemeColor(theme, "cursor"), true);
     case "bottom":
       return makeStyle(resolveThemeColor(theme, "text"), BOTTOM_BG);
     case "bottom-prompt":
@@ -459,13 +476,15 @@ function writeRuns(row: Cell[], runs: readonly EditorLayoutRun[], theme: ThemeSp
       row,
       offset + run.col,
       run.text,
-      styleForToken(theme, run.token, rowBg, {
-        selected: run.selected,
-        searchMatch: run.searchMatch,
-        currentSearchMatch: run.currentSearchMatch,
-        flashTarget: run.flashTarget,
-        cursorBlock: run.cursorBlock
-      })
+      run.part === "status-mode"
+        ? styleForStatusMode(theme, run.text)
+        : styleForToken(theme, run.token, rowBg, {
+            selected: run.selected,
+            searchMatch: run.searchMatch,
+            currentSearchMatch: run.currentSearchMatch,
+            flashTarget: run.flashTarget,
+            cursorBlock: run.cursorBlock
+          })
     );
   }
 }
@@ -535,19 +554,43 @@ function renderDocumentRow(
     );
   }
 
-  const cursorLine = layoutRow.overlays.find((overlay) => overlay.kind === "cursor-line");
-  if (cursorLine) {
+  for (const overlay of layoutRow.overlays) {
+    if (overlay.kind !== "flash-hint") {
+      continue;
+    }
+
     writeText(
       row,
-      gutterText.length + Math.max(0, Math.min(contentCols - 1, cursorLine.col)),
-      "│",
-      makeStyle(resolveThemeColor(theme, "cursor"), rowBg, true)
+      gutterText.length + Math.max(0, Math.min(contentCols - 1, overlay.col)),
+      overlay.text,
+      styleForToken(theme, overlay.token, rowBg, { flashTarget: true })
     );
   }
+
 }
 
 function writeStatusRow(row: Cell[], runs: readonly EditorLayoutRun[], theme: ThemeSpec): void {
-  writeRuns(row, runs, theme, STATUS_BG);
+  for (const run of runs) {
+    const col =
+      run.part === "status-meta"
+        ? Math.max(0, row.length - Array.from(run.text).length)
+        : run.col;
+
+    writeText(
+      row,
+      col,
+      run.text,
+      run.part === "status-mode"
+        ? styleForStatusMode(theme, run.text)
+        : styleForToken(theme, run.token, STATUS_BG, {
+            selected: run.selected,
+            searchMatch: run.searchMatch,
+            currentSearchMatch: run.currentSearchMatch,
+            flashTarget: run.flashTarget,
+            cursorBlock: run.cursorBlock
+          })
+    );
+  }
 }
 
 function writeBottomRow(row: Cell[], runs: readonly EditorLayoutRun[], theme: ThemeSpec): void {
@@ -585,6 +628,37 @@ function overlayPanel(buffer: Cell[][], panel: EditorLayoutPanel, theme: ThemeSp
     }
     writeRuns(targetRow, rowRuns, theme, PANEL_BG, startCol + 1);
   });
+}
+
+function findTerminalCursor(layout: EditorLayoutModel, state: EditorState): { row: number; col: number; shape: "beam" | "block" } | null {
+  for (let rowIndex = 0; rowIndex < layout.document.rows.length; rowIndex += 1) {
+    const row = layout.document.rows[rowIndex]!;
+    const gutterCols = buildGutterText(row, Math.max(2, String(row.docLine + 1).length)).length;
+
+    if (state.mode === "insert") {
+      const overlay = row.overlays.find((entry) => entry.kind === "cursor-line");
+      if (overlay) {
+        return {
+          row: rowIndex + 1,
+          col: gutterCols + Math.max(0, overlay.col) + 1,
+          shape: "beam"
+        };
+      }
+      continue;
+    }
+
+    for (const run of row.contentRuns) {
+      if (run.cursorBlock) {
+        return {
+          row: rowIndex + 1,
+          col: gutterCols + run.col + 1,
+          shape: "block"
+        };
+      }
+    }
+  }
+
+  return null;
 }
 
 export function renderEditorAnsiFrame(input: RenderEditorAnsiFrameInput): string {
@@ -630,7 +704,12 @@ export function renderEditorAnsiFrame(input: RenderEditorAnsiFrameInput): string
   fillRange(buffer[rows - 1]!, 0, cols, makeStyle(resolveThemeColor(theme, "text"), BOTTOM_BG));
   writeBottomRow(buffer[rows - 1]!, layout.bottomBar.runs, theme);
 
-  return `${ANSI_HOME}${buffer.map(serializeRow).join("\n")}${ANSI_RESET}`;
+  const terminalCursor = findTerminalCursor(layout, input.state);
+  const cursorSequence = terminalCursor
+    ? `${terminalCursor.shape === "beam" ? "\u001b[6 q" : "\u001b[2 q"}\u001b[?25h\u001b[${terminalCursor.row};${terminalCursor.col}H`
+    : "\u001b[?25l";
+
+  return `${ANSI_HOME}${buffer.map(serializeRow).join("\n")}${ANSI_RESET}${cursorSequence}`;
 }
 
 export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): AnsiEditorMirror {
@@ -707,7 +786,7 @@ export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): 
       if (options.enterAltScreen ?? true) {
         write(ANSI_ENTER_ALT);
       } else {
-        write("\u001b[?25l");
+        write("\u001b[?25h");
       }
       syncViewportMetrics();
       unsubscribe = controller.subscribe(() => {
@@ -883,40 +962,6 @@ export async function runAnsiMirrorDemo(): Promise<void> {
     "  return `#${Math.floor(time * 17).toString(16)}`;",
     "}"
   ].join("\n");
-  const sunriseTheme: ThemeSpec = {
-    name: "sunrise",
-    colors: {
-      background: "#1b1410",
-      currentLine: "#2a1f18",
-      text: "#f6e7d8",
-      gutter: "#b08968",
-      keyword: "#ffb86c",
-      string: "#ffd166",
-      function: "#8ecae6",
-      type: "#ffaf87",
-      comment: "#8b6f5a",
-      selection: "#5b3a2e",
-      cursor: "#fff1e6",
-      cursorText: "#1b1410"
-    }
-  };
-  const tideTheme: ThemeSpec = {
-    name: "tide",
-    colors: {
-      background: "#0c1824",
-      currentLine: "#102334",
-      text: "#d9f0ff",
-      gutter: "#6ea8c7",
-      keyword: "#7dd3fc",
-      string: "#a7f3d0",
-      function: "#93c5fd",
-      type: "#c4b5fd",
-      comment: "#5f86a0",
-      selection: "#17364a",
-      cursor: "#f8fafc",
-      cursorText: "#0c1824"
-    }
-  };
   const treeSitterServices = createNodeTreeSitterLanguageServices({
     parserRuntimeUrl: resolveDemoAssetPath([
       "node_modules/.pnpm/web-tree-sitter@0.26.8/node_modules/web-tree-sitter/web-tree-sitter.js",
@@ -942,8 +987,8 @@ export async function runAnsiMirrorDemo(): Promise<void> {
     input: process.stdin,
     output: process.stdout,
     write: (text) => process.stdout.write(text),
-    theme: sunriseTheme,
-    availableThemes: [sunriseTheme, tideTheme],
+    theme: phTheme,
+    availableThemes: [phTheme, graphiteTheme, mintTheme],
     cols: process.stdout.columns ?? 100,
     rows: process.stdout.rows ?? 28,
     enterAltScreen: true,

@@ -348,9 +348,25 @@ describe("buildEditorLayout", () => {
       }
     });
 
-    expect(layout.statusBar.find((run) => run.part === "status-mode")?.text).toBe("NOR");
+    expect(layout.statusBar.find((run) => run.part === "status-mode")?.text).toBe(" NOR ");
     expect(layout.bottomBar.runs.find((run) => run.part === "command-prompt")?.text).toBe(":");
     expect(layout.bottomBar.runs.find((run) => run.part === "command-text")?.text).toBe("wq");
+  });
+
+  it("shows JMP in the status bar while jump mode is pending", () => {
+    const input = createInput("alpha beta");
+    const layout = buildEditorLayout({
+      ...input,
+      presentation: {
+        ...input.presentation,
+        ui: {
+          ...input.presentation.ui,
+          pendingAction: { kind: "flash-target" }
+        }
+      }
+    });
+
+    expect(layout.statusBar.find((run) => run.part === "status-mode")?.text).toBe(" JMP ");
   });
 
   it("builds a tooltip panel from hover content", () => {

@@ -147,6 +147,22 @@ const DIAGNOSTIC_SEVERITY_ORDER: Record<DiagnosticSeverity, number> = {
 const SURFACE_VERTICAL_PADDING = 16;
 const EMPTY_CELL_TEXT = "\u00a0";
 const INSERT_TAB_TEXT = "  ";
+
+function getStatusModeText(mode: EditorState["mode"], ui: { flash: { active: boolean }; pendingAction: { kind: string } | null }): string {
+  if (ui.flash.active || ui.pendingAction?.kind === "flash-target") {
+    return " JMP ";
+  }
+
+  if (mode === "insert") {
+    return " INS ";
+  }
+
+  if (mode === "visual") {
+    return " VIS ";
+  }
+
+  return " NOR ";
+}
 const DEFAULT_INDENT_GUIDE_CHARACTER = "│";
 const VIEWPORT_OVERSCAN_LINES = 6;
 const VERTICAL_SCROLLOFF_ROWS = 3;
@@ -1977,8 +1993,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const cursorPosition = state.doc.positionAt(cursorOffset);
     const { errors, warnings } = getDiagnosticsSummary();
 
-    statusMode.textContent = state.mode === "insert" ? "INS" : state.mode === "visual" ? "VIS" : "NOR";
-    statusFile.textContent = filePath;
+    statusMode.textContent = getStatusModeText(state.mode, { flash: flashState, pendingAction });
+    statusFile.textContent = ` ${filePath}`;
     statusMeta.textContent = [
       "1 sel",
       errors > 0 ? `E${errors}` : "",

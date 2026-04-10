@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
+  appendInsertMode,
   createCharacterSelection,
   createEditorState,
   createSelection,
@@ -16,6 +17,20 @@ import { createAnsiEditorTerminal } from "./index";
 
 function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
+}
+
+function readTerminalCursor(text: string): { row: number; col: number } | null {
+  const matches = [...text.matchAll(/\u001b\[(\d+);(\d+)H/g)];
+  const match = matches.at(-1);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    row: Number(match[1]),
+    col: Number(match[2])
+  };
 }
 
 function createPresentation(value: string) {
@@ -117,21 +132,47 @@ describe("@wx/editor-view-ansi", () => {
     expect(frame).toContain("examples/test");
   });
 
-  it("renders a beam-style insert cursor as a cell marker", () => {
+  it("renders insert mode with a real beam cursor without replacing text", () => {
     const controller = createEditorController({ value: "alpha" });
     controller.execute(enterInsertMode);
     controller.setViewportMetrics({ visibleRowCapacity: 4, wrapColumns: 24, softWrap: true });
 
-    const frame = stripAnsi(
-      renderEditorAnsiFrame({
-        state: controller.getState(),
-        presentation: controller.getPresentationState(),
-        cols: 30,
-        rows: 6
-      })
-    );
+    const frame = renderEditorAnsiFrame({
+      state: controller.getState(),
+      presentation: controller.getPresentationState(),
+      cols: 30,
+      rows: 6
+    });
 
-    expect(frame).toContain("│lpha");
+    expect(stripAnsi(frame)).toContain("alpha");
+    expect(frame).toContain("\u001b[6 q");
+    expect(readTerminalCursor(frame)).toEqual({ row: 1, col: 7 });
+  });
+
+  it("places append-mode insert cursor one cell to the right of normal insert", () => {
+    const insertController = createEditorController({ value: "alpha" });
+    insertController.execute(enterInsertMode);
+    insertController.setViewportMetrics({ visibleRowCapacity: 4, wrapColumns: 24, softWrap: true });
+
+    const appendController = createEditorController({ value: "alpha" });
+    appendController.execute(appendInsertMode);
+    appendController.setViewportMetrics({ visibleRowCapacity: 4, wrapColumns: 24, softWrap: true });
+
+    const insertFrame = renderEditorAnsiFrame({
+      state: insertController.getState(),
+      presentation: insertController.getPresentationState(),
+      cols: 30,
+      rows: 6
+    });
+    const appendFrame = renderEditorAnsiFrame({
+      state: appendController.getState(),
+      presentation: appendController.getPresentationState(),
+      cols: 30,
+      rows: 6
+    });
+
+    expect(readTerminalCursor(insertFrame)).toEqual({ row: 1, col: 7 });
+    expect(readTerminalCursor(appendFrame)).toEqual({ row: 1, col: 8 });
   });
 
   it("renders current search highlights from the shared presentation state", () => {
@@ -155,6 +196,29 @@ describe("@wx/editor-view-ansi", () => {
     });
 
     expect(frame).toContain("48;2;161;98;7m");
+  });
+
+  it("renders distinct flash-hint labels from layout overlays", () => {
+    const controller = createEditorController({ value: "ta ta ta ta\nta ta ta ta" });
+    controller.setViewportMetrics({ visibleRowCapacity: 6, wrapColumns: 80, softWrap: false });
+    controller.beginFlashTarget();
+    controller.handleFlashKey("t");
+
+    const labels = controller.getPresentationState().ui.flash.hints.map((hint) => hint.label);
+    expect(new Set(labels).size).toBeGreaterThan(3);
+
+    const frame = stripAnsi(
+      renderEditorAnsiFrame({
+        state: controller.getState(),
+        presentation: controller.getPresentationState(),
+        cols: 40,
+        rows: 8
+      })
+    );
+
+    for (const label of labels.slice(0, 4)) {
+      expect(frame).toContain(label);
+    }
   });
 
   it("renders diagnostics and diff gutter markers", () => {

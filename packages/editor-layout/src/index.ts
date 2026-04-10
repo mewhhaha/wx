@@ -700,6 +700,22 @@ function toneForSeverity(severity: DiagnosticSeverity): "info" | "warning" | "er
   return severity === "error" ? "error" : severity === "warning" ? "warning" : "info";
 }
 
+function getStatusModeText(input: EditorLayoutInput): string {
+  if (input.presentation.ui.flash.active || input.presentation.ui.pendingAction?.kind === "flash-target") {
+    return " JMP ";
+  }
+
+  if (input.state.mode === "insert") {
+    return " INS ";
+  }
+
+  if (input.state.mode === "visual") {
+    return " VIS ";
+  }
+
+  return " NOR ";
+}
+
 function renderLineRuns(args: {
   state: EditorState;
   spans: readonly HighlightSpan[];
@@ -1068,21 +1084,22 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
 
   const cursorPosition = input.state.doc.positionAt(activeOffset);
   const { errors, warnings } = getDiagnosticsSummary(input.presentation.language.diagnostics);
+  const statusModeText = getStatusModeText(input);
   const statusBar: EditorLayoutRun[] = [
     {
       col: 0,
-      text: input.state.mode === "insert" ? "INS" : input.state.mode === "visual" ? "VIS" : "NOR",
+      text: statusModeText,
       token: "status-mode",
       part: "status-mode"
     },
     {
-      col: 4,
-      text: input.presentation.filePath,
+      col: statusModeText.length,
+      text: ` ${input.presentation.filePath}`,
       token: "status",
       part: "status-file"
     },
     {
-      col: 4 + input.presentation.filePath.length + 3,
+      col: statusModeText.length + input.presentation.filePath.length + 4,
       text: [
         "1 sel",
         errors > 0 ? `E${errors}` : "",

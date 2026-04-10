@@ -45,7 +45,7 @@ describe("createEditor", () => {
     expect(container.querySelector('[data-wx-editor-gutter="2"]')?.textContent).toBe("2");
     expect(container.querySelector("[data-wx-editor-cursor='true']")?.textContent).toBe("o");
     expect(container.querySelector("[data-wx-editor-cursor='true']")?.getAttribute("data-wx-editor-cursor-kind")).toBe("block");
-    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("NOR");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" NOR ");
   });
 
   it("moves the cursor with hjkl and arrow keys", () => {
@@ -103,11 +103,13 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", bubbles: true }));
 
     expect(container.querySelector("[data-wx-editor-flash-hint]")).toBeNull();
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" JMP ");
     expect(container.querySelector("[data-wx-editor-prefix-hint='flash-target']")?.textContent).toBe(",");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
 
     expect(container.querySelectorAll("[data-wx-editor-flash-hint]")).toHaveLength(1);
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" JMP ");
     expect(container.querySelector("[data-wx-editor-prefix-hint='flash']")?.textContent).toBe(",b");
     expect(container.querySelector("[data-wx-editor-cursor='true']")).not.toBeNull();
     expect(container.querySelector(".wx-flash-target")).not.toBeNull();
@@ -402,14 +404,14 @@ describe("createEditor", () => {
     editor.focus();
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
     expect(container.querySelector("[data-wx-editor-cursor='true']")?.getAttribute("data-wx-editor-cursor-kind")).toBe("line");
-    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("INS");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" INS ");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 
     expect(editor.getState().doc.text).toBe("xabc");
     expect(editor.getState().mode).toBe("normal");
     expect(container.querySelector("[data-wx-editor-cursor='true']")?.getAttribute("data-wx-editor-cursor-kind")).toBe("block");
-    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("NOR");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" NOR ");
   });
 
   it("shows the line cursor when append enters insert mode at the end of a line", () => {
@@ -424,7 +426,7 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
 
     expect(container.querySelector("[data-wx-editor-cursor='true']")?.getAttribute("data-wx-editor-cursor-kind")).toBe("line");
-    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("INS");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" INS ");
   });
 
   it("inserts indentation spaces in insert mode when tab is pressed", () => {
@@ -567,7 +569,7 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "o", bubbles: true }));
     expect(editor.getState().mode).toBe("insert");
     expect(editor.getState().doc.text).toBe("alpha\n\nbeta");
-    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("INS");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" INS ");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(getSelectionOffsets(editor.getState())).toEqual({ from: 6, to: 7 });
@@ -1046,17 +1048,17 @@ describe("createEditor", () => {
     expect(container.querySelectorAll(".wx-is-selected").length).toBeGreaterThan(0);
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "v", bubbles: true }));
-    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("VIS");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" VIS ");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
     expect(container.querySelector("[data-wx-editor-content='1']")?.textContent).toContain("alpha beta");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
-    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("VIS");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" VIS ");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
-    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe("INS");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" INS ");
   });
 
   it("routes y and p through the DOM key handler", () => {
@@ -1682,7 +1684,7 @@ describe("createEditor", () => {
     await Promise.resolve();
 
     expect(writes).toEqual([{ filePath: "memory/demo.scene", text: "screen\n  size fill\n" }]);
-    expect(container.querySelector("[data-wx-editor-status-file='true']")?.textContent).toBe("memory/demo.scene");
+    expect(container.querySelector("[data-wx-editor-status-file='true']")?.textContent).toBe(" memory/demo.scene");
   });
 
   it("renders added, modified, and deleted gutter markers after the line number", async () => {
