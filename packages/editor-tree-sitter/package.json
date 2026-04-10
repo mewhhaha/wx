@@ -10,10 +10,14 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./node": {
+      "types": "./src/node.ts",
+      "import": "./src/node.ts"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/treeSitter.worker.ts --format esm --out-dir dist"
+    "build": "tsup src/index.ts src/treeSitter.worker.ts src/node.ts src/nodeWorker.ts --format esm --out-dir dist"
   },
   "dependencies": {
     "@wx/editor-core": "workspace:*",

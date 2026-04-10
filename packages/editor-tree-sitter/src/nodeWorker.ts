@@ -6,10 +6,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { TextChange } from "@wx/editor-core";
 import type { HighlightSpan, SyntaxSelectionRange } from "@wx/editor-language";
 
-import { mapCaptureNameToRole } from "../../editor-tree-sitter/src/highlightMapping";
-import { applyTextChange, buildTreeEdit, rebaseTextChanges } from "../../editor-tree-sitter/src/incrementalEdits";
-import type { TreeSitterWorkerMessage, TreeSitterWorkerResponse } from "../../editor-tree-sitter/src/messages";
-import { expandSyntaxSelection, shrinkSyntaxSelection } from "../../editor-tree-sitter/src/syntaxSelection";
+import { mapCaptureNameToRole } from "./highlightMapping";
+import { applyTextChange, buildTreeEdit, rebaseTextChanges } from "./incrementalEdits";
+import type { TreeSitterWorkerMessage, TreeSitterWorkerResponse } from "./messages";
+import { expandSyntaxSelection, shrinkSyntaxSelection } from "./syntaxSelection";
 
 interface ParserModule {
   Language: {
@@ -48,11 +48,7 @@ interface QueryLike {
   ): Array<{ node: { startIndex: number; endIndex: number }; name: string }>;
 }
 
-let ParserImpl: ParserModule["Parser"] | null = null;
-let LanguageImpl: ParserModule["Language"] | null = null;
-let QueryImpl: ParserModule["Query"] | null = null;
 let parser: InstanceType<ParserModule["Parser"]> | null = null;
-let language: unknown = null;
 let query: QueryLike | null = null;
 let currentTree: TreeLike | null = null;
 let currentText = "";
@@ -60,6 +56,10 @@ let currentRevision = 0;
 
 function post(message: TreeSitterWorkerResponse): void {
   parentPort?.postMessage(message);
+}
+
+function toPath(value: string): string {
+  return value.startsWith("file:") ? fileURLToPath(value) : value;
 }
 
 function resolveWorkerDependency(candidates: readonly string[]): string {
@@ -76,11 +76,18 @@ function resolveWorkerDependency(candidates: readonly string[]): string {
   throw new Error(`Could not locate tree-sitter runtime dependency. Tried: ${candidates.join(", ")}`);
 }
 
-async function loadParserModule(): Promise<ParserModule> {
-  const modulePath = resolveWorkerDependency([
-    "node_modules/.pnpm/web-tree-sitter@0.26.8/node_modules/web-tree-sitter/web-tree-sitter.js",
-    "node_modules/web-tree-sitter/web-tree-sitter.js"
-  ]);
+async function loadParserModule(parserRuntimeUrl: string | undefined, parserWasmUrl: string): Promise<ParserModule> {
+  const parserWasmPath = toPath(parserWasmUrl);
+  const runtimePath =
+    parserRuntimeUrl !== undefined
+      ? toPath(parserRuntimeUrl)
+      : resolve(dirname(parserWasmPath), "web-tree-sitter.js");
+  const modulePath = existsSync(runtimePath)
+    ? runtimePath
+    : resolveWorkerDependency([
+        "node_modules/.pnpm/web-tree-sitter@0.26.8/node_modules/web-tree-sitter/web-tree-sitter.js",
+        "node_modules/web-tree-sitter/web-tree-sitter.js"
+      ]);
 
   return (await import(pathToFileURL(modulePath).href)) as ParserModule;
 }
@@ -136,22 +143,19 @@ function sortAndCompact(spans: HighlightSpan[]): HighlightSpan[] {
   return compacted;
 }
 
-async function initialize(parserWasmUrl: string, languageWasmUrl: string, source: string): Promise<void> {
-  const parserModule = await loadParserModule();
-  ParserImpl = parserModule.Parser;
-  LanguageImpl = parserModule.Language;
-  QueryImpl = parserModule.Query;
+async function initialize(parserWasmUrl: string, parserRuntimeUrl: string | undefined, languageWasmUrl: string, source: string): Promise<void> {
+  const parserModule = await loadParserModule(parserRuntimeUrl, parserWasmUrl);
 
-  await ParserImpl.init({
+  await parserModule.Parser.init({
     locateFile() {
       return parserWasmUrl;
     }
   });
 
-  language = await LanguageImpl.load(languageWasmUrl);
-  parser = new ParserImpl();
+  const language = await parserModule.Language.load(languageWasmUrl);
+  parser = new parserModule.Parser();
   parser.setLanguage(language);
-  query = new QueryImpl(language, source) as QueryLike;
+  query = new parserModule.Query(language, source) as QueryLike;
 }
 
 function parseText(text: string, revision: number): void {
@@ -238,7 +242,7 @@ parentPort?.on("message", async (payload: TreeSitterWorkerMessage) => {
   try {
     switch (payload.type) {
       case "init":
-        await initialize(payload.parserWasmUrl, payload.languageWasmUrl, payload.query);
+        await initialize(payload.parserWasmUrl, payload.parserRuntimeUrl, payload.languageWasmUrl, payload.query);
         post({ type: "ready" });
         return;
       case "open":

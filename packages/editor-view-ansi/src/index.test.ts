@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import {
   createCharacterSelection,
@@ -89,6 +91,15 @@ class FakeOutput {
 }
 
 describe("@wx/editor-view-ansi", () => {
+  it("keeps tree-sitter runtime ownership in the shared tree-sitter package", () => {
+    const source = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8");
+
+    expect(source).toContain("../../editor-tree-sitter/src/node");
+    expect(source).not.toContain("treeSitter.worker");
+    expect(source).not.toContain("worker_threads");
+    expect(source).not.toContain("createNodeWorkerBridge");
+  });
+
   it("renders plain text rows with gutters, status, and bottom rows", () => {
     const { state, presentation } = createPresentation("alpha\nbeta");
 

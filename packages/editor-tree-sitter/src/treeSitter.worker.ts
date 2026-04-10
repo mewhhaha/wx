@@ -1,5 +1,5 @@
 import type { TextChange } from "@wx/editor-core";
-import { Language, Parser, Query } from "web-tree-sitter";
+import { Language, Parser, Query, type Tree } from "web-tree-sitter";
 
 import type { HighlightRole, HighlightSpan, SyntaxSelectionRange } from "@wx/editor-language";
 
@@ -8,12 +8,15 @@ import { applyTextChange, buildTreeEdit, rebaseTextChanges } from "./incremental
 import type { TreeSitterWorkerMessage, TreeSitterWorkerResponse } from "./messages";
 import { expandSyntaxSelection, shrinkSyntaxSelection } from "./syntaxSelection";
 
-const globalScope = self as DedicatedWorkerGlobalScope;
+const globalScope = self as unknown as {
+  addEventListener(type: "message", listener: (event: MessageEvent<TreeSitterWorkerMessage>) => void): void;
+  postMessage(message: TreeSitterWorkerResponse): void;
+};
 
 let parser: Parser | null = null;
 let language: Language | null = null;
 let query: Query | null = null;
-let currentTree: Parser.Tree | null = null;
+let currentTree: Tree | null = null;
 let currentText = "";
 let currentRevision = 0;
 
@@ -106,7 +109,7 @@ function parseTextIncrementally(text: string, revision: number, changes: readonl
   let workingText = currentText;
 
   for (const change of rebasedChanges) {
-    currentTree.edit(buildTreeEdit(workingText, change));
+    currentTree.edit(buildTreeEdit(workingText, change) as Parameters<Tree["edit"]>[0]);
     workingText = applyTextChange(workingText, change);
   }
 

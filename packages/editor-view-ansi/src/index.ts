@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { Worker as NodeWorker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
 import { type EditorState } from "../../editor-core/src/index";
@@ -20,11 +19,10 @@ import {
   languageProviderToServices,
   type EditorLanguageServiceInput,
   type EditorLanguageServices,
-  type EditorLineRange,
-  type HighlightSpan,
   type LanguageProvider
 } from "../../editor-language/src/index";
 import { typescriptHighlightQuery } from "../../editor-tree-sitter/src/highlightQuery";
+import { createNodeTreeSitterLanguageServices } from "../../editor-tree-sitter/src/node";
 import {
   defaultTheme,
   resolveThemeColor,
@@ -112,19 +110,6 @@ interface Cell {
   style: CellStyle;
 }
 
-interface WorkerLike {
-  addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
-  removeEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
-  postMessage(message: unknown): void;
-  terminate(): void;
-}
-
-interface NodeTreeSitterLanguageOptions {
-  parserWasmUrl: string;
-  languageWasmUrl: string;
-  query: string;
-}
-
 const ANSI_RESET = "\u001b[0m";
 const ANSI_HOME = "\u001b[H";
 const ANSI_ENTER_ALT = "\u001b[?1049h\u001b[2J\u001b[H\u001b[?25l";
@@ -184,161 +169,6 @@ function removeListener<T extends (...args: never[]) => void>(
   if (target.removeListener) {
     target.removeListener(event, listener);
   }
-}
-
-function createNodeWorkerBridge(moduleUrl: URL): WorkerLike {
-  const worker = new NodeWorker(moduleUrl, { type: "module" });
-  const listeners = new Map<(event: { data: unknown }) => void, (data: unknown) => void>();
-
-  return {
-    addEventListener(type, listener) {
-      if (type !== "message") {
-        return;
-      }
-
-      const wrapped = (data: unknown) => listener({ data });
-      listeners.set(listener, wrapped);
-      worker.on("message", wrapped);
-    },
-    removeEventListener(type, listener) {
-      if (type !== "message") {
-        return;
-      }
-
-      const wrapped = listeners.get(listener);
-      if (!wrapped) {
-        return;
-      }
-
-      listeners.delete(listener);
-      worker.off("message", wrapped);
-    },
-    postMessage(message) {
-      worker.postMessage(message);
-    },
-    terminate() {
-      listeners.clear();
-      void worker.terminate();
-    }
-  };
-}
-
-function createNodeTreeSitterLanguageServices(options: NodeTreeSitterLanguageOptions): EditorLanguageServices {
-  const worker = createNodeWorkerBridge(new URL("./treeSitterNodeWorker.js", import.meta.url));
-  const pendingHighlights = new Map<number, (spans: HighlightSpan[]) => void>();
-  const pendingSelections = new Map<number, (selection: { from: number; to: number } | null) => void>();
-  let nextRequestId = 1;
-  let resolveReady!: () => void;
-  const ready = new Promise<void>((resolve) => {
-    resolveReady = resolve;
-  });
-  const handleMessage = (event: { data: unknown }) => {
-    const payload = event.data as
-      | { type: "ready" }
-      | { type: "highlights"; requestId: number; spans: HighlightSpan[] }
-      | { type: "selection"; requestId: number; selection: { from: number; to: number } | null };
-
-    if (payload.type === "ready") {
-      resolveReady();
-      return;
-    }
-
-    if (payload.type === "highlights") {
-      const pending = pendingHighlights.get(payload.requestId);
-      if (pending) {
-        pending(payload.spans);
-        pendingHighlights.delete(payload.requestId);
-      }
-      return;
-    }
-
-    if (payload.type === "selection") {
-      const pending = pendingSelections.get(payload.requestId);
-      if (pending) {
-        pending(payload.selection);
-        pendingSelections.delete(payload.requestId);
-      }
-    }
-  };
-
-  worker.addEventListener("message", handleMessage);
-  worker.postMessage({
-    type: "init",
-    parserWasmUrl: options.parserWasmUrl,
-    languageWasmUrl: options.languageWasmUrl,
-    query: options.query
-  });
-
-  return {
-    highlighter: {
-      async open(document) {
-        await ready;
-        worker.postMessage({
-          type: "open",
-          revision: document.revision,
-          text: document.doc.text
-        });
-      },
-      async update(document, changes) {
-        await ready;
-        worker.postMessage({
-          type: "update",
-          revision: document.revision,
-          text: document.doc.text,
-          changes
-        });
-      },
-      async getHighlights(lines: EditorLineRange, revision: number): Promise<HighlightSpan[]> {
-        await ready;
-        const requestId = nextRequestId++;
-        return await new Promise<HighlightSpan[]>((resolve) => {
-          pendingHighlights.set(requestId, resolve);
-          worker.postMessage({
-            type: "highlight",
-            revision,
-            requestId,
-            lines
-          });
-        });
-      },
-      destroy() {
-        worker.removeEventListener("message", handleMessage);
-        pendingHighlights.clear();
-        pendingSelections.clear();
-        worker.terminate();
-      }
-    },
-    syntaxSelector: {
-      async expandSelection(selection, activeOffset, revision) {
-        await ready;
-        const requestId = nextRequestId++;
-        return await new Promise<{ from: number; to: number } | null>((resolve) => {
-          pendingSelections.set(requestId, resolve);
-          worker.postMessage({
-            type: "expand-selection",
-            revision,
-            requestId,
-            selection,
-            activeOffset
-          });
-        });
-      },
-      async shrinkSelection(selection, activeOffset, revision) {
-        await ready;
-        const requestId = nextRequestId++;
-        return await new Promise<{ from: number; to: number } | null>((resolve) => {
-          pendingSelections.set(requestId, resolve);
-          worker.postMessage({
-            type: "shrink-selection",
-            revision,
-            requestId,
-            selection,
-            activeOffset
-          });
-        });
-      }
-    }
-  };
 }
 
 function resolveDemoAssetPath(candidates: readonly string[]): string {
@@ -1088,6 +918,10 @@ export async function runAnsiMirrorDemo(): Promise<void> {
     }
   };
   const treeSitterServices = createNodeTreeSitterLanguageServices({
+    parserRuntimeUrl: resolveDemoAssetPath([
+      "node_modules/.pnpm/web-tree-sitter@0.26.8/node_modules/web-tree-sitter/web-tree-sitter.js",
+      "node_modules/web-tree-sitter/web-tree-sitter.js"
+    ]),
     parserWasmUrl: resolveDemoAssetPath([
       "apps/playground/src/assets/web-tree-sitter.wasm",
       "node_modules/.pnpm/web-tree-sitter@0.26.8/node_modules/web-tree-sitter/web-tree-sitter.wasm"
@@ -1096,7 +930,8 @@ export async function runAnsiMirrorDemo(): Promise<void> {
       "apps/playground/src/assets/tree-sitter-typescript.wasm",
       "node_modules/.pnpm/tree-sitter-typescript@0.23.2/node_modules/tree-sitter-typescript/tree-sitter-typescript.wasm"
     ]),
-    query: typescriptHighlightQuery
+    query: typescriptHighlightQuery,
+    workerModuleUrl: new URL("./nodeWorker.js", import.meta.url)
   });
 
   const controller = createEditorController({ value: sample });

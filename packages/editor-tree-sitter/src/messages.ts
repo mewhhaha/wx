@@ -4,6 +4,7 @@ import type { EditorLineRange, HighlightSpan, SyntaxSelectionRange } from "@wx/e
 export interface WorkerInitMessage {
   type: "init";
   parserWasmUrl: string;
+  parserRuntimeUrl?: string;
   languageWasmUrl: string;
   query: string;
 }

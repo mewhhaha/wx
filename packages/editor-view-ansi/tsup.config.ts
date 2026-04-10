@@ -1,7 +1,11 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/demo.ts"],
+  entry: {
+    index: "src/index.ts",
+    demo: "src/demo.ts",
+    nodeWorker: "../editor-tree-sitter/src/nodeWorker.ts"
+  },
   format: ["esm"],
   outDir: "dist",
   target: "es2022",
