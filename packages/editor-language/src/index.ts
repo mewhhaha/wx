@@ -111,6 +111,11 @@ export interface Formatter {
 }
 
 export interface CommentToggler {
+  toggleComments?(context: { document: LanguageDocumentSnapshot; selection: SyntaxSelectionRange }): Promise<readonly TextChange[]>;
+  toggleBlockComments?(context: {
+    document: LanguageDocumentSnapshot;
+    selection: SyntaxSelectionRange;
+  }): Promise<readonly TextChange[]>;
   toggleLineComments(context: { document: LanguageDocumentSnapshot; selection: SyntaxSelectionRange }): Promise<readonly TextChange[]>;
 }
 

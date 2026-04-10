@@ -1,6 +1,7 @@
 import type { TextChange, TextDocument } from "@wx/editor-core";
 import type {
   CodeActionContext,
+  CommentToggler,
   EditorCodeAction,
   EditorDiagnostic,
   EditorHover,
@@ -11,6 +12,8 @@ import type {
   Highlighter,
   HoverSource
 } from "@wx/editor-language";
+
+import { createWgslCommentToggler } from "./commentToggler";
 
 type SceneWorkerResponse =
   | { type: "ready" }
@@ -179,12 +182,14 @@ export class SceneLangWorkerServices implements Highlighter, HoverSource, Format
 
 export function createSceneLangLanguageServices(options: SceneLangLanguageServicesOptions): EditorLanguageServices {
   const workerServices = new SceneLangWorkerServices(options);
+  const comments: CommentToggler = createWgslCommentToggler();
 
   return {
     highlighter: workerServices,
     diagnostics: workerServices,
     hover: workerServices,
     codeActions: workerServices,
-    formatter: workerServices
+    formatter: workerServices,
+    comments
   };
 }

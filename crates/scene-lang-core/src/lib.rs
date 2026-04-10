@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Severity {
@@ -96,6 +96,13 @@ pub struct ShaderProgram {
 struct HoverEntry {
     from: usize,
     to: usize,
+    content: String,
+}
+
+#[derive(Clone, Debug)]
+struct SymbolHover {
+    name: String,
+    declaration_from: usize,
     content: String,
 }
 
@@ -210,10 +217,11 @@ pub fn analyze_scene(source: &str) -> SceneAnalysis {
     let mut diagnostics = Vec::new();
     let mut highlights = Vec::new();
     let mut hover_entries = Vec::new();
+    let tokens = tokenize(source);
 
     collect_diagnostics(source, &mut diagnostics);
 
-    for token in tokenize(source) {
+    for token in &tokens {
         highlights.push(SceneHighlight {
             from: token.from,
             to: token.to,
@@ -229,7 +237,14 @@ pub fn analyze_scene(source: &str) -> SceneAnalysis {
         }
     }
 
-    let has_fatal = diagnostics.iter().any(|diagnostic| diagnostic.severity == Severity::Error);
+    hover_entries.extend(hover_entries_for_symbols(
+        &tokens,
+        &collect_symbol_hovers(source),
+    ));
+
+    let has_fatal = diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error);
     let program = if has_fatal {
         None
     } else {
@@ -257,6 +272,7 @@ pub fn hover_at(source: &str, offset: usize) -> Option<SceneHover> {
     analysis
         .hover_entries
         .into_iter()
+        .rev()
         .find(|entry| offset >= entry.from && offset < entry.to)
         .map(|entry| SceneHover {
             content: entry.content,
@@ -447,7 +463,10 @@ fn tokenize(source: &str) -> Vec<Token> {
             while cursor < chars.len() && is_identifier_continue(chars[cursor].1) {
                 cursor += 1;
             }
-            let end = chars.get(cursor).map(|(index, _)| *index).unwrap_or(source.len());
+            let end = chars
+                .get(cursor)
+                .map(|(index, _)| *index)
+                .unwrap_or(source.len());
             let text = source[start..end].to_string();
             tokens.push(Token {
                 from: start,
@@ -461,10 +480,15 @@ fn tokenize(source: &str) -> Vec<Token> {
         if ch.is_ascii_digit() {
             let start = byte_index;
             cursor += 1;
-            while cursor < chars.len() && (chars[cursor].1.is_ascii_digit() || chars[cursor].1 == '.') {
+            while cursor < chars.len()
+                && (chars[cursor].1.is_ascii_digit() || chars[cursor].1 == '.')
+            {
                 cursor += 1;
             }
-            let end = chars.get(cursor).map(|(index, _)| *index).unwrap_or(source.len());
+            let end = chars
+                .get(cursor)
+                .map(|(index, _)| *index)
+                .unwrap_or(source.len());
             tokens.push(Token {
                 from: start,
                 to: end,
@@ -480,7 +504,10 @@ fn tokenize(source: &str) -> Vec<Token> {
             while cursor < chars.len() && is_identifier_continue(chars[cursor].1) {
                 cursor += 1;
             }
-            let end = chars.get(cursor).map(|(index, _)| *index).unwrap_or(source.len());
+            let end = chars
+                .get(cursor)
+                .map(|(index, _)| *index)
+                .unwrap_or(source.len());
             let text = source[start..end].to_string();
             let role = classify_identifier(&text, source, end);
             tokens.push(Token {
@@ -578,6 +605,206 @@ fn hover_for_token(token: &str) -> Option<&'static str> {
         _ if ATTRIBUTES.contains(&token) => "WGSL attribute.",
         _ => return None,
     })
+}
+
+fn line_offsets(source: &str) -> Vec<(usize, &str)> {
+    let mut offsets = Vec::new();
+    let mut start = 0usize;
+
+    for line in source.split_inclusive('\n') {
+        let text = line.strip_suffix('\n').unwrap_or(line);
+        offsets.push((start, text));
+        start += line.len();
+    }
+
+    if source.is_empty() || source.ends_with('\n') {
+        offsets.push((start, ""));
+    }
+
+    offsets
+}
+
+fn compact_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn collect_symbol_hovers(source: &str) -> Vec<SymbolHover> {
+    let mut symbols = Vec::new();
+    let mut inside_struct = false;
+
+    for (line_offset, raw_line) in line_offsets(source) {
+        let trimmed = raw_line.trim();
+
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+
+        if trimmed.starts_with("struct ") {
+            inside_struct = true;
+        } else if inside_struct && trimmed.starts_with('}') {
+            inside_struct = false;
+            continue;
+        }
+
+        if let Some(function_symbols) = parse_function_symbols(line_offset, raw_line) {
+            symbols.extend(function_symbols);
+            continue;
+        }
+
+        if inside_struct {
+            if let Some(symbol) = parse_struct_field_symbol(line_offset, raw_line) {
+                symbols.push(symbol);
+            }
+            continue;
+        }
+
+        if let Some(symbol) = parse_value_symbol(line_offset, raw_line) {
+            symbols.push(symbol);
+        }
+    }
+
+    symbols
+}
+
+fn parse_function_symbols(line_offset: usize, raw_line: &str) -> Option<Vec<SymbolHover>> {
+    let trimmed = raw_line.trim();
+
+    if !trimmed.starts_with("fn ") {
+        return None;
+    }
+
+    let signature = compact_whitespace(trimmed.trim_end_matches('{').trim_end());
+    let after_fn = &trimmed[3..];
+    let name_end = after_fn
+        .find(|ch: char| !is_identifier_continue(ch))
+        .unwrap_or(after_fn.len());
+    let name = after_fn[..name_end].trim();
+
+    if name.is_empty() {
+        return None;
+    }
+
+    let mut symbols = vec![SymbolHover {
+        name: name.to_string(),
+        declaration_from: line_offset + raw_line.find(name)?,
+        content: signature.clone(),
+    }];
+
+    if let (Some(params_start), Some(params_end)) = (trimmed.find('('), trimmed.rfind(')')) {
+        for raw_param in trimmed[params_start + 1..params_end].split(',') {
+            let param = raw_param.trim();
+
+            if param.is_empty() {
+                continue;
+            }
+
+            let Some(colon_index) = param.find(':') else {
+                continue;
+            };
+            let before_colon = param[..colon_index].trim();
+            let param_name = before_colon
+                .split_whitespace()
+                .last()
+                .unwrap_or(before_colon)
+                .trim();
+
+            if param_name.is_empty() {
+                continue;
+            }
+
+            symbols.push(SymbolHover {
+                name: param_name.to_string(),
+                declaration_from: line_offset + raw_line.find(param_name)?,
+                content: compact_whitespace(param),
+            });
+        }
+    }
+
+    Some(symbols)
+}
+
+fn parse_value_symbol(line_offset: usize, raw_line: &str) -> Option<SymbolHover> {
+    let trimmed = raw_line.trim();
+    let keyword = ["let ", "const ", "override ", "var"]
+        .into_iter()
+        .find(|candidate| trimmed.starts_with(candidate))?;
+    let after_keyword = &trimmed[keyword.len()..];
+    let after_generic = if keyword == "var" && after_keyword.starts_with('<') {
+        let generic_end = after_keyword.find('>')?;
+        &after_keyword[generic_end + 1..]
+    } else {
+        after_keyword
+    };
+    let identifier_text = after_generic.trim_start();
+    let identifier_end = identifier_text
+        .find(|ch: char| !is_identifier_continue(ch))
+        .unwrap_or(identifier_text.len());
+    let identifier = identifier_text[..identifier_end].trim();
+
+    if identifier.is_empty() {
+        return None;
+    }
+
+    Some(SymbolHover {
+        name: identifier.to_string(),
+        declaration_from: line_offset + raw_line.find(identifier)?,
+        content: compact_whitespace(trimmed.trim_end_matches(';').trim_end_matches(',')),
+    })
+}
+
+fn parse_struct_field_symbol(line_offset: usize, raw_line: &str) -> Option<SymbolHover> {
+    let trimmed = raw_line.trim();
+    let colon_index = trimmed.find(':')?;
+    let identifier = trimmed[..colon_index].split_whitespace().last()?.trim();
+
+    if identifier.is_empty() || !identifier.chars().next().is_some_and(is_identifier_start) {
+        return None;
+    }
+
+    Some(SymbolHover {
+        name: identifier.to_string(),
+        declaration_from: line_offset + raw_line.find(identifier)?,
+        content: compact_whitespace(trimmed.trim_end_matches(',').trim_end()),
+    })
+}
+
+fn hover_entries_for_symbols(tokens: &[Token], declarations: &[SymbolHover]) -> Vec<HoverEntry> {
+    let mut declarations_by_name = HashMap::<&str, Vec<&SymbolHover>>::new();
+
+    for declaration in declarations {
+        declarations_by_name
+            .entry(declaration.name.as_str())
+            .or_default()
+            .push(declaration);
+    }
+
+    for entries in declarations_by_name.values_mut() {
+        entries.sort_by_key(|entry| entry.declaration_from);
+    }
+
+    let mut hover_entries = Vec::new();
+
+    for token in tokens {
+        let Some(candidates) = declarations_by_name.get(token.text.as_str()) else {
+            continue;
+        };
+        let declaration = candidates
+            .iter()
+            .rev()
+            .find(|entry| entry.declaration_from <= token.from)
+            .copied()
+            .or_else(|| candidates.first().copied());
+
+        if let Some(symbol) = declaration {
+            hover_entries.push(HoverEntry {
+                from: token.from,
+                to: token.to,
+                content: symbol.content.clone(),
+            });
+        }
+    }
+
+    hover_entries
 }
 
 fn collect_lines(source: &str) -> Vec<ParsedLine<'_>> {
@@ -695,7 +922,12 @@ fn fs_main(in_vertex: VertexOut) -> @location(0) vec4f {
     fn analysis_reports_program_for_valid_wgsl() {
         let analysis = analyze_scene(SAMPLE);
         assert!(analysis.program.is_some());
-        assert!(analysis.program.as_ref().is_some_and(|program| program.uses_noise));
+        assert!(
+            analysis
+                .program
+                .as_ref()
+                .is_some_and(|program| program.uses_noise)
+        );
     }
 
     #[test]
@@ -703,6 +935,35 @@ fn fs_main(in_vertex: VertexOut) -> @location(0) vec4f {
         let offset = SAMPLE.find("@fragment").unwrap_or(0);
         let hover = hover_at(SAMPLE, offset + 1).expect("hover");
         assert!(hover.content.contains("fragment entrypoint"));
+    }
+
+    #[test]
+    fn hover_finds_user_function_signatures() {
+        let source = r#"fn sd_circle(point: vec2f, radius: f32) -> f32 {
+  return length(point) - radius;
+}
+
+fn fs_main() -> @location(0) vec4f {
+  let orb = sd_circle(vec2f(0.0, 0.0), 1.0);
+  return vec4f(orb, orb, orb, 1.0);
+}
+"#;
+        let offset = source.rfind("sd_circle").unwrap_or(0);
+        let hover = hover_at(source, offset + 1).expect("hover");
+        assert_eq!(
+            hover.content,
+            "fn sd_circle(point: vec2f, radius: f32) -> f32"
+        );
+    }
+
+    #[test]
+    fn hover_finds_value_declarations() {
+        let offset = SAMPLE.rfind("grain").unwrap_or(0);
+        let hover = hover_at(SAMPLE, offset + 1).expect("hover");
+        assert_eq!(
+            hover.content,
+            "let grain = textureSample(noise_texture, noise_sampler, fract(uv * 3.0 + vec2f(uniforms.time * 0.05, 0.0))).r"
+        );
     }
 
     #[test]
@@ -717,13 +978,25 @@ fn fs_main(in_vertex: VertexOut) -> @location(0) vec4f {
         let source = "textureSmple(noise_texture, noise_sampler, uv)";
         let selection = source.find("textureSmple").unwrap_or(0);
         let actions = code_actions(source, selection, selection + "textureSmple".len());
-        assert!(actions.iter().any(|action| action.title.contains("textureSample")));
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.title.contains("textureSample"))
+        );
     }
 
     #[test]
     fn highlights_include_keywords_and_numbers() {
         let highlights = highlights_for_lines(SAMPLE, 0, 30);
-        assert!(highlights.iter().any(|span| span.role == HighlightRole::Keyword));
-        assert!(highlights.iter().any(|span| span.role == HighlightRole::Number));
+        assert!(
+            highlights
+                .iter()
+                .any(|span| span.role == HighlightRole::Keyword)
+        );
+        assert!(
+            highlights
+                .iter()
+                .any(|span| span.role == HighlightRole::Number)
+        );
     }
 }

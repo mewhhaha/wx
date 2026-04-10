@@ -2446,7 +2446,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     if (event.altKey && !event.ctrlKey && !event.metaKey) {
       return (
         state.mode !== "insert" &&
-        (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "." || event.key === "*")
+        (event.key === "ArrowUp" ||
+          event.key === "ArrowDown" ||
+          event.key === "." ||
+          event.key === "*" ||
+          (pendingAction?.kind === "space" && event.key.toLowerCase() === "c"))
       );
     }
 

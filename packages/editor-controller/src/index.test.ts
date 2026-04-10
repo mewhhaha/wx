@@ -253,6 +253,28 @@ describe("editor controller", () => {
     expect(wrapped.getState().selection).toEqual(keyed.getState().selection);
   });
 
+  it("uses space+c for smart comment toggling", async () => {
+    const toggleComments = vi.fn(async () => [{ from: 0, to: 0, insert: "/* " }]);
+    const toggleLineComments = vi.fn(async () => [{ from: 0, to: 0, insert: "// " }]);
+    const controller = createEditorController({ value: "value" });
+
+    controller.setLanguageServices([
+      {
+        comments: {
+          toggleComments,
+          toggleLineComments
+        }
+      }
+    ]);
+
+    await controller.handleKeyInput({ key: " ", text: " " });
+    await controller.handleKeyInput({ key: "c", text: "c" });
+
+    expect(toggleComments).toHaveBeenCalledTimes(1);
+    expect(toggleLineComments).not.toHaveBeenCalled();
+    expect(controller.getState().doc.text).toBe("/* value");
+  });
+
   it("does not sync the language document during rapid engine-backed movement keys", async () => {
     const highlighter = {
       open: vi.fn(async () => {}),

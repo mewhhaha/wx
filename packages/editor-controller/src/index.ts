@@ -1113,7 +1113,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     return true;
   };
 
-  const toggleComments = async (): Promise<boolean> => {
+  const toggleComments = async (mode: "smart" | "line" | "block" = "line"): Promise<boolean> => {
     const toggler = getCommentToggler();
 
     if (!toggler) {
@@ -1124,10 +1124,23 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     let changes: readonly TextChange[];
 
     try {
-      changes = await toggler.toggleLineComments({
+      const context = {
         document: getSnapshot(),
         selection: getSelectionOffsets(state)
-      });
+      };
+
+      changes =
+        mode === "smart"
+          ? toggler.toggleComments
+            ? await toggler.toggleComments(context)
+            : await toggler.toggleLineComments(context)
+          : mode === "block"
+            ? toggler.toggleBlockComments
+              ? await toggler.toggleBlockComments(context)
+              : toggler.toggleComments
+                ? await toggler.toggleComments(context)
+                : await toggler.toggleLineComments(context)
+            : await toggler.toggleLineComments(context);
     } catch {
       setBottomMessage({ tone: "error", text: "Comment toggle failed" });
       return false;
@@ -2528,10 +2541,6 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         return { handled: true };
       }
 
-      if (meta || ctrl || alt) {
-        return { handled: false };
-      }
-
       if (presentation.ui.pendingAction) {
         const nextPending = presentation.ui.pendingAction;
 
@@ -2551,7 +2560,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
         if (nextPending.kind === "g") {
           if (key === "c") {
-            await toggleComments();
+            await toggleComments("line");
             return { handled: true };
           }
 
@@ -2615,6 +2624,11 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         }
 
         if (nextPending.kind === "space") {
+          if (!ctrl && !meta && key.toLowerCase() === "c") {
+            await toggleComments(alt ? "line" : shift ? "block" : "smart");
+            return { handled: true };
+          }
+
           if (key === "a") {
             await loadCodeActions();
             return { handled: true };
@@ -2760,6 +2774,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
           }
           return { handled: true };
         }
+      }
+
+      if (meta || ctrl || alt) {
+        return { handled: false };
       }
 
       if ((state.mode === "normal" || state.mode === "visual") && key === ":") {
