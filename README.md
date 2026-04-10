@@ -26,11 +26,22 @@ pnpm install
 pnpm build
 ```
 
+For the fastest local CI-style sanity pass:
+
+```bash
+pnpm run verify:workspace
+```
+
 For the playground:
 
 ```bash
 pnpm dev
 ```
+
+## CI Notes
+
+- CI installs with `pnpm install --frozen-lockfile`, so package manifest changes must be accompanied by a matching `pnpm-lock.yaml` update.
+- `pnpm run verify:workspace` is the quickest local check for the same build-and-unit-test path used by workspace verification.
 
 ## Plain DOM Setup
 

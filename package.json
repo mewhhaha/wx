@@ -8,6 +8,7 @@
     "check": "pnpm run test:unit && pnpm run test:e2e",
     "dev": "pnpm run dev:playground",
     "dev:playground": "pnpm --filter @wx/playground dev -- --host 127.0.0.1 --port 4173",
+    "verify:workspace": "pnpm build && pnpm test:unit",
     "test:e2e": "playwright test",
     "test:unit": "vitest run"
   },
