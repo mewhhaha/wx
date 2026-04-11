@@ -65,6 +65,7 @@ import { createLanguageRuntime, type LanguageRuntime } from "./language";
 import { createPickerRuntime, type PickerRuntime } from "./picker";
 import { createPresentationState } from "./presentation";
 import { collectSearchMatches } from "./search";
+import { createSessionRuntime } from "./session";
 import {
   createJumpEntry,
   jumpEntryEquals,
@@ -82,6 +83,7 @@ import {
   revealSelectionTopVisualRow,
   syncVisibleViewportRows as syncVisibleViewportRowsInPresentation
 } from "./viewport";
+import { createViewportRuntime, type ViewportRuntime } from "./viewport-runtime";
 import type {
   CreateEditorControllerOptions,
   EditorBottomMessageState,
@@ -164,6 +166,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let keyRuntime!: ReturnType<typeof createKeyRuntime>;
   let languageRuntime!: LanguageRuntime;
   let pickerRuntime!: PickerRuntime;
+  let sessionRuntime!: ReturnType<typeof createSessionRuntime>;
+  let viewportRuntime!: ViewportRuntime;
   let pendingDeferredPresentationUpdate = false;
   let deferredPresentationEffectType = "presentation.update";
 
@@ -220,8 +224,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
     if (update.docChanged) {
       documentRevision += 1;
-      clearFlashState(null);
-      clearHoverState({ effectType: null });
+      sessionRuntime.clearFlashState(null);
+      sessionRuntime.clearHoverState({ effectType: null });
       const changes = transaction.changes ?? [];
       refreshSearchMatchCache(nextState);
       languageRuntime.handleDocumentChange(prevState, nextState, changes);
@@ -381,201 +385,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
   const getActiveOffset = () => (state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state));
 
-  const setBottomMessageValue = (message: EditorBottomMessageState | null) => {
-    const current = presentation.ui.bottomMessage;
-
-    if (
-      current?.tone === message?.tone &&
-      current?.text === message?.text &&
-      (!!current === !!message)
-    ) {
-      return false;
-    }
-
-    presentation.ui.bottomMessage = message;
-    return true;
-  };
-
-  const setBottomMessage = (message: EditorBottomMessageState | null, effectType = "ui.bottom-message") => {
-    if (!setBottomMessageValue(message)) {
-      return;
-    }
-
-    emitPresentationUpdate(effectType);
-  };
-
-  const hoverStateEquals = (left: typeof presentation.ui.hover, right: typeof presentation.ui.hover) =>
-    left.active === right.active &&
-    left.pinned === right.pinned &&
-    left.offset === right.offset &&
-    left.content === right.content &&
-    left.source === right.source &&
-    left.tone === right.tone;
-
-  const setHoverStateValue = (next: typeof presentation.ui.hover) => {
-    if (hoverStateEquals(presentation.ui.hover, next)) {
-      return false;
-    }
-
-    presentation.ui.hover = next;
-    return true;
-  };
-
-  const clearHoverState = (
-    options: {
-      preservePinned?: boolean;
-      effectType?: string;
-      invalidateRequest?: boolean;
-    } = {}
-  ) => {
-    if (options.preservePinned && presentation.ui.hover.pinned) {
-      return false;
-    }
-
-    if (options.invalidateRequest !== false) {
-      presentation.language.hoverRequestId += 1;
-    }
-
-    const changed = setHoverStateValue({
-      active: false,
-      pinned: false,
-      offset: null,
-      content: "",
-      tone: "info"
-    });
-
-    if (changed && options.effectType !== null) {
-      emitPresentationUpdate(options.effectType ?? "ui.hover.clear");
-    }
-
-    return changed;
-  };
-
-  const showHoverState = (
-    next: typeof presentation.ui.hover,
-    options: {
-      effectType?: string;
-      clearBottomMessage?: boolean;
-      invalidateRequest?: boolean;
-    } = {}
-  ) => {
-    if (options.invalidateRequest) {
-      presentation.language.hoverRequestId += 1;
-    }
-
-    const hoverChanged = setHoverStateValue(next);
-    const bottomMessageChanged = options.clearBottomMessage ? setBottomMessageValue(null) : false;
-
-    if (hoverChanged || bottomMessageChanged) {
-      emitPresentationUpdate(options.effectType ?? "ui.hover");
-    }
-
-    return hoverChanged || bottomMessageChanged;
-  };
-
-  const hoverToneForDiagnostic = (severity: EditorDiagnostic["severity"]): "info" | "warning" | "error" =>
-    severity === "error" ? "error" : severity === "warning" ? "warning" : "info";
-
   const requestRawHover = (offset: number) => languageRuntime.requestRawHover(offset);
-
-  const setCommandLineState = (next: EditorCommandLineState, effectType = "ui.command-line") => {
-    const current = presentation.ui.commandLine;
-    if (current.active === next.active && current.value === next.value && current.prompt === next.prompt) {
-      return;
-    }
-
-    presentation.ui.commandLine = next;
-    emitPresentationUpdate(effectType);
-  };
-
-  const setCommandCompletionIndex = (next: number, effectType = "ui.command-completion-index") => {
-    if (presentation.ui.commandCompletionIndex === next) {
-      return;
-    }
-
-    presentation.ui.commandCompletionIndex = next;
-    emitPresentationUpdate(effectType);
-  };
-
-  const setPendingActionState = (next: EditorPendingAction, effectType = "ui.pending-action") => {
-    if (presentation.ui.pendingAction === next) {
-      return;
-    }
-
-    presentation.ui.pendingAction = next;
-    emitPresentationUpdate(effectType);
-  };
-
-  const setPendingCountState = (next: string, effectType = "ui.pending-count") => {
-    if (presentation.ui.pendingCount === next) {
-      return;
-    }
-
-    presentation.ui.pendingCount = next;
-    emitPresentationUpdate(effectType);
-  };
-
-  const clearPendingCount = () => {
-    setPendingCountState("");
-  };
-
-  const readPendingCount = () => {
-    if (!presentation.ui.pendingCount) {
-      return 1;
-    }
-
-    const parsed = Number.parseInt(presentation.ui.pendingCount, 10);
-    presentation.ui.pendingCount = "";
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-  };
-
-  const setStickyViewMode = (next: boolean, effectType = "ui.sticky-view-mode") => {
-    if (presentation.ui.stickyViewMode === next) {
-      return;
-    }
-
-    presentation.ui.stickyViewMode = next;
-    emitPresentationUpdate(effectType);
-  };
-
-  const setLastRepeatableMotion = (next: EditorRepeatableMotion | null, effectType = "ui.repeatable-motion") => {
-    if (presentation.ui.lastRepeatableMotion?.kind === next?.kind && JSON.stringify(presentation.ui.lastRepeatableMotion) === JSON.stringify(next)) {
-      return;
-    }
-    presentation.ui.lastRepeatableMotion = next;
-    emitPresentationUpdate(effectType);
-  };
-
-  const setPreviewThemeName = (next: string | null, effectType = "ui.preview-theme") => {
-    if (presentation.ui.previewTheme === next) {
-      return;
-    }
-
-    presentation.ui.previewTheme = next;
-    emitPresentationUpdate(effectType);
-  };
 
   const closePicker = (effectType = "ui.picker.close") => {
     pickerRuntime.closePicker(effectType);
-  };
-
-  const clearFlashState = (effectType: string | null = "ui.flash") => {
-    if (!presentation.ui.flash.active) {
-      return false;
-    }
-
-    presentation.ui.flash = {
-      active: false,
-      target: "",
-      input: "",
-      hints: []
-    };
-
-    if (effectType !== null) {
-      emitPresentationUpdate(effectType);
-    }
-
-    return true;
   };
 
   const applySelectionRange = (from: number, to: number) => {
@@ -688,7 +501,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
   const recordRepeatableMotion = (candidate: EditorRepeatableMotion, didChange: boolean) => {
     if (didChange) {
-      setLastRepeatableMotion(candidate);
+      sessionRuntime.setLastRepeatableMotion(candidate);
     }
   };
 
@@ -727,6 +540,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   refreshSearchMatchCache();
   rebuildViewportModel();
   syncVisibleLanguageDecorations();
+  sessionRuntime = createSessionRuntime({
+    presentation,
+    emitPresentationUpdate
+  });
 
   commandsRuntime = createCommandsRuntime({
     getState: () => state,
@@ -737,10 +554,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getActiveOffset,
     getVisibleLineCount,
     getVisibleLineViewport: getVisibleLineViewportValue,
-    readPendingCount,
+    readPendingCount: () => sessionRuntime.readPendingCount(),
     historyControls,
-    setBottomMessage,
-    clearFlashState,
+    setBottomMessage: sessionRuntime.setBottomMessage,
+    clearFlashState: sessionRuntime.clearFlashState,
     closePicker,
     syncVisibleLanguageDecorations,
     ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
@@ -762,7 +579,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getState: () => state,
     getPresentation: () => presentation,
     getController: () => controller,
-    setBottomMessage,
+    setBottomMessage: sessionRuntime.setBottomMessage,
     emitPresentationUpdate,
     jumpToSelection(from, to) {
       pushJumpEntry(createJumpEntry(state));
@@ -787,10 +604,23 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     syncVisibleViewportRows,
     syncVisibleLanguageDecorations,
     ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
-    setBottomMessage,
-    setCommandLineState,
+    setBottomMessage: sessionRuntime.setBottomMessage,
+    setCommandLineState: sessionRuntime.setCommandLineState,
     emitPresentationUpdate,
     loadCodeActions: () => pickerRuntime.loadCodeActions()
+  });
+
+  viewportRuntime = createViewportRuntime({
+    viewport: presentation.viewport,
+    resetViewportModelCache() {
+      viewportModelRevision = -1;
+    },
+    rebuildViewportModel,
+    revealSelectionWithinViewport,
+    syncVisibleViewportRows,
+    syncVisibleLanguageDecorations,
+    emitPresentationUpdate,
+    ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage()
   });
 
   const compatibilityApi = createCompatibilityApi({
@@ -824,23 +654,23 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     syncCommandPreviewTheme: commandRuntime.syncCommandPreviewTheme,
     openCommandLine: commandRuntime.openCommandLineState,
     handleActiveCommandLineKey: commandRuntime.handleActiveCommandLineKey,
-    clearPendingCount,
-    setPendingActionState,
-    setPendingCountState,
-    setStickyViewMode,
+    clearPendingCount: () => sessionRuntime.clearPendingCount(),
+    setPendingActionState: sessionRuntime.setPendingActionState,
+    setPendingCountState: sessionRuntime.setPendingCountState,
+    setStickyViewMode: sessionRuntime.setStickyViewMode,
     setPickerState: pickerRuntime.setPickerState,
     movePicker: pickerRuntime.movePicker,
     acceptPicker: pickerRuntime.acceptPicker,
     closePicker: pickerRuntime.closePicker,
-    setBottomMessage,
-    clearHover: () => clearHoverState(),
+    setBottomMessage: sessionRuntime.setBottomMessage,
+    clearHover: () => sessionRuntime.clearHoverState(),
     restoreJump,
     openDiagnosticsPicker: pickerRuntime.openDiagnosticsPicker,
     openJumpListPicker: pickerRuntime.openJumpListPicker,
     loadCodeActions: pickerRuntime.loadCodeActions,
     collectVisibleFlashHints: commandsRuntime.collectVisibleFlashHints,
     applyFlashJump: commandsRuntime.applyFlashJump,
-    clearFlashState,
+    clearFlashState: sessionRuntime.clearFlashState,
     emitPresentationUpdate
   });
 
@@ -964,65 +794,25 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       return registers.selected;
     },
     setBottomMessage(message) {
-      setBottomMessage(message);
+      sessionRuntime.setBottomMessage(message);
     },
     clearBottomMessage() {
-      setBottomMessage(null);
+      sessionRuntime.setBottomMessage(null);
     },
     setViewportMetrics(metrics) {
-      presentation.viewport.visibleRowCapacity = Math.max(1, metrics.visibleRowCapacity);
-      presentation.viewport.wrapColumns = Math.max(1, metrics.wrapColumns);
-      presentation.viewport.softWrap = metrics.softWrap;
-      viewportModelRevision = -1;
-      rebuildViewportModel();
-      const didReveal = revealSelectionWithinViewport();
-      const viewportChanged = syncVisibleViewportRows() || didReveal;
-      languageRuntime.syncVisibleLanguageDecorations();
-      emitPresentationUpdate("viewport.metrics");
-      if (viewportChanged) {
-        void languageRuntime.ensureVisibleHighlightCoverage();
-      }
+      viewportRuntime.setViewportMetrics(metrics);
     },
     scrollViewportBy(rowsDelta) {
-      if (rowsDelta === 0) {
-        return true;
-      }
-
-      rebuildViewportModel();
-      const maxTop = Math.max(0, presentation.viewport.visualRows.length - presentation.viewport.visibleRowCapacity);
-      presentation.viewport.topVisualRow = Math.max(0, Math.min(maxTop, presentation.viewport.topVisualRow + rowsDelta));
-      const viewportChanged = syncVisibleViewportRows();
-      languageRuntime.syncVisibleLanguageDecorations();
-      emitPresentationUpdate("viewport.scroll");
-      if (viewportChanged) {
-        void languageRuntime.ensureVisibleHighlightCoverage();
-      }
-      return true;
+      return viewportRuntime.scrollViewportBy(rowsDelta);
     },
     alignViewportToSelection(position) {
-      rebuildViewportModel();
-      presentation.viewport.topVisualRow = alignSelectionTopVisualRow(
-        state,
-        presentation,
-        getActiveOffset(),
-        position
+      return viewportRuntime.alignViewport(
+        () => alignSelectionTopVisualRow(state, presentation, getActiveOffset(), position),
+        "viewport.align"
       );
-      const viewportChanged = syncVisibleViewportRows();
-      languageRuntime.syncVisibleLanguageDecorations();
-      emitPresentationUpdate("viewport.align");
-      if (viewportChanged) {
-        void languageRuntime.ensureVisibleHighlightCoverage();
-      }
-      return true;
     },
     revealSelection() {
-      const didReveal = revealSelectionWithinViewport();
-      const viewportChanged = syncVisibleViewportRows() || didReveal;
-      languageRuntime.syncVisibleLanguageDecorations();
-      emitPresentationUpdate("viewport.reveal");
-      if (viewportChanged) {
-        void languageRuntime.ensureVisibleHighlightCoverage();
-      }
+      viewportRuntime.revealSelection();
     },
     setLanguageServices(languageServices) {
       presentation.language.services = normalizeLanguageServices(languageServices);
@@ -1096,16 +886,16 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
       return requestRawHover(offset).then((nextHover) => {
         if (!nextHover || !nextHover.content.trim()) {
-          const hoverCleared = clearHoverState({ effectType: null });
+          const hoverCleared = sessionRuntime.clearHoverState({ effectType: null });
           if (options.pinned) {
-            setBottomMessage({ tone: "info", text: "No hover information" });
+            sessionRuntime.setBottomMessage({ tone: "info", text: "No hover information" });
           } else if (hoverCleared) {
             emitPresentationUpdate("ui.hover.clear");
           }
           return false;
         }
 
-        showHoverState(
+        sessionRuntime.showHoverState(
           {
             active: true,
             pinned: !!options.pinned,
@@ -1120,23 +910,23 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       });
     },
     showDiagnosticHover(diagnostic, options = {}) {
-      return showHoverState(
+      return sessionRuntime.showHoverState(
         {
           active: true,
           pinned: !!options.pinned,
           offset: diagnostic.from,
           content: diagnostic.message,
           source: diagnostic.source,
-          tone: hoverToneForDiagnostic(diagnostic.severity)
+          tone: sessionRuntime.hoverToneForDiagnostic(diagnostic.severity)
         },
         { clearBottomMessage: true, invalidateRequest: true }
       );
     },
     clearHover(options = {}) {
-      return clearHoverState({ preservePinned: options.preservePinned });
+      return sessionRuntime.clearHoverState({ preservePinned: options.preservePinned });
     },
     clearFlash() {
-      return clearFlashState();
+      return sessionRuntime.clearFlashState();
     },
     requestCodeActions() {
       return languageRuntime.requestCodeActions();

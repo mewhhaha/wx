@@ -110,7 +110,7 @@ class FakeOutput {
 
 describe("@wx/editor-view-ansi", () => {
   it("keeps tree-sitter runtime ownership in the shared tree-sitter package", () => {
-    const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/index.ts"), "utf8");
+    const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/demo-runtime.ts"), "utf8");
 
     expect(source).toContain("../../editor-tree-sitter/src/node");
     expect(source).not.toContain("treeSitter.worker");
@@ -119,7 +119,7 @@ describe("@wx/editor-view-ansi", () => {
   });
 
   it("routes ANSI runtime keyboard input through controller key APIs only", () => {
-    const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/index.ts"), "utf8");
+    const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/terminal.ts"), "utf8");
 
     expect(source).toContain("controller.handleKeyInput");
     expect(source).not.toContain("controller.openCommandLine(");

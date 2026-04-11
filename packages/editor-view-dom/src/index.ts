@@ -29,6 +29,25 @@ import {
   readStatusSignature,
   readTooltipSignature
 } from "./render-signatures";
+import {
+  getTooltipAnchorForRect,
+  resolveOffsetWithinRun,
+  selectDiagnostic,
+  toneForSeverity
+} from "./dom-hover";
+import {
+  isBrowserPasteShortcut,
+  keyboardInputForEvent,
+  shouldRouteKeydown
+} from "./dom-input";
+import {
+  expandViewport,
+  measureMetrics,
+  refreshGutterWidth as refreshMeasuredGutterWidth,
+  syncMeasuredViewportMetrics as syncMeasuredViewportMetricsWithController,
+  VERTICAL_SCROLLOFF_ROWS,
+  viewportEquals
+} from "./dom-viewport";
 import type {
   DiagnosticSeverity,
   EditorCodeAction,
@@ -102,7 +121,6 @@ const DIAGNOSTIC_SEVERITY_ORDER: Record<DiagnosticSeverity, number> = {
   hint: 3
 };
 
-const SURFACE_VERTICAL_PADDING = 16;
 const EMPTY_CELL_TEXT = "\u00a0";
 const INSERT_TAB_TEXT = "  ";
 
@@ -122,8 +140,6 @@ function getStatusModeText(mode: EditorState["mode"], ui: { flash: { active: boo
   return " NOR ";
 }
 const DEFAULT_INDENT_GUIDE_CHARACTER = "│";
-const VIEWPORT_OVERSCAN_LINES = 6;
-const VERTICAL_SCROLLOFF_ROWS = 3;
 const END_OF_LINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "hint";
 const CURSOR_LINE_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "warning";
 const OTHER_LINES_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "error";
@@ -198,14 +214,6 @@ function tokenToDiagnosticSeverity(
     default:
       return null;
   }
-}
-
-function toneForSeverity(severity: DiagnosticSeverity): "info" | "warning" | "error" {
-  return severity === "error" ? "error" : severity === "warning" ? "warning" : "info";
-}
-
-function meetsDiagnosticThreshold(severity: DiagnosticSeverity, minimum: DiagnosticSeverity): boolean {
-  return DIAGNOSTIC_SEVERITY_ORDER[severity] <= DIAGNOSTIC_SEVERITY_ORDER[minimum];
 }
 
 function normalizeLanguageServices(input: EditorLanguageServiceInput | null | undefined): EditorLanguageServices[] {
@@ -846,97 +854,6 @@ function applyThemeVariables(root: HTMLElement, theme: ThemeSpec): void {
   }
 }
 
-function measureMetrics(styleHost: HTMLElement): { charWidth: number; lineHeight: number } {
-  const probe = document.createElement("span");
-  probe.textContent = "MMMMMMMMMM";
-  probe.style.font =
-    '15px/1.6 "Monaspace Argon NF", "Monaspace Argon", "Iosevka Web", "SFMono-Regular", "Monaco", monospace';
-  probe.style.position = "absolute";
-  probe.style.visibility = "hidden";
-  probe.style.whiteSpace = "pre";
-  styleHost.append(probe);
-
-  const rect = probe.getBoundingClientRect();
-  probe.remove();
-
-  const width = rect.width > 0 ? rect.width / 10 : 9;
-  const lineHeight = rect.height > 0 ? rect.height : 24;
-
-  return {
-    charWidth: width,
-    lineHeight
-  };
-}
-
-function resolveOffsetWithinRun(
-  target: HTMLElement,
-  startOffset: number,
-  endOffset: number | null,
-  clientX: number
-): number {
-  if (endOffset === null || endOffset <= startOffset + 1) {
-    return startOffset;
-  }
-
-  const rect = target.getBoundingClientRect();
-  const width = rect.width;
-
-  if (!Number.isFinite(width) || width <= 0) {
-    return startOffset;
-  }
-
-  const runLength = endOffset - startOffset;
-  const relativeX = Math.max(0, Math.min(width, clientX - rect.left));
-  const ratio = width > 0 ? relativeX / width : 0;
-  const index = Math.min(runLength - 1, Math.max(0, Math.floor(ratio * runLength)));
-  return startOffset + index;
-}
-
-function selectDiagnostic(
-  entries: readonly EditorDiagnostic[],
-  minimum: DiagnosticSeverity,
-  excluding: EditorDiagnostic | null = null
-): EditorDiagnostic | null {
-  let best: EditorDiagnostic | null = null;
-
-  for (const entry of entries) {
-    if (excluding && entry === excluding) {
-      continue;
-    }
-
-    if (!meetsDiagnosticThreshold(entry.severity, minimum)) {
-      continue;
-    }
-
-    if (!best || DIAGNOSTIC_SEVERITY_ORDER[entry.severity] < DIAGNOSTIC_SEVERITY_ORDER[best.severity]) {
-      best = entry;
-    }
-  }
-
-  return best;
-}
-
-function normalizeViewport(viewport: { fromLine: number; toLine: number }, lineCount: number): { fromLine: number; toLine: number } {
-  const maxLine = Math.max(0, lineCount - 1);
-  const fromLine = Math.max(0, Math.min(maxLine, viewport.fromLine));
-  const toLine = Math.max(fromLine, Math.min(maxLine, viewport.toLine));
-
-  return { fromLine, toLine };
-}
-
-function expandViewport(
-  viewport: { fromLine: number; toLine: number },
-  totalVisualRows: number
-): { fromLine: number; toLine: number } {
-  return normalizeViewport(
-    {
-      fromLine: viewport.fromLine - VIEWPORT_OVERSCAN_LINES,
-      toLine: viewport.toLine + VIEWPORT_OVERSCAN_LINES
-    },
-    totalVisualRows
-  );
-}
-
 export function createEditor(container: HTMLElement, options: CreateEditorOptions = {}): EditorHandle {
   const softWrap = options.softWrap ?? false;
   const indentGuides = {
@@ -1198,43 +1115,20 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return lines;
   }
 
-  function getContentColumns(): number {
-    if (!softWrap) {
-      return Number.MAX_SAFE_INTEGER;
-    }
-
-    const surfaceWidth = surface.clientWidth || root.clientWidth || container.clientWidth || 800;
-    const contentWidth = Math.max(metrics.charWidth, surfaceWidth - gutterWidth - 8);
-    return Math.max(1, Math.floor(contentWidth / metrics.charWidth));
-  }
-
-  function measureVisibleLineCapacity(): number {
-    const viewportHeight = Math.max(
-      metrics.lineHeight,
-      (surface.clientHeight || metrics.lineHeight * 20) - SURFACE_VERTICAL_PADDING * 2
-    );
-    return Math.max(1, Math.ceil(viewportHeight / metrics.lineHeight));
-  }
-
   function syncMeasuredViewportMetrics(force = false): boolean {
-    const nextVisibleLineCapacity = measureVisibleLineCapacity();
-    const nextWrapColumns = getContentColumns();
-
-    if (
-      !force &&
-      nextVisibleLineCapacity === visibleLineCapacity &&
-      nextWrapColumns === wrapColumns &&
-      viewportState.softWrap === softWrap
-    ) {
-      return false;
-    }
-
-    controller.setViewportMetrics({
-      visibleRowCapacity: nextVisibleLineCapacity,
-      wrapColumns: nextWrapColumns,
-      softWrap
+    return syncMeasuredViewportMetricsWithController({
+      force,
+      controller,
+      softWrap,
+      metrics,
+      surface,
+      root,
+      container,
+      gutterWidth,
+      visibleLineCapacity,
+      wrapColumns,
+      viewportSoftWrap: viewportState.softWrap
     });
-    return true;
   }
 
   function refreshViewportMetricsIfNeeded(force = false): boolean {
@@ -1307,39 +1201,17 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     };
   }
 
-  function viewportEquals(left: LineViewport, right: LineViewport): boolean {
-    return left.fromLine === right.fromLine && left.toLine === right.toLine;
-  }
-
   function refreshGutterWidth(force = false): void {
-    const nextWidth = Math.max(metrics.charWidth * 6, measureGutterWidth());
-
-    if (!force && nextWidth === gutterWidth) {
-      return;
-    }
-
-    gutterWidth = nextWidth;
-  }
-
-  function measureGutterWidth(): number {
-    const sample = document.createElement("div");
-    const marker = document.createElement("span");
-    const number = document.createElement("span");
-    const change = document.createElement("span");
-
-    sample.className = "wx-editor__gutter";
-    marker.className = "wx-editor__gutter-marker";
-    number.className = "wx-editor__gutter-number";
-    change.className = "wx-editor__gutter-change";
-    number.textContent = String(Math.max(1, state.doc.lineCount));
-    sample.append(marker, number, change);
-    sample.style.position = "absolute";
-    sample.style.visibility = "hidden";
-    sample.style.pointerEvents = "none";
-    root.append(sample);
-    const width = Math.ceil(sample.getBoundingClientRect().width);
-    sample.remove();
-    return width;
+    refreshMeasuredGutterWidth({
+      force,
+      gutterWidth,
+      metrics,
+      root,
+      lineCount: state.doc.lineCount,
+      setGutterWidth(width) {
+        gutterWidth = width;
+      }
+    });
   }
 
   function getLineDiagnostics(lineIndex: number): readonly EditorDiagnostic[] {
@@ -2214,26 +2086,19 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
   }
 
-  function getTooltipAnchorForRect(rect: DOMRect): { left: number; top: number } {
-    const rootRect = root.getBoundingClientRect();
-    const left = Math.max(8, rect.left - rootRect.left);
-    const top = Math.max(8, rect.bottom - rootRect.top + 6);
-    return { left, top };
-  }
-
   function showDiagnosticTooltip(diagnostic: EditorDiagnostic, anchor: DOMRect, pinned = false): void {
-    setHoverAnchor(getTooltipAnchorForRect(anchor), false);
+    setHoverAnchor(getTooltipAnchorForRect(root, anchor), false);
     controller.showDiagnosticHover(diagnostic, { pinned });
   }
 
   async function requestHover(offset: number, anchor: DOMRect, pinned = false): Promise<boolean> {
     if (uiState.hover.active && uiState.hover.offset === offset && uiState.hover.pinned === pinned) {
-      setHoverAnchor(getTooltipAnchorForRect(anchor), pinned);
+      setHoverAnchor(getTooltipAnchorForRect(root, anchor), pinned);
       patchTooltip();
       return true;
     }
 
-    setHoverAnchor(getTooltipAnchorForRect(anchor), pinned);
+    setHoverAnchor(getTooltipAnchorForRect(root, anchor), pinned);
     const shown = await controller.requestHoverAt(offset, { pinned });
     if (!destroyed) {
       syncPresentationMirrors();
@@ -2267,41 +2132,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     syncViewportMirrors();
   }
 
-  function keyboardInputForEvent(event: KeyboardEvent) {
-    return {
-      key: event.key,
-      ctrl: event.ctrlKey,
-      alt: event.altKey,
-      meta: event.metaKey,
-      shift: event.shiftKey,
-      text: event.key.length === 1 ? event.key : undefined,
-      source: "dom" as const
-    };
-  }
-
-  function isControllerHandledModifierKey(event: KeyboardEvent): boolean {
-    if (event.metaKey && !event.ctrlKey && !event.altKey) {
-      return false;
-    }
-
-    if (event.altKey && !event.ctrlKey && !event.metaKey) {
-      return (
-        state.mode !== "insert" &&
-        (event.key === "ArrowUp" ||
-          event.key === "ArrowDown" ||
-          event.key === "." ||
-          event.key === "*" ||
-          (uiState.pendingAction?.kind === "space" && event.key.toLowerCase() === "c"))
-      );
-    }
-
-    if (event.ctrlKey && !event.metaKey && !event.altKey) {
-      return ["s", "r", "o", "i", "b", "d", "f", "u"].includes(event.key);
-    }
-
-    return false;
-  }
-
   function syncKeyboardHoverAnchor(): void {
     if (!uiState.hover.active || !uiState.hover.pinned || !hoverAnchorFollowsCursor) {
       return;
@@ -2309,7 +2139,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     const anchorElement = root.querySelector<HTMLElement>("[data-wx-editor-cursor='true']");
     const anchorRect = anchorElement?.getBoundingClientRect() ?? root.getBoundingClientRect();
-    setHoverAnchor(getTooltipAnchorForRect(anchorRect), true);
+    setHoverAnchor(getTooltipAnchorForRect(root, anchorRect), true);
     patchTooltip();
   }
 
@@ -2337,32 +2167,27 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    const browserPasteShortcut =
-      state.mode === "insert" &&
-      !uiState.commandLine.active &&
-      !uiState.picker.active &&
-      !event.altKey &&
-      ((event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "v") ||
-        (event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "v"));
-
-    if (browserPasteShortcut) {
+    if (
+      isBrowserPasteShortcut(event, {
+        state,
+        commandLineActive: uiState.commandLine.active,
+        pickerActive: uiState.picker.active
+      })
+    ) {
       return;
     }
 
-    const hasCommandState =
-      uiState.flash.active ||
-      uiState.commandLine.active ||
-      uiState.picker.active ||
-      !!uiState.pendingAction ||
-      uiState.stickyViewMode ||
-      uiState.hover.active;
-    const plainEditorKey = !event.metaKey && !event.ctrlKey && !event.altKey;
-    const shouldRoute =
-      hasCommandState ||
-      plainEditorKey ||
-      isControllerHandledModifierKey(event);
-
-    if (!shouldRoute) {
+    if (
+      !shouldRouteKeydown(event, {
+        state,
+        commandLineActive: uiState.commandLine.active,
+        pickerActive: uiState.picker.active,
+        flashActive: uiState.flash.active,
+        pendingAction: uiState.pendingAction,
+        stickyViewMode: uiState.stickyViewMode,
+        hoverActive: uiState.hover.active
+      })
+    ) {
       return;
     }
 
