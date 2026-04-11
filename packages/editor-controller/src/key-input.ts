@@ -18,7 +18,6 @@ import {
 } from "@wx/editor-core";
 import type { SyntaxTextobjectMode } from "@wx/editor-language";
 import { buildFlashLabels } from "./flash-labels";
-import { getCommandCompletionItems, hasRunnableCommandLineValue } from "./command-line";
 import {
   commandForBracketPrefix,
   commandForGotoPrefix,
@@ -69,12 +68,11 @@ interface KeyRuntimeContext {
     themeName: string | null;
     changed: boolean;
   };
-  applyCommandCompletion(themeNames?: readonly string[]): Promise<EditorKeyInputResult | null>;
   openCommandLine(prompt: ":" | "/" | "?"): void;
-  handleCommandLineKeyInput(
+  handleActiveCommandLineKey(
     key: string,
-    options?: EditorCommandLineKeyOptions
-  ): Promise<EditorCommandLineKeyResult>;
+    options?: EditorCommandLineKeyOptions & { shift?: boolean }
+  ): Promise<EditorKeyInputResult | null>;
   clearPendingCount(): void;
   setPendingActionState(next: EditorPendingAction, effectType?: string): void;
   setPendingCountState(next: string, effectType?: string): void;
@@ -232,54 +230,10 @@ export function createKeyRuntime(context: KeyRuntimeContext): KeyRuntime {
     }
 
     if (presentation.ui.commandLine.active) {
-      if (key === "Tab") {
-        const completionItems = getCommandCompletionItems(presentation.ui.commandLine, options.themeNames ?? []);
-        if (completionItems.length === 0) {
-          return { handled: false };
-        }
-
-        const delta = shift ? -1 : 1;
-        presentation.ui.commandCompletionIndex =
-          (presentation.ui.commandCompletionIndex + delta + completionItems.length) % completionItems.length;
-        const { themeName } = context.syncCommandPreviewTheme(options.themeNames ?? []);
-        context.emitPresentationUpdate("ui.command-line.completion");
-        return { handled: true, themeName };
-      }
-
-      if (key === "Enter") {
-        const completionItems = getCommandCompletionItems(presentation.ui.commandLine, options.themeNames ?? []);
-        const nextValue = presentation.ui.commandLine.value;
-        const selectedCompletion = completionItems[presentation.ui.commandCompletionIndex];
-        const shouldTakeThemeCompletion =
-          !!selectedCompletion &&
-          presentation.ui.commandLine.prompt === ":" &&
-          /^\s*theme\s+$/i.test(nextValue);
-
-        if (shouldTakeThemeCompletion) {
-          const result = await context.applyCommandCompletion(options.themeNames ?? []);
-          return result ?? { handled: true, themeName: presentation.themeName };
-        }
-
-        if (selectedCompletion && !hasRunnableCommandLineValue(nextValue, options.themeNames ?? [])) {
-          const result = await context.applyCommandCompletion(options.themeNames ?? []);
-          return result ?? { handled: true, themeName: presentation.themeName };
-        }
-
-        const result = await context.handleCommandLineKeyInput("Enter", options);
-        return { ...result, themeName: result.themeName ?? presentation.themeName };
-      }
-
-      const result = await context.handleCommandLineKeyInput(key, options);
-      if (key.length === 1 || key === "Backspace" || key === "Escape") {
-        const { themeName, changed } = context.syncCommandPreviewTheme(options.themeNames ?? []);
-        if (changed) {
-          context.emitPresentationUpdate("ui.command-line.completion");
-        }
-        if (result.handled) {
-          return { ...result, themeName: result.themeName ?? themeName };
-        }
-      }
-      return result;
+      return (
+        (await context.handleActiveCommandLineKey(key, { ...options, shift })) ??
+        { handled: false }
+      );
     }
 
     if (presentation.ui.hover.active && key === "Escape") {

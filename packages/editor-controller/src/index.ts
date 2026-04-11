@@ -26,7 +26,6 @@ import {
   halfPageDown,
   halfPageUp,
   insertText,
-  mapOffsetThroughChanges,
   moveDown,
   moveUp,
   pageDown,
@@ -38,27 +37,20 @@ import {
   type Command,
   type CommandContext,
   type EditorState,
-  type SelectionSet,
   type TextChange,
   type Transaction
 } from "@wx/editor-core";
 import type {
-  EditorCodeAction,
   EditorDiagnostic,
   EditorLineRange,
-  HighlightSpan,
   SyntaxTextobjectMode
 } from "@wx/editor-language";
 import {
   getVisualRowForOffset,
   type EditorVisualRow
 } from "../../editor-layout/src/index";
-import { buildFlashLabels } from "./flash-labels";
-import {
-  getCommandCompletionItems,
-  hasRunnableCommandLineValue,
-  resolveCommandPreviewTheme
-} from "./command-line";
+import { createCommandRuntime, type CommandRuntime } from "./command-runtime";
+import { createCommandsRuntime, type CommandsRuntime } from "./commands";
 import { createCompatibilityApi } from "./compat";
 import {
   commandForBracketPrefix,
@@ -68,10 +60,11 @@ import {
   commandForVisualMode
 } from "./keymap";
 import { createSnapshotHistory, restoreEditorState } from "./history";
-import { createKeyRuntime, type PickerActionItem } from "./key-input";
+import { createKeyRuntime } from "./key-input";
 import { createLanguageRuntime, type LanguageRuntime } from "./language";
+import { createPickerRuntime, type PickerRuntime } from "./picker";
 import { createPresentationState } from "./presentation";
-import { collectSearchMatches, escapeRegex } from "./search";
+import { collectSearchMatches } from "./search";
 import {
   createJumpEntry,
   jumpEntryEquals,
@@ -92,17 +85,11 @@ import {
 import type {
   CreateEditorControllerOptions,
   EditorBottomMessageState,
-  EditorCommandLineKeyOptions,
-  EditorCommandLineKeyResult,
   EditorController,
-  EditorFlashHintState,
   EditorHostServices,
   EditorJumpEntry,
-  EditorKeyInputOptions,
-  EditorKeyInputResult,
   EditorLineChange,
   EditorPendingAction,
-  EditorPickerState,
   EditorPresentationState,
   EditorRepeatableMotion,
   EditorSearchState,
@@ -171,20 +158,12 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let viewportModelRevision = -1;
   let viewportModelWrapColumns = presentation.viewport.wrapColumns;
   let viewportModelSoftWrap = presentation.viewport.softWrap;
-  let pickerActions: readonly PickerActionItem[] = [];
   let controller!: EditorController;
+  let commandRuntime!: CommandRuntime;
+  let commandsRuntime!: CommandsRuntime;
   let keyRuntime!: ReturnType<typeof createKeyRuntime>;
   let languageRuntime!: LanguageRuntime;
-  let searchPreviewState:
-    | null
-    | {
-        active: true;
-        direction: "forward" | "backward";
-        selection: SelectionSet;
-        mode: EditorState["mode"];
-        search: EditorSearchState;
-        startOffset: number;
-      } = null;
+  let pickerRuntime!: PickerRuntime;
   let pendingDeferredPresentationUpdate = false;
   let deferredPresentationEffectType = "presentation.update";
 
@@ -576,91 +555,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     emitPresentationUpdate(effectType);
   };
 
-  const setPickerState = (
-    next: Omit<EditorPickerState, "items"> & { items: readonly PickerActionItem[] },
-    effectType = "ui.picker"
-  ) => {
-    const previous = presentation.ui.picker;
-    const itemsChanged =
-      previous.items.length !== next.items.length ||
-      previous.items.some(
-        (item, index) => item.label !== next.items[index]?.label || item.detail !== next.items[index]?.detail
-      );
-
-    if (
-      !itemsChanged &&
-      previous.active === next.active &&
-      previous.loading === next.loading &&
-      previous.title === next.title &&
-      previous.selectedIndex === next.selectedIndex &&
-      previous.error === next.error
-    ) {
-      return;
-    }
-
-    pickerActions = next.items;
-    presentation.ui.picker = {
-      active: next.active,
-      loading: next.loading,
-      title: next.title,
-      items: next.items.map((item, index) => ({
-        label: item.label,
-        detail: item.detail,
-        selected: index === next.selectedIndex
-      })),
-      selectedIndex: next.selectedIndex,
-      error: next.error
-    };
-    emitPresentationUpdate(effectType);
-  };
-
   const closePicker = (effectType = "ui.picker.close") => {
-    setPickerState(
-      {
-        active: false,
-        loading: false,
-        title: "",
-        items: [],
-        selectedIndex: 0,
-        error: null
-      },
-      effectType
-    );
-  };
-
-  const movePicker = (delta: number): boolean => {
-    if (presentation.ui.picker.items.length === 0) {
-      return false;
-    }
-
-    const nextIndex = Math.max(
-      0,
-      Math.min(presentation.ui.picker.items.length - 1, presentation.ui.picker.selectedIndex + delta)
-    );
-
-    setPickerState(
-      {
-        active: true,
-        loading: presentation.ui.picker.loading,
-        title: presentation.ui.picker.title,
-        items: pickerActions,
-        selectedIndex: nextIndex,
-        error: presentation.ui.picker.error
-      },
-      "ui.picker"
-    );
-    return true;
-  };
-
-  const acceptPicker = async (index = presentation.ui.picker.selectedIndex): Promise<boolean> => {
-    const item = pickerActions[index];
-    if (!item) {
-      closePicker("ui.picker.close");
-      return false;
-    }
-
-    await item.run();
-    return true;
+    pickerRuntime.closePicker(effectType);
   };
 
   const clearFlashState = (effectType: string | null = "ui.flash") => {
@@ -682,21 +578,6 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     return true;
   };
 
-  const findSearchMatch = (
-    matches: readonly { from: number; to: number }[],
-    offset: number,
-    direction: "forward" | "backward",
-    reverse = false
-  ): { from: number; to: number } | null => {
-    const forward = reverse ? direction === "backward" : direction === "forward";
-
-    return forward
-      ? matches.find((entry) => entry.from > offset || (entry.from <= offset && offset < entry.to)) ?? matches[0] ?? null
-      : [...matches].reverse().find((entry) => entry.to - 1 < offset || (entry.from <= offset && offset < entry.to)) ??
-          matches[matches.length - 1] ??
-          null;
-  };
-
   const applySelectionRange = (from: number, to: number) => {
     if (state.mode === "visual") {
       const anchor = state.selection.ranges[state.selection.primaryIndex]?.anchor ?? from;
@@ -711,80 +592,6 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       selection: createSelection(from, Math.max(from, to - 1)),
       mode: "normal"
     });
-  };
-
-  const restoreSearchPreview = () => {
-    if (!searchPreviewState?.active) {
-      searchPreviewState = null;
-      return;
-    }
-
-    applySearchState(searchPreviewState.search, "search.restore");
-    dispatch({
-      selection: searchPreviewState.selection,
-      mode: searchPreviewState.mode
-    });
-    searchPreviewState = null;
-  };
-
-  const runSearch = (
-    query: string,
-    direction: "forward" | "backward",
-    reverse = false,
-    startOffset?: number
-  ): boolean => {
-    const previousSearch = { ...searchState };
-    applySearchState(
-      {
-        query,
-        direction,
-        lastMatch: null
-      },
-      "search.update"
-    );
-
-    if (presentation.search.matches.length === 0) {
-      applySearchState(previousSearch, "search.restore");
-      setBottomMessage({ tone: "warning", text: `No matches for ${query}` });
-      return false;
-    }
-
-    const offset = startOffset ?? getActiveOffset();
-    const match = findSearchMatch(presentation.search.matches, offset, direction, reverse);
-
-    if (!match) {
-      applySearchState(previousSearch, "search.restore");
-      return false;
-    }
-
-    applySearchState({
-      query,
-      direction,
-      lastMatch: match
-    }, "search.match");
-    applyRegisterValue("/", query, "register.search");
-    applySelectionRange(match.from, match.to);
-    revealSelectionWithinViewport();
-    syncVisibleViewportRows();
-    syncVisibleLanguageDecorations();
-    void languageRuntime.ensureVisibleHighlightCoverage();
-    setBottomMessage(null);
-    return true;
-  };
-
-  const repeatSearch = (reverseAgainstDirection = false): boolean => {
-    if (!searchState.query) {
-      setBottomMessage({ tone: "warning", text: "No active search" });
-      return false;
-    }
-
-    const baseOffset = searchState.lastMatch
-      ? reverseAgainstDirection
-        ? searchState.lastMatch.from - 1
-        : searchState.lastMatch.to
-      : undefined;
-
-    return runSearch(searchState.query, searchState.direction, reverseAgainstDirection, baseOffset);
   };
 
   const dispatchOffsetSelection = (targetOffset: number, preferredColumn: number | null): boolean => {
@@ -879,718 +686,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     });
   };
 
-  const executeEditorCommand = (command: Command): boolean => {
-    setBottomMessage(null);
-    clearFlashState("flash.clear");
-    closePicker("ui.picker.close");
-    const selectedRegister = registers.selected;
-
-    if (command === pasteAfter) {
-      primeRegisterForPaste();
-    }
-
-    if (presentation.viewport.softWrap) {
-      if (command === moveUp) {
-        return moveByVisualRows(-1);
-      }
-
-      if (command === moveDown) {
-        return moveByVisualRows(1);
-      }
-
-      if (command === pageUp) {
-        return moveByVisualRows(-(Math.max(1, getVisibleLineCount() - 1)));
-      }
-
-      if (command === pageDown) {
-        return moveByVisualRows(Math.max(1, getVisibleLineCount() - 1));
-      }
-
-      if (command === halfPageUp) {
-        return moveByVisualRows(-Math.max(1, Math.floor(getVisibleLineCount() / 2)));
-      }
-
-      if (command === halfPageDown) {
-        return moveByVisualRows(Math.max(1, Math.floor(getVisibleLineCount() / 2)));
-      }
-
-      if (command === gotoWindowTop) {
-        return gotoVisibleRow("top");
-      }
-
-      if (command === gotoWindowCenter) {
-        return gotoVisibleRow("center");
-      }
-
-      if (command === gotoWindowBottom) {
-        return gotoVisibleRow("bottom");
-      }
-    }
-
-    const viewport = getVisibleLineViewportValue();
-    const didRun = command(state, dispatch, {
-      history: historyControls,
-      viewport: {
-        fromLine: viewport.fromLine,
-        toLine: viewport.toLine,
-        visibleLineCount: Math.max(1, viewport.toLine - viewport.fromLine + 1)
-      }
-    });
-
-    if (didRun && [yankSelection, deleteSelection, changeSelection].includes(command)) {
-      if (selectedRegister) {
-        controller.setRegister(selectedRegister, controller.getState().yankBuffer);
-      }
-      controller.selectRegister(null);
-    }
-
-    return didRun;
-  };
-
-  const executeCommandWithCount = async (
-    command: Command,
-    options: EditorKeyInputOptions = {}
-  ): Promise<boolean> => {
-    const count = readPendingCount();
-    const selectedRegister = controller.getSelectedRegister();
-
-    if (command === pasteAfter && selectedRegister === "+" && options.readClipboardText) {
-      const value = await options.readClipboardText();
-      controller.selectRegister(null);
-
-      if (!value) {
-        setBottomMessage({ tone: "warning", text: 'Register "+" is empty' });
-        return false;
-      }
-
-      dispatch({ yankBuffer: value });
-    }
-
-    let applied = false;
-    for (let index = 0; index < count; index += 1) {
-      const previousMode = state.mode;
-      const previousRevision = state.revision;
-      const didRun = executeEditorCommand(command);
-
-      if (!didRun) {
-        break;
-      }
-
-      applied = true;
-
-      if (state.mode !== previousMode || state.revision === previousRevision) {
-        break;
-      }
-    }
-
-    return applied;
-  };
-
-  const executeCommandWithCountSync = (command: Command): boolean => {
-    const count = readPendingCount();
-    let applied = false;
-
-    for (let index = 0; index < count; index += 1) {
-      const previousMode = state.mode;
-      const previousRevision = state.revision;
-      const didRun = executeEditorCommand(command);
-
-      if (!didRun) {
-        break;
-      }
-
-      applied = true;
-
-      if (state.mode !== previousMode || state.revision === previousRevision) {
-        break;
-      }
-    }
-
-    return applied;
-  };
-
-  const runRepeatableMotion = async (motion: EditorRepeatableMotion, options: EditorKeyInputOptions = {}): Promise<boolean> => {
-    switch (motion.kind) {
-      case "find":
-        return executeEditorCommand(
-          motion.variant === "f"
-            ? findNextChar(motion.target)
-            : motion.variant === "F"
-              ? findPrevChar(motion.target)
-              : motion.variant === "t"
-                ? findTillNextChar(motion.target)
-                : findTillPrevChar(motion.target)
-        );
-      case "matching-bracket":
-        return executeEditorCommand(gotoMatchingBracket);
-      case "paragraph":
-        return executeEditorCommand(motion.direction === "next" ? gotoNextParagraph : gotoPrevParagraph);
-      case "textobject":
-        return executeEditorCommand(selectTextobject(motion.mode, motion.object));
-      case "search":
-        return repeatSearch(motion.reverse);
-    }
-
-    return false;
-  };
-
   const recordRepeatableMotion = (candidate: EditorRepeatableMotion, didChange: boolean) => {
     if (didChange) {
       setLastRepeatableMotion(candidate);
     }
-  };
-
-  const searchFromSelection = (reverse = false): boolean => {
-    const selection = getSelectionOffsets(state);
-    const query = escapeRegex(state.doc.slice(selection.from, selection.to));
-
-    if (!query) {
-      return false;
-    }
-
-    return runSearch(query, reverse ? "backward" : "forward");
-  };
-
-  const navigateDiagnostic = (direction: "next" | "prev", extreme = false): boolean => {
-    if (presentation.language.diagnostics.length === 0) {
-      setBottomMessage({ tone: "warning", text: "No diagnostics" });
-      return false;
-    }
-
-    const activeOffset = getActiveOffset();
-    const ordered = [...presentation.language.diagnostics].sort((left, right) => left.from - right.from);
-    const target =
-      direction === "next"
-        ? extreme
-          ? ordered[ordered.length - 1]
-          : ordered.find((entry) => entry.from > activeOffset) ?? ordered[0]
-        : extreme
-          ? ordered[0]
-          : [...ordered].reverse().find((entry) => entry.to - 1 < activeOffset) ?? ordered[ordered.length - 1];
-
-    if (!target) {
-      return false;
-    }
-
-    pushJumpEntry(createJumpEntry(state));
-    applySelectionRange(target.from, target.to);
-    revealSelectionWithinViewport();
-    syncVisibleViewportRows();
-    syncVisibleLanguageDecorations();
-    emitPresentationUpdate("diagnostic.navigate");
-    return true;
-  };
-
-  const toggleComments = async (mode: "smart" | "line" | "block" = "line"): Promise<boolean> => {
-    const toggler = getCommentToggler();
-
-    if (!toggler) {
-      setBottomMessage({ tone: "warning", text: "No comment provider" });
-      return false;
-    }
-
-    let changes: readonly TextChange[];
-
-    try {
-      const context = {
-        document: getSnapshot(),
-        selection: getSelectionOffsets(state)
-      };
-
-      changes =
-        mode === "smart"
-          ? toggler.toggleComments
-            ? await toggler.toggleComments(context)
-            : await toggler.toggleLineComments(context)
-          : mode === "block"
-            ? toggler.toggleBlockComments
-              ? await toggler.toggleBlockComments(context)
-              : toggler.toggleComments
-                ? await toggler.toggleComments(context)
-                : await toggler.toggleLineComments(context)
-            : await toggler.toggleLineComments(context);
-    } catch {
-      setBottomMessage({ tone: "error", text: "Comment toggle failed" });
-      return false;
-    }
-
-    if (changes.length === 0) {
-      setBottomMessage({ tone: "info", text: "Nothing to comment" });
-      return false;
-    }
-
-    dispatch({
-      changes,
-      effects: [{ type: "language.comment-toggle" }]
-    });
-    setBottomMessage({ tone: "info", text: "Toggled comments" });
-    return true;
-  };
-
-  const selectTextobjectWithFallback = async (mode: SyntaxTextobjectMode, object: string): Promise<boolean> => {
-    if (["w", "W", "p", "'", "\"", "`", "(", ")", "[", "]", "{", "}", "<", ">"].includes(object)) {
-      return executeEditorCommand(selectTextobject(mode, object));
-    }
-
-    const provider = getSyntaxTextobjectProvider();
-    if (!provider) {
-      return false;
-    }
-
-    const next = await provider.selectTextobject({
-      document: getSnapshot(),
-      selection: getSelectionOffsets(state),
-      activeOffset: getActiveCharacterOffset(state),
-      object,
-      mode
-    });
-
-    if (!next) {
-      return false;
-    }
-
-    applySelectionRange(next.from, next.to);
-    return true;
-  };
-
-  const navigateSyntax = async (direction: "next" | "prev", kind: string): Promise<boolean> => {
-    const provider = getSyntaxNavigationProvider();
-    const navigate = direction === "next" ? provider?.gotoNext : provider?.gotoPrev;
-
-    if (!navigate) {
-      return false;
-    }
-
-    const next = await navigate({
-      document: getSnapshot(),
-      activeOffset: getActiveCharacterOffset(state),
-      kind
-    });
-
-    if (!next) {
-      return false;
-    }
-
-    pushJumpEntry(createJumpEntry(state));
-    applySelectionRange(next.from, next.to);
-    revealSelectionWithinViewport();
-    syncVisibleViewportRows();
-    syncVisibleLanguageDecorations();
-    emitPresentationUpdate("syntax.navigate");
-    return true;
-  };
-
-  const previewSearch = (rawQuery: string, direction: "forward" | "backward") => {
-    if (!searchPreviewState?.active) {
-      return;
-    }
-
-    const query = rawQuery.trim();
-
-    if (!query) {
-      applySearchState(searchPreviewState.search, "search.restore");
-      dispatch({
-        selection: searchPreviewState.selection,
-        mode: searchPreviewState.mode
-      });
-      return;
-    }
-
-    applySearchState({
-      query,
-      direction,
-      lastMatch: null
-    }, "search.preview");
-
-    const matches = presentation.search.matches;
-
-    if (matches.length === 0) {
-      applySearchState(searchPreviewState.search, "search.restore");
-      dispatch({
-        selection: searchPreviewState.selection,
-        mode: searchPreviewState.mode
-      });
-      return;
-    }
-
-    const match = findSearchMatch(matches, searchPreviewState.startOffset, direction);
-    if (!match) {
-      applySearchState(searchPreviewState.search, "search.restore");
-      dispatch({
-        selection: searchPreviewState.selection,
-        mode: searchPreviewState.mode
-      });
-      return;
-    }
-
-    applySearchState({
-      query,
-      direction,
-      lastMatch: match
-    }, "search.preview");
-    applySelectionRange(match.from, match.to);
-    revealSelectionWithinViewport();
-    syncVisibleViewportRows();
-    syncVisibleLanguageDecorations();
-    void languageRuntime.ensureVisibleHighlightCoverage();
-  };
-
-  const syncCommandPreviewTheme = (themeNames: readonly string[] = []) => {
-    const next = resolveCommandPreviewTheme({
-      commandLine: presentation.ui.commandLine,
-      commandCompletionIndex: presentation.ui.commandCompletionIndex,
-      commandCompletionItems: presentation.ui.commandCompletionItems,
-      previewTheme: presentation.ui.previewTheme,
-      themeName: presentation.themeName,
-      themeNames
-    });
-
-    if (next.changed) {
-      presentation.ui.commandCompletionItems = next.items;
-      presentation.ui.commandCompletionIndex = next.index;
-      presentation.ui.previewTheme = next.previewTheme;
-    }
-
-    return { themeName: next.themeName, changed: next.changed };
-  };
-
-  const applyCommandCompletion = async (themeNames: readonly string[] = []): Promise<EditorKeyInputResult | null> => {
-    const items = getCommandCompletionItems(presentation.ui.commandLine, themeNames);
-    if (items.length === 0) {
-      return null;
-    }
-
-    const selected = items[Math.max(0, Math.min(items.length - 1, presentation.ui.commandCompletionIndex))];
-    if (!selected) {
-      return null;
-    }
-
-    if (presentation.ui.commandLine.prompt !== ":") {
-      return null;
-    }
-
-    if (selected.detail === "theme" && presentation.ui.commandLine.value.trimStart().toLowerCase().startsWith("theme")) {
-      setCommandLineState({ ...presentation.ui.commandLine, value: `theme ${selected.label}` }, "ui.command-line.input");
-      const result = await handleCommandLineKeyInput("Enter", { themeNames });
-      return { ...result, themeName: result.themeName ?? presentation.themeName };
-    }
-
-    const nextValue =
-      selected.label === "theme" || selected.label === "write"
-        ? `${selected.label} `
-        : selected.label;
-    setCommandLineState({ ...presentation.ui.commandLine, value: nextValue }, "ui.command-line.input");
-    presentation.ui.commandCompletionIndex = 0;
-    const { themeName } = syncCommandPreviewTheme(themeNames);
-    emitPresentationUpdate("ui.command-line.completion");
-    return { handled: true, themeName };
-  };
-
-  const openCommandLineState = (prompt: ":" | "/" | "?") => {
-    if (prompt === "/" || prompt === "?") {
-      searchPreviewState = {
-        active: true,
-        direction: prompt === "/" ? "forward" : "backward",
-        selection: state.selection,
-        mode: state.mode,
-        search: { ...searchState },
-        startOffset: getActiveOffset()
-      };
-    } else {
-      searchPreviewState = null;
-    }
-
-    presentation.ui.pendingAction = null;
-    presentation.ui.commandCompletionIndex = 0;
-    presentation.ui.commandCompletionItems = [];
-    presentation.ui.previewTheme = null;
-    setCommandLineState({ active: true, value: "", prompt }, "ui.command-line.open");
-  };
-
-  const handleCommandLineKeyInput = async (
-    key: string,
-    options: EditorCommandLineKeyOptions = {}
-  ): Promise<EditorCommandLineKeyResult> => {
-    const commandLine = presentation.ui.commandLine;
-
-    if (!commandLine.active) {
-      return { handled: false };
-    }
-
-    if (key === "Escape") {
-      restoreSearchPreview();
-      searchPreviewState = null;
-      presentation.ui.commandCompletionIndex = 0;
-      presentation.ui.commandCompletionItems = [];
-      presentation.ui.previewTheme = null;
-      setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.close");
-      return { handled: true };
-    }
-
-    if (key === "Backspace") {
-      const nextValue = commandLine.value.slice(0, -1);
-      setCommandLineState({ ...commandLine, value: nextValue }, "ui.command-line.input");
-      if (commandLine.prompt === "/" || commandLine.prompt === "?") {
-        previewSearch(nextValue, commandLine.prompt === "/" ? "forward" : "backward");
-      }
-      return { handled: true };
-    }
-
-    if (key === "Enter") {
-      const trimmed = commandLine.value.trim();
-      const prompt = commandLine.prompt;
-      presentation.ui.commandCompletionIndex = 0;
-      presentation.ui.commandCompletionItems = [];
-      presentation.ui.previewTheme = null;
-      setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.commit");
-
-      if (prompt === "/" || prompt === "?") {
-        searchPreviewState = null;
-        if (!trimmed) {
-          return { handled: true };
-        }
-        runSearch(trimmed, prompt === "/" ? "forward" : "backward");
-        return { handled: true };
-      }
-
-      if (!trimmed) {
-        return { handled: true };
-      }
-
-      const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
-      const value = commandName.toLowerCase();
-      const commandArgument = argumentParts.join(" ").trim();
-
-      if (value === "q" || value === "quit") {
-        return { handled: true, quit: true };
-      }
-
-      if (value === "format" || value === "fmt") {
-        const didFormat = await controller.formatDocument();
-        setBottomMessage({ tone: "info", text: didFormat ? "Formatted document" : "Already formatted" });
-        return { handled: true };
-      }
-
-      if (value === "w" || value === "write") {
-        const targetPath = commandArgument || presentation.filePath;
-        const didSave = await controller.saveDocument(targetPath);
-        setBottomMessage({
-          tone: didSave ? "info" : "error",
-          text: didSave ? `Wrote ${targetPath}` : `Write failed for ${targetPath}`
-        });
-        return { handled: true };
-      }
-
-      if (value === "theme") {
-        if (!commandArgument) {
-          setBottomMessage({ tone: "warning", text: "Theme name required" });
-          return { handled: true };
-        }
-
-        const normalizedArgument = commandArgument.toLowerCase();
-        const matchedTheme =
-          options.themeNames?.find((entry) => entry.toLowerCase() === normalizedArgument) ??
-          options.themeNames?.find((entry) => entry.toLowerCase().startsWith(normalizedArgument)) ??
-          commandArgument;
-
-        if (!matchedTheme) {
-          setBottomMessage({ tone: "warning", text: `Unknown theme: ${commandArgument}` });
-          return { handled: true };
-        }
-
-        presentation.themeName = matchedTheme;
-        setBottomMessage({ tone: "info", text: `Theme ${matchedTheme}` });
-        emitPresentationUpdate("presentation.theme-name");
-        return { handled: true, themeName: matchedTheme };
-      }
-
-      if (value === "code-actions" || value === "codeaction" || value === "ca") {
-        await loadCodeActions();
-        return { handled: true };
-      }
-
-      setBottomMessage({ tone: "warning", text: `Unknown command: ${trimmed}` });
-      return { handled: true };
-    }
-
-    if (key.length === 1) {
-      const nextValue = `${commandLine.value}${key}`;
-      setCommandLineState({ ...commandLine, value: nextValue }, "ui.command-line.input");
-      if (commandLine.prompt === "/" || commandLine.prompt === "?") {
-        previewSearch(nextValue, commandLine.prompt === "/" ? "forward" : "backward");
-      }
-      return { handled: true };
-    }
-
-    return { handled: false };
-  };
-
-  const openDiagnosticsPicker = () => {
-    const items = presentation.language.diagnostics.map((entry) => {
-      const position = state.doc.positionAt(entry.from);
-      const lineText = state.doc.lineAt(position.line).text.trim();
-      return {
-        label: `${position.line + 1}:${position.column + 1} ${entry.message}`,
-        detail: lineText,
-        run: () => {
-          pushJumpEntry(createJumpEntry(state));
-          applySelectionRange(entry.from, entry.to);
-          revealSelectionWithinViewport();
-          syncVisibleViewportRows();
-          syncVisibleLanguageDecorations();
-          closePicker("ui.picker.close");
-        }
-      };
-    });
-
-    if (items.length === 0) {
-      setBottomMessage({ tone: "warning", text: "No diagnostics" });
-      return false;
-    }
-
-    setPickerState(
-      {
-        active: true,
-        loading: false,
-        title: "diagnostics",
-        items,
-        selectedIndex: 0,
-        error: null
-      },
-      "ui.picker"
-    );
-    return true;
-  };
-
-  const openJumpListPicker = () => {
-    const items = controller.getJumpList().map((entry, index) => {
-      const offset = getCursorOffset(entry.selection);
-      const position = state.doc.positionAt(offset);
-      const lineText = state.doc.lineAt(position.line).text.trim();
-      return {
-        label: `${index + 1}:${position.line + 1}:${position.column + 1}`,
-        detail: lineText,
-        run: () => {
-          restoreJump(entry);
-          closePicker("ui.picker.close");
-        }
-      };
-    });
-
-    if (items.length === 0) {
-      setBottomMessage({ tone: "warning", text: "Jump list is empty" });
-      return false;
-    }
-
-    setPickerState(
-      {
-        active: true,
-        loading: false,
-        title: "jumps",
-        items,
-        selectedIndex: Math.max(0, items.length - 1),
-        error: null
-      },
-      "ui.picker"
-    );
-    return true;
-  };
-
-  const loadCodeActions = async (): Promise<boolean> => {
-    setPickerState(
-      {
-        active: true,
-        loading: true,
-        title: "code actions",
-        items: [],
-        selectedIndex: 0,
-        error: null
-      },
-      "ui.picker"
-    );
-
-    let actions: readonly EditorCodeAction[];
-    try {
-      actions = await controller.requestCodeActions();
-    } catch {
-      closePicker("ui.picker.close");
-      setBottomMessage({ tone: "error", text: "Code actions request failed" });
-      return false;
-    }
-
-    const items = actions.map((action) => ({
-      label: action.title,
-      run: async () => {
-        const applied = await controller.applyCodeAction(action);
-        if (!applied) {
-          setBottomMessage({ tone: "warning", text: `No edits for ${action.title}` });
-          return;
-        }
-
-        closePicker("ui.picker.close");
-        setBottomMessage({ tone: "info", text: `Applied ${action.title}` });
-      }
-    }));
-
-    setPickerState(
-      {
-        active: true,
-        loading: false,
-        title: "code actions",
-        items,
-        selectedIndex: 0,
-        error: items.length === 0 ? "No code actions" : null
-      },
-      "ui.picker"
-    );
-
-    if (items.length === 0) {
-      closePicker("ui.picker.close");
-      setBottomMessage({ tone: "warning", text: "No code actions available" });
-    }
-
-    return items.length > 0;
-  };
-
-  const isFlashJumpOffset = (offset: number, target: string) => {
-    const character = state.doc.text[offset] ?? "";
-
-    if (!character || character !== target) {
-      return false;
-    }
-
-    return offset !== getActiveOffset();
-  };
-
-  const collectVisibleFlashHints = (target: string): readonly EditorFlashHintState[] => {
-    const offsets: number[] = [];
-
-    for (const visualRow of presentation.viewport.visibleVisualRows) {
-      for (let offset = visualRow.segmentStart; offset < visualRow.segmentEnd; offset += 1) {
-        if (isFlashJumpOffset(offset, target)) {
-          offsets.push(offset);
-        }
-      }
-    }
-
-    const labels = buildFlashLabels(target, offsets.length);
-    return offsets.map((offset, index) => ({
-      offset,
-      label: labels[index] ?? ""
-    }));
-  };
-
-  const applyFlashJump = (targetOffset: number) => {
-    clearFlashState("flash.clear");
-    const targetPosition = state.doc.positionAt(targetOffset);
-    dispatch({
-      selection:
-        state.mode === "insert"
-          ? createSelection(targetOffset, targetOffset, targetPosition.column)
-          : state.mode === "visual"
-            ? createSelection(state.selection.ranges[state.selection.primaryIndex]?.anchor ?? targetOffset, targetOffset, targetPosition.column)
-            : createCharacterSelection(state.doc, targetOffset, targetPosition.column)
-    });
   };
 
   const revealSelectionWithinViewport = (): boolean => {
@@ -1629,14 +728,79 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   rebuildViewportModel();
   syncVisibleLanguageDecorations();
 
+  commandsRuntime = createCommandsRuntime({
+    getState: () => state,
+    getPresentation: () => presentation,
+    getController: () => controller,
+    dispatch,
+    getSnapshot,
+    getActiveOffset,
+    getVisibleLineCount,
+    getVisibleLineViewport: getVisibleLineViewportValue,
+    readPendingCount,
+    historyControls,
+    setBottomMessage,
+    clearFlashState,
+    closePicker,
+    syncVisibleLanguageDecorations,
+    ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
+    revealSelectionWithinViewport,
+    syncVisibleViewportRows,
+    pushJumpEntry,
+    createJumpEntry: () => createJumpEntry(state),
+    dispatchOffsetSelection,
+    moveByVisualRows,
+    gotoVisibleRow,
+    getCommentToggler,
+    getSyntaxSelector,
+    getSyntaxTextobjectProvider,
+    getSyntaxNavigationProvider,
+    restoreJump
+  });
+
+  pickerRuntime = createPickerRuntime({
+    getState: () => state,
+    getPresentation: () => presentation,
+    getController: () => controller,
+    setBottomMessage,
+    emitPresentationUpdate,
+    jumpToSelection(from, to) {
+      pushJumpEntry(createJumpEntry(state));
+      applySelectionRange(from, to);
+      revealSelectionWithinViewport();
+      syncVisibleViewportRows();
+      syncVisibleLanguageDecorations();
+    },
+    restoreJump
+  });
+
+  commandRuntime = createCommandRuntime({
+    getState: () => state,
+    getPresentation: () => presentation,
+    getController: () => controller,
+    getSearchState: () => searchState,
+    getActiveOffset,
+    applySearchState,
+    applyRegisterValue,
+    applySelectionRange,
+    revealSelectionWithinViewport,
+    syncVisibleViewportRows,
+    syncVisibleLanguageDecorations,
+    ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
+    setBottomMessage,
+    setCommandLineState,
+    emitPresentationUpdate,
+    loadCodeActions: () => pickerRuntime.loadCodeActions()
+  });
+
   const compatibilityApi = createCompatibilityApi({
     updatePresentationState: updatePresentationStateValue,
-    openCommandLine: openCommandLineState,
+    openCommandLine: commandRuntime.openCommandLineState,
     requestRawHover,
     invalidateHoverRequest: () => {
       presentation.language.hoverRequestId += 1;
     },
-    handleCommandLineKey: handleCommandLineKeyInput
+    handleCommandLineKey: commandRuntime.handleCommandLineKeyInput
   });
 
   keyRuntime = createKeyRuntime({
@@ -1645,62 +809,37 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getController: () => controller,
     getActiveOffset,
     getVisibleLineCount,
-    executeEditorCommand,
-    executeCommandWithCount,
-    executeCommandWithCountSync,
-    runRepeatableMotion,
+    executeEditorCommand: commandsRuntime.executeEditorCommand,
+    executeCommandWithCount: commandsRuntime.executeCommandWithCount,
+    executeCommandWithCountSync: commandsRuntime.executeCommandWithCountSync,
+    runRepeatableMotion: commandsRuntime.runRepeatableMotion,
     recordRepeatableMotion,
-    async handleAltArrowSyntaxSelection(key) {
-      const syntaxSelector = getSyntaxSelector();
-      const syntaxSelection =
-        key === "ArrowUp"
-          ? syntaxSelector?.expandSelection?.bind(syntaxSelector)
-          : syntaxSelector?.shrinkSelection?.bind(syntaxSelector);
-
-      if (!syntaxSelection) {
-        return false;
-      }
-
-      const revision = state.revision;
-      const syntaxRevision = presentation.language.languageRevision;
-      const selection = getSelectionOffsets(state);
-      const activeOffset = getActiveCharacterOffset(state);
-      const nextSelection = await syntaxSelection(selection, activeOffset, syntaxRevision);
-      if (!nextSelection || state.revision !== revision || nextSelection.to <= nextSelection.from) {
-        return true;
-      }
-
-      dispatch({
-        selection: createSelection(nextSelection.from, Math.max(nextSelection.from, nextSelection.to - 1))
-      });
-      return true;
-    },
-    searchFromSelection,
-    repeatSearch,
-    toggleComments,
-    navigateDiagnostic,
-    navigateSyntax,
-    selectTextobjectWithFallback,
-    syncCommandPreviewTheme,
-    applyCommandCompletion,
-    openCommandLine: openCommandLineState,
-    handleCommandLineKeyInput,
+    handleAltArrowSyntaxSelection: commandsRuntime.handleAltArrowSyntaxSelection,
+    searchFromSelection: commandRuntime.searchFromSelection,
+    repeatSearch: commandRuntime.repeatSearch,
+    toggleComments: commandsRuntime.toggleComments,
+    navigateDiagnostic: commandsRuntime.navigateDiagnostic,
+    navigateSyntax: commandsRuntime.navigateSyntax,
+    selectTextobjectWithFallback: commandsRuntime.selectTextobjectWithFallback,
+    syncCommandPreviewTheme: commandRuntime.syncCommandPreviewTheme,
+    openCommandLine: commandRuntime.openCommandLineState,
+    handleActiveCommandLineKey: commandRuntime.handleActiveCommandLineKey,
     clearPendingCount,
     setPendingActionState,
     setPendingCountState,
     setStickyViewMode,
-    setPickerState,
-    movePicker,
-    acceptPicker,
-    closePicker,
+    setPickerState: pickerRuntime.setPickerState,
+    movePicker: pickerRuntime.movePicker,
+    acceptPicker: pickerRuntime.acceptPicker,
+    closePicker: pickerRuntime.closePicker,
     setBottomMessage,
     clearHover: () => clearHoverState(),
     restoreJump,
-    openDiagnosticsPicker,
-    openJumpListPicker,
-    loadCodeActions,
-    collectVisibleFlashHints,
-    applyFlashJump,
+    openDiagnosticsPicker: pickerRuntime.openDiagnosticsPicker,
+    openJumpListPicker: pickerRuntime.openJumpListPicker,
+    loadCodeActions: pickerRuntime.loadCodeActions,
+    collectVisibleFlashHints: commandsRuntime.collectVisibleFlashHints,
+    applyFlashJump: commandsRuntime.applyFlashJump,
     clearFlashState,
     emitPresentationUpdate
   });

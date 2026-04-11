@@ -22,6 +22,13 @@ import {
   type EditorLayoutToken
 } from "../../editor-layout/src/index";
 import { computeRenderWork } from "./render-work";
+import {
+  getEffectiveThemeName,
+  getEffectiveThemeSpec,
+  readBottomBarSignature,
+  readStatusSignature,
+  readTooltipSignature
+} from "./render-signatures";
 import type {
   DiagnosticSeverity,
   EditorCodeAction,
@@ -1009,6 +1016,31 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   syncPresentationMirrors();
 
+  function getCurrentEffectiveThemeSpec(): ThemeSpec {
+    return getEffectiveThemeSpec(presentation, theme, availableCommandThemes);
+  }
+
+  function getCurrentEffectiveThemeName(): string {
+    return getEffectiveThemeName(presentation, theme);
+  }
+
+  function getCurrentStatusSignature(): string {
+    return readStatusSignature({
+      state,
+      presentation,
+      filePath,
+      diagnosticsSummary: getDiagnosticsSummary()
+    });
+  }
+
+  function getCurrentBottomBarSignature(): string {
+    return readBottomBarSignature(presentation);
+  }
+
+  function getCurrentTooltipSignature(): string {
+    return readTooltipSignature({ presentation, hoverAnchor });
+  }
+
   function setHoverAnchor(next: { left: number; top: number }, followsCursor = false): void {
     if (hoverAnchor.left === next.left && hoverAnchor.top === next.top && hoverAnchorFollowsCursor === followsCursor) {
       return;
@@ -1017,108 +1049,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     hoverAnchor = next;
     hoverAnchorFollowsCursor = followsCursor;
     currentLayoutModel = null;
-  }
-
-  function serializePendingAction(): string {
-    const pendingAction = uiState.pendingAction;
-
-    if (!pendingAction) {
-      return "";
-    }
-
-    if (pendingAction.kind === "z") {
-      return `${pendingAction.kind}:${pendingAction.sticky ? 1 : 0}`;
-    }
-
-    if (pendingAction.kind === "find") {
-      return `${pendingAction.kind}:${pendingAction.variant}`;
-    }
-
-    if (pendingAction.kind === "textobject") {
-      return `${pendingAction.kind}:${pendingAction.mode}`;
-    }
-
-    if (pendingAction.kind === "surround-replace-to") {
-      return `${pendingAction.kind}:${pendingAction.fromObject}`;
-    }
-
-    if (pendingAction.kind === "register-select") {
-      return `${pendingAction.kind}:${pendingAction.insert ? 1 : 0}`;
-    }
-
-    return pendingAction.kind;
-  }
-
-  function getEffectiveThemeSpec(): ThemeSpec {
-    const previewName = presentation.ui.previewTheme;
-    if (previewName) {
-      return availableCommandThemes.find((entry) => entry.name === previewName) ?? theme;
-    }
-
-    const committedName = presentation.themeName;
-    if (committedName) {
-      return availableCommandThemes.find((entry) => entry.name === committedName) ?? theme;
-    }
-
-    return theme;
-  }
-
-  function getEffectiveThemeName(): string {
-    return presentation.ui.previewTheme ?? presentation.themeName ?? theme.name;
-  }
-
-  function readStatusSignature(): string {
-    const cursorOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const cursorPosition = state.doc.positionAt(cursorOffset);
-    const { errors, warnings } = getDiagnosticsSummary();
-
-    return [
-      state.mode,
-      uiState.flash.active ? "flash" : "",
-      serializePendingAction(),
-      filePath,
-      errors,
-      warnings,
-      cursorPosition.line,
-      cursorPosition.column
-    ].join("|");
-  }
-
-  function readBottomBarSignature(): string {
-    return [
-      uiState.commandLine.active ? 1 : 0,
-      uiState.commandLine.prompt,
-      uiState.commandLine.value,
-      uiState.commandCompletionIndex,
-      uiState.commandCompletionItems.map((item) => `${item.label}:${item.detail ?? ""}`).join(";"),
-      uiState.picker.active ? 1 : 0,
-      uiState.picker.loading ? 1 : 0,
-      uiState.picker.title,
-      uiState.picker.selectedIndex,
-      uiState.picker.error ?? "",
-      uiState.picker.items.map((item) => `${item.label}:${item.detail ?? ""}:${item.selected ? 1 : 0}`).join(";"),
-      uiState.bottomMessage?.tone ?? "",
-      uiState.bottomMessage?.text ?? "",
-      uiState.flash.active ? 1 : 0,
-      uiState.flash.target,
-      uiState.flash.input,
-      uiState.flash.hints.map((hint) => `${hint.offset}:${hint.label}`).join(";"),
-      serializePendingAction(),
-      uiState.pendingCount
-    ].join("|");
-  }
-
-  function readTooltipSignature(): string {
-    return [
-      uiState.hover.active ? 1 : 0,
-      uiState.hover.pinned ? 1 : 0,
-      uiState.hover.offset ?? -1,
-      uiState.hover.source ?? "",
-      uiState.hover.tone,
-      uiState.hover.content,
-      hoverAnchor.left,
-      hoverAnchor.top
-    ].join("|");
   }
 
   function buildLayoutModelForViewport(_viewport: LineViewport): EditorLayoutModel {
@@ -1998,7 +1928,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     ]
       .filter(Boolean)
       .join("   ");
-    renderedStatusSignature = readStatusSignature();
+    renderedStatusSignature = getCurrentStatusSignature();
   }
 
   function patchBottomRow(): void {
@@ -2026,7 +1956,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       value.textContent = commandTextRun?.text ?? "";
 
       bottomRow.append(prompt, value);
-      renderedBottomBarSignature = readBottomBarSignature();
+      renderedBottomBarSignature = getCurrentBottomBarSignature();
       return;
     }
 
@@ -2050,7 +1980,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       }
 
       bottomRow.append(actions);
-      renderedBottomBarSignature = readBottomBarSignature();
+      renderedBottomBarSignature = getCurrentBottomBarSignature();
       return;
     }
 
@@ -2061,7 +1991,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       message.dataset.wxEditorBottomMessage = "true";
       message.textContent = messageRun.text;
       bottomRow.append(message);
-      renderedBottomBarSignature = readBottomBarSignature();
+      renderedBottomBarSignature = getCurrentBottomBarSignature();
       return;
     }
 
@@ -2080,12 +2010,33 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
                 : uiState.pendingAction?.kind ?? (uiState.pendingCount ? "count" : "prefix");
       prefix.textContent = prefixRun.text;
       bottomRow.append(prefix);
-      renderedBottomBarSignature = readBottomBarSignature();
+      renderedBottomBarSignature = getCurrentBottomBarSignature();
       return;
     }
 
     bottomRow.textContent = " ";
-    renderedBottomBarSignature = readBottomBarSignature();
+    renderedBottomBarSignature = getCurrentBottomBarSignature();
+  }
+
+  function renderSurfaceSnapshot(options: {
+    forceRows?: boolean;
+    syncTheme?: boolean;
+    patchTooltip?: boolean;
+  } = {}): void {
+    if (options.syncTheme) {
+      syncRenderedThemeFromPresentation(true);
+    }
+
+    if (options.forceRows) {
+      renderVisibleRows(true);
+    }
+
+    patchStatus();
+    patchBottomRow();
+
+    if (options.patchTooltip) {
+      patchTooltip();
+    }
   }
 
   function handleControllerUpdate(update: EditorUpdate): void {
@@ -2118,10 +2069,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       isPresentationOnlyUpdate,
       hasDirtyLines: !!dirtyLines && dirtyLines.size > 0,
       effectTypes,
-      themeChanged: appliedThemeName !== getEffectiveThemeName(),
-      statusChanged: renderedStatusSignature !== readStatusSignature(),
-      bottomBarChanged: renderedBottomBarSignature !== readBottomBarSignature(),
-      tooltipChanged: renderedTooltipSignature !== readTooltipSignature()
+      themeChanged: appliedThemeName !== getCurrentEffectiveThemeName(),
+      statusChanged: renderedStatusSignature !== getCurrentStatusSignature(),
+      bottomBarChanged: renderedBottomBarSignature !== getCurrentBottomBarSignature(),
+      tooltipChanged: renderedTooltipSignature !== getCurrentTooltipSignature()
     });
 
     if (work.syncTheme) {
@@ -2159,8 +2110,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function syncRenderedThemeFromPresentation(force = false): boolean {
-    const nextTheme = getEffectiveThemeSpec();
-    const nextThemeName = getEffectiveThemeName();
+    const nextTheme = getCurrentEffectiveThemeSpec();
+    const nextThemeName = getCurrentEffectiveThemeName();
 
     if (!presentation.ui.previewTheme && presentation.themeName && nextTheme.name === presentation.themeName) {
       theme = nextTheme;
@@ -2214,12 +2165,19 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function patchTooltip(): void {
+    if (!uiState.hover.active) {
+      tooltip.hidden = true;
+      tooltip.replaceChildren();
+      renderedTooltipSignature = getCurrentTooltipSignature();
+      return;
+    }
+
     const panel = getRenderedLayout().panels[0];
 
     if (!panel) {
       tooltip.hidden = true;
       tooltip.replaceChildren();
-      renderedTooltipSignature = readTooltipSignature();
+      renderedTooltipSignature = getCurrentTooltipSignature();
       return;
     }
 
@@ -2245,7 +2203,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       }
     }
 
-    renderedTooltipSignature = readTooltipSignature();
+    renderedTooltipSignature = getCurrentTooltipSignature();
   }
 
   function clearHover(preservePinned = false): void {
@@ -2521,9 +2479,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   refreshGutterWidth(true);
   refreshViewportMetricsIfNeeded(true);
   revealCursor();
-  renderVisibleRows(true);
-  patchStatus();
-  patchBottomRow();
+  renderSurfaceSnapshot({ forceRows: true });
   schedulePostMountReveal();
 
   if (typeof ResizeObserver !== "undefined") {
@@ -2545,9 +2501,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       refreshGutterWidth(true);
       refreshViewportMetricsIfNeeded(true);
       revealCursor();
-      renderVisibleRows(true);
-      patchStatus();
-      patchBottomRow();
+      renderSurfaceSnapshot({ forceRows: true });
       schedulePostMountReveal();
     },
     destroy() {
@@ -2594,9 +2548,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       languageServices = normalizeLanguageServices(nextLanguageServices);
       controller.setLanguageServices(languageServices);
       syncLanguageMirrors();
-      renderVisibleRows(true);
-      patchStatus();
-      patchBottomRow();
+      renderSurfaceSnapshot({ forceRows: true });
     },
     async setLanguage(nextLanguage: LanguageProvider | null) {
       await this.setLanguageServices(languageProviderToServices(nextLanguage));
@@ -2606,8 +2558,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       controller.setThemeName(nextTheme.name);
       availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
       appliedThemeName = null;
-      syncRenderedThemeFromPresentation(true);
-      patchBottomRow();
+      renderSurfaceSnapshot({ syncTheme: true });
     },
     async setValue(value: string) {
       controller.replaceState(createEditorState({ value, selection: createSelection(0, 0) }));
