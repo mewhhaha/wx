@@ -1,10 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { enterInsertMode, enterNormalMode, insertText, moveRight } from "@wx/editor-core";
 
 import { createEditorController } from "./index";
 
 describe("editor controller", () => {
+  it("keeps controller lifecycle and register/jump plumbing out of the root composition file", () => {
+    const source = readFileSync(resolve(process.cwd(), "packages/editor-controller/src/index.ts"), "utf8");
+
+    expect(source).not.toContain("const notify = (");
+    expect(source).not.toContain("const applyRegisterValue = (");
+    expect(source).not.toContain("const pushJumpEntry = (");
+    expect(source).not.toContain("const rebuildViewportModel = (");
+  });
+
   it("emits deterministic updates for command execution", () => {
     const controller = createEditorController({ value: "abc" });
     const updates: string[] = [];

@@ -48,6 +48,18 @@ describe("createEditor", () => {
     expect(source).not.toContain("controller.updatePresentationState(");
   });
 
+  it("keeps DOM render modules free of controller-internal imports", () => {
+    const renderSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/dom-render.ts"), "utf8");
+    const chromeSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/dom-chrome.ts"), "utf8");
+
+    expect(renderSource).not.toContain("editor-controller/src/compat");
+    expect(chromeSource).not.toContain("editor-controller/src/compat");
+    expect(renderSource).not.toContain("editor-controller/src/session");
+    expect(renderSource).not.toContain("editor-controller/src/viewport");
+    expect(chromeSource).not.toContain("editor-controller/src/session");
+    expect(chromeSource).not.toContain("editor-controller/src/viewport");
+  });
+
   it("chooses simple-cursor work for plain movement without bottom-bar or tooltip churn", () => {
     expect(
       computeRenderWork({

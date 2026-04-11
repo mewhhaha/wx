@@ -29,6 +29,7 @@ import {
   readStatusSignature,
   readTooltipSignature
 } from "./render-signatures";
+import { createDomChromeRuntime } from "./dom-chrome";
 import {
   getTooltipAnchorForRect,
   resolveOffsetWithinRun,
@@ -40,6 +41,7 @@ import {
   keyboardInputForEvent,
   shouldRouteKeydown
 } from "./dom-input";
+import { createDomRenderRuntime } from "./dom-render";
 import {
   expandViewport,
   measureMetrics,
@@ -124,21 +126,6 @@ const DIAGNOSTIC_SEVERITY_ORDER: Record<DiagnosticSeverity, number> = {
 const EMPTY_CELL_TEXT = "\u00a0";
 const INSERT_TAB_TEXT = "  ";
 
-function getStatusModeText(mode: EditorState["mode"], ui: { flash: { active: boolean }; pendingAction: { kind: string } | null }): string {
-  if (ui.flash.active || ui.pendingAction?.kind === "flash-target") {
-    return " JMP ";
-  }
-
-  if (mode === "insert") {
-    return " INS ";
-  }
-
-  if (mode === "visual") {
-    return " VIS ";
-  }
-
-  return " NOR ";
-}
 const DEFAULT_INDENT_GUIDE_CHARACTER = "│";
 const END_OF_LINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "hint";
 const CURSOR_LINE_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "warning";
@@ -165,55 +152,6 @@ interface VisualRow {
   startColumn: number;
   isContinuation: boolean;
   isLastSegment: boolean;
-}
-
-function addClassName(element: Element, className: string, when: boolean): void {
-  if (when) {
-    element.classList.add(className);
-  }
-}
-
-function roleClassName(role: HighlightRole): string {
-  return `wx-role-${role}`;
-}
-
-function diagnosticClassName(severity: DiagnosticSeverity): string {
-  return `wx-diagnostic-${severity}`;
-}
-
-function tokenToHighlightRole(token: EditorLayoutToken): HighlightRole | null {
-  switch (token) {
-    case "text":
-    case "comment":
-    case "function":
-    case "gutter":
-    case "keyword":
-    case "number":
-    case "operator":
-    case "punctuation":
-    case "string":
-    case "type":
-      return token;
-    default:
-      return null;
-  }
-}
-
-function tokenToDiagnosticSeverity(
-  token: EditorLayoutToken
-): DiagnosticSeverity | null {
-  switch (token) {
-    case "diagnostic-error":
-      return "error";
-    case "diagnostic-warning":
-      return "warning";
-    case "diagnostic-info":
-      return "info";
-    case "diagnostic-hint":
-      return "hint";
-    default:
-      return null;
-  }
 }
 
 function normalizeLanguageServices(input: EditorLanguageServiceInput | null | undefined): EditorLanguageServices[] {
@@ -908,6 +846,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let pendingMountFrame = 0;
   let resizeObserver: ResizeObserver | null = null;
   let availableCommandThemes = normalizeCommandThemes(options.commandThemes, options.theme ?? defaultTheme);
+  let renderRuntime!: ReturnType<typeof createDomRenderRuntime>;
+  let chromeRuntime!: ReturnType<typeof createDomChromeRuntime>;
 
   function syncViewportMirrors(): void {
     anchoredTopVisualRow = viewportState.topVisualRow;
@@ -1171,36 +1111,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     return !!range && range.to >= renderedViewport.fromLine && range.from <= renderedViewport.toLine;
   }
 
-  function createRowView(visualRowIndex: number): RowView {
-    const visualRow = getVisualRow(visualRowIndex);
-    const host = document.createElement("div");
-    const row = document.createElement("div");
-    const gutter = document.createElement("div");
-    const content = document.createElement("div");
-
-    host.className = "wx-editor__line-group";
-    row.className = "wx-editor__row";
-    row.dataset.wxEditorRow = String(visualRow.docLine + 1);
-    row.dataset.wxEditorVisualRow = String(visualRowIndex + 1);
-
-    gutter.className = "wx-editor__gutter";
-    gutter.dataset.wxEditorGutter = String(visualRow.docLine + 1);
-
-    content.className = "wx-editor__content";
-    content.dataset.wxEditorContent = String(visualRow.docLine + 1);
-
-    row.append(gutter, content);
-    host.append(row);
-
-    return {
-      visualRowIndex,
-      host,
-      row,
-      gutter,
-      content
-    };
-  }
-
   function refreshGutterWidth(force = false): void {
     refreshMeasuredGutterWidth({
       force,
@@ -1286,352 +1196,76 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     );
   }
 
+  renderRuntime = createDomRenderRuntime({
+    root,
+    viewportRows,
+    getState: () => state,
+    getPresentation: () => presentation,
+    getUiState: () => uiState,
+    getMetrics: () => metrics,
+    getHoverAnchor: () => hoverAnchor,
+    getVisualRows: () => visualRows,
+    getLineVisualRanges: () => lineVisualRanges,
+    getWrapColumns: () => wrapColumns,
+    getSoftWrap: () => softWrap,
+    getVisibleViewport,
+    getRenderedViewport: () => renderedViewport,
+    setRenderedViewport(viewport) {
+      renderedViewport = viewport;
+    },
+    getVisibleLineCapacity,
+    getRowViews: () => rowViews,
+    setRowViews(next) {
+      rowViews = next;
+    },
+    getCurrentLayoutModel: () => currentLayoutModel,
+    buildLayoutModelForViewport,
+    getVisualRow,
+    getRowViewByVisualRowIndex,
+    getLineDiagnostics,
+    getRenderedLayout,
+    EMPTY_CELL_TEXT,
+    indentGuides
+  });
+
+  chromeRuntime = createDomChromeRuntime({
+    bottomRow,
+    commandPopover,
+    statusMode,
+    statusFile,
+    statusMeta,
+    tooltip,
+    getState: () => state,
+    getPresentation: () => presentation,
+    getUiState: () => uiState,
+    getFilePath: () => filePath,
+    getMetrics: () => metrics,
+    getRenderedLayout,
+    getDiagnosticsSummary,
+    getCurrentStatusSignature,
+    setRenderedStatusSignature(signature) {
+      renderedStatusSignature = signature;
+    },
+    getCurrentBottomBarSignature,
+    setRenderedBottomBarSignature(signature) {
+      renderedBottomBarSignature = signature;
+    },
+    getCurrentTooltipSignature,
+    setRenderedTooltipSignature(signature) {
+      renderedTooltipSignature = signature;
+    }
+  });
+
   function getRowViewByVisualRowIndex(visualRowIndex: number): RowView | null {
     return rowViews.find((view) => view.visualRowIndex === visualRowIndex) ?? null;
   }
 
-  function getTokenSourceRange(token: Element): { from: number; to: number } | null {
-    if (!(token instanceof HTMLSpanElement)) {
-      return null;
-    }
-
-    const from = Number(token.dataset.wxEditorOffset);
-    const to = Number(token.dataset.wxEditorOffsetEnd);
-
-    if (!Number.isFinite(from) || !Number.isFinite(to)) {
-      return null;
-    }
-
-    return { from, to };
-  }
-
-  function cloneTokenSpan(template: HTMLSpanElement, text: string, from: number, to: number): HTMLSpanElement {
-    const token = template.cloneNode(false) as HTMLSpanElement;
-    token.classList.remove("wx-cursor-block", "wx-is-selected");
-    delete token.dataset.wxEditorCursor;
-    delete token.dataset.wxEditorCursorKind;
-    token.dataset.wxEditorOffset = String(from);
-    token.dataset.wxEditorOffsetEnd = String(to);
-    token.textContent = text;
-    return token;
-  }
-
-  function findOrSplitTokenAtOffset(lineText: HTMLElement, offset: number): HTMLSpanElement | null {
-    for (const child of lineText.children) {
-      if (!(child instanceof HTMLSpanElement)) {
-        continue;
-      }
-
-      const range = getTokenSourceRange(child);
-      if (!range || offset < range.from || offset >= range.to) {
-        continue;
-      }
-
-      if (range.from === offset && range.to === offset + 1) {
-        return child;
-      }
-
-      const text = child.textContent ?? "";
-      const splitIndex = offset - range.from;
-      const beforeText = text.slice(0, splitIndex);
-      const cursorText = text.slice(splitIndex, splitIndex + 1) || EMPTY_CELL_TEXT;
-      const afterText = text.slice(splitIndex + 1);
-      const fragment = document.createDocumentFragment();
-
-      if (beforeText.length > 0) {
-        fragment.append(cloneTokenSpan(child, beforeText, range.from, offset));
-      }
-
-      const cursorToken = cloneTokenSpan(child, cursorText, offset, offset + 1);
-      fragment.append(cursorToken);
-
-      if (afterText.length > 0) {
-        fragment.append(cloneTokenSpan(child, afterText, offset + 1, range.to));
-      }
-
-      child.replaceWith(fragment);
-      return cursorToken;
-    }
-
-    return null;
-  }
-
-  function setBlockCursorToken(token: HTMLSpanElement | null, active: boolean): void {
-    if (!token) {
-      return;
-    }
-
-    token.classList.toggle("wx-cursor-block", active);
-    token.classList.toggle("wx-is-selected", active);
-
-    if (active) {
-      token.dataset.wxEditorCursor = "true";
-      token.dataset.wxEditorCursorKind = "block";
-    } else {
-      delete token.dataset.wxEditorCursor;
-      delete token.dataset.wxEditorCursorKind;
-    }
-  }
-
-  function getCaretMetrics() {
-    const height = Math.max(14, Math.round(metrics.lineHeight * 0.84));
-    const top = Math.max(0, Math.round((metrics.lineHeight - height) / 2));
-    return { height, top };
-  }
-
-  function ensureLineCursor(view: RowView, column: number): void {
-    const existing =
-      view.content.querySelector<HTMLElement>("[data-wx-editor-cursor='true'][data-wx-editor-cursor-kind='line']") ??
-      document.createElement("span");
-    const { height, top } = getCaretMetrics();
-
-    existing.className = "wx-cursor-line";
-    existing.dataset.wxEditorCursor = "true";
-    existing.dataset.wxEditorCursorKind = "line";
-    existing.style.left = `${column * metrics.charWidth}px`;
-    existing.style.top = `${top}px`;
-    existing.style.height = `${height}px`;
-
-    if (!existing.parentElement) {
-      view.content.append(existing);
-    }
-  }
-
   function tryPatchSimpleCursorMove(previousState: EditorState, nextState: EditorState): boolean {
-    if (uiState.flash.active || uiState.pendingAction !== null) {
-      return false;
-    }
-
-    const isSimpleSelection = (targetState: EditorState): boolean => {
-      if (targetState.selection.ranges.length !== 1) {
-        return false;
-      }
-
-      const selection = getSelectionOffsets(targetState);
-      return targetState.mode === "insert" ? selection.from === selection.to : selection.to === selection.from + 1;
-    };
-
-    if (!isSimpleSelection(previousState) || !isSimpleSelection(nextState)) {
-      return false;
-    }
-
-    if (previousState.mode !== nextState.mode || (nextState.mode !== "normal" && nextState.mode !== "insert")) {
-      return false;
-    }
-
-    const previousOffset =
-      previousState.mode === "insert"
-        ? getCursorOffset(previousState.selection)
-        : getActiveCharacterOffset(previousState);
-    const nextOffset =
-      nextState.mode === "insert" ? getCursorOffset(nextState.selection) : getActiveCharacterOffset(nextState);
-
-    if (previousOffset === nextOffset) {
-      return false;
-    }
-
-    const previousVisual = getLayoutVisualRowForOffset(
-      previousState,
-      visualRows,
-      lineVisualRanges,
-      previousOffset,
-      softWrap,
-      softWrap ? Math.max(1, wrapColumns) : Number.MAX_SAFE_INTEGER
-    );
-    const nextVisual = getLayoutVisualRowForOffset(
-      nextState,
-      visualRows,
-      lineVisualRanges,
-      nextOffset,
-      softWrap,
-      softWrap ? Math.max(1, wrapColumns) : Number.MAX_SAFE_INTEGER
-    );
-
-    if (
-      getLineDiagnostics(previousVisual.row.docLine).length > 0 ||
-      getLineDiagnostics(nextVisual.row.docLine).length > 0
-    ) {
-      return false;
-    }
-
-    const previousView = getRowViewByVisualRowIndex(previousVisual.rowIndex);
-    const nextView = getRowViewByVisualRowIndex(nextVisual.rowIndex);
-
-    if (!previousView || !nextView) {
-      return false;
-    }
-
-    previousView.row.classList.toggle("wx-row-active", previousVisual.rowIndex === nextVisual.rowIndex);
-    nextView.row.classList.add("wx-row-active");
-
-    if (nextState.mode === "insert") {
-      root
-        .querySelectorAll<HTMLElement>("[data-wx-editor-cursor='true'][data-wx-editor-cursor-kind='line']")
-        .forEach((cursor) => cursor.remove());
-      ensureLineCursor(nextView, nextVisual.column);
-      return true;
-    }
-
-    root
-      .querySelectorAll<HTMLSpanElement>("[data-wx-editor-cursor='true'][data-wx-editor-cursor-kind='block']")
-      .forEach((token) => setBlockCursorToken(token, false));
-
-    const lineText = nextView.content.querySelector<HTMLElement>(".wx-editor__line-text");
-    if (!lineText) {
-      return false;
-    }
-
-    const nextToken = findOrSplitTokenAtOffset(lineText, nextOffset);
-    if (!nextToken) {
-      return false;
-    }
-
-    setBlockCursorToken(nextToken, true);
-    return true;
+    return renderRuntime.tryPatchSimpleCursorMove(previousState, nextState);
   }
 
   function patchRowView(view: RowView, layoutRow: EditorLayoutModel["document"]["rows"][number]): void {
-    const visualRowIndex = layoutRow.visualRowIndex;
-    const lineIndex = layoutRow.docLine;
-    const gutterMarker = document.createElement("span");
-    const gutterNumber = document.createElement("span");
-    const gutterChange = document.createElement("span");
-    const lineText = document.createElement("span");
-    const markerRun = layoutRow.gutterRuns.find((run) => run.part === "gutter-marker");
-    const numberRun = layoutRow.gutterRuns.find((run) => run.part === "gutter-number");
-    const changeRun = layoutRow.gutterRuns.find((run) => run.part === "gutter-change");
-
-    view.visualRowIndex = visualRowIndex;
-    view.row.dataset.wxEditorRow = String(lineIndex + 1);
-    view.row.dataset.wxEditorVisualRow = String(visualRowIndex + 1);
-    view.gutter.dataset.wxEditorGutter = String(lineIndex + 1);
-    view.content.dataset.wxEditorContent = String(lineIndex + 1);
-    gutterMarker.className = "wx-editor__gutter-marker";
-    gutterMarker.dataset.severity = markerRun?.severity ?? "";
-    gutterMarker.dataset.wxEditorDiagnosticMarker = markerRun?.severity ?? "";
-    gutterNumber.className = "wx-editor__gutter-number";
-    gutterNumber.textContent = numberRun?.text ?? String(lineIndex + 1);
-    gutterChange.className = "wx-editor__gutter-change";
-    gutterChange.dataset.change = changeRun?.lineChangeKind ?? "";
-    gutterChange.dataset.deleted = String(changeRun?.deleted ?? false);
-    gutterChange.dataset.wxEditorLineChange = changeRun?.lineChangeKind ?? (changeRun?.deleted ? "deleted" : "");
-    view.gutter.replaceChildren(gutterMarker, gutterNumber, gutterChange);
-    view.row.classList.toggle("wx-row-active", layoutRow.isActive);
-    view.content.replaceChildren();
-    view.host.replaceChildren(view.row);
-    lineText.className = "wx-editor__line-text";
-    view.content.append(lineText);
-
-    for (const segment of layoutRow.contentRuns) {
-      const token = document.createElement("span");
-      token.className = "wx-token";
-      const highlightRole = tokenToHighlightRole(segment.token);
-      const severity = segment.severity ?? tokenToDiagnosticSeverity(segment.token);
-
-      if (highlightRole) {
-        token.classList.add(roleClassName(highlightRole));
-      }
-
-      addClassName(token, "wx-is-selected", !!segment.selected);
-      addClassName(token, "wx-search-match", !!segment.searchMatch);
-      addClassName(token, "wx-search-current", !!segment.currentSearchMatch);
-      addClassName(token, "wx-flash-target", !!segment.flashTarget);
-      addClassName(token, "wx-indent-guide", !!segment.isIndentGuide);
-      if (severity) {
-        token.classList.add(diagnosticClassName(severity));
-      }
-
-      if (segment.cursorBlock) {
-        token.classList.add("wx-cursor-block");
-        token.dataset.wxEditorCursor = "true";
-        token.dataset.wxEditorCursorKind = "block";
-      }
-
-      if (segment.sourceRange) {
-        token.dataset.wxEditorOffset = String(segment.sourceRange.from);
-        token.dataset.wxEditorOffsetEnd = String(segment.sourceRange.to);
-      }
-
-      token.textContent = segment.text;
-      lineText.append(token);
-    }
-
-    const flashHints = layoutRow.overlays.filter((overlay) => overlay.kind === "flash-hint");
-
-    if (flashHints.length > 0) {
-      const flashLayer = document.createElement("div");
-      flashLayer.className = "wx-editor__flash-layer";
-
-      for (const hint of flashHints) {
-        const marker = document.createElement("span");
-        marker.className = "wx-editor__flash-hint";
-        marker.dataset.wxEditorFlashHint = hint.text;
-        marker.style.left = `${Math.max(0, hint.col) * metrics.charWidth}px`;
-        marker.style.width = `${Math.max(1, hint.text.length) * metrics.charWidth}px`;
-        marker.textContent = hint.text;
-        flashLayer.append(marker);
-      }
-
-      view.content.append(flashLayer);
-    }
-
-    for (const overlay of layoutRow.overlays) {
-      if (overlay.kind !== "inline-diagnostic" || overlay.row !== 0) {
-        continue;
-      }
-
-      const note = document.createElement("span");
-      note.className = "wx-editor__eol-diagnostic";
-      note.dataset.severity = overlay.severity;
-      note.dataset.wxEditorDiagnosticNote = "eol";
-      note.textContent = `  ${overlay.text}`;
-      view.content.append(note);
-    }
-
-    for (const overlay of layoutRow.overlays) {
-      if (overlay.kind !== "inline-diagnostic" || overlay.row !== 1) {
-        continue;
-      }
-
-      const detailRow = document.createElement("div");
-      const detailGutter = document.createElement("div");
-      const detailContent = document.createElement("div");
-      const detail = document.createElement("div");
-      const hook = document.createElement("span");
-      const text = document.createElement("span");
-      detailRow.className = "wx-editor__diagnostic-row";
-      detailGutter.className = "wx-editor__diagnostic-gutter";
-      detailContent.className = "wx-editor__diagnostic-content";
-      detailGutter.textContent = " ";
-      detail.className = "wx-editor__inline-diagnostic";
-      detail.dataset.severity = overlay.severity;
-      detail.dataset.wxEditorDiagnosticNote = "inline";
-      detail.style.marginLeft = `${overlay.col * metrics.charWidth}px`;
-      hook.className = "wx-editor__inline-diagnostic-hook";
-      hook.dataset.wxEditorDiagnosticHook = overlay.severity;
-      text.className = "wx-editor__inline-diagnostic-text";
-      text.textContent = overlay.text;
-      detail.append(hook, text);
-      detailContent.append(detail);
-      detailRow.append(detailGutter, detailContent);
-      view.host.append(detailRow);
-    }
-
-    const cursorLine = layoutRow.overlays.find((overlay) => overlay.kind === "cursor-line");
-
-    if (cursorLine) {
-      const caret = document.createElement("span");
-      const caretHeight = Math.max(14, Math.round(metrics.lineHeight * 0.84));
-      const caretTop = Math.max(0, Math.round((metrics.lineHeight - caretHeight) / 2));
-
-      caret.className = "wx-cursor-line";
-      caret.dataset.wxEditorCursor = "true";
-      caret.dataset.wxEditorCursorKind = "line";
-      caret.style.left = `${cursorLine.col * metrics.charWidth}px`;
-      caret.style.top = `${caretTop}px`;
-      caret.style.height = `${caretHeight}px`;
-      view.content.append(caret);
-    }
+    renderRuntime.patchRowView(view, layoutRow);
   }
 
   function getVisibleViewport(): LineViewport {
@@ -1652,242 +1286,19 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function renderVisibleRows(force = false): void {
-    const visibleViewport = getVisibleViewport();
-
-    if (
-      !force &&
-      viewportEquals(visibleViewport, renderedViewport) &&
-      currentLayoutModel
-    ) {
-      return;
-    }
-
-    renderedViewport = visibleViewport;
-    const layout = buildLayoutModelForViewport(renderedViewport);
-    const nextRows = layout.document.rows;
-    const nextFillerCount = Math.max(0, getVisibleLineCapacity() - nextRows.length);
-
-    if (rowViews.length === nextRows.length && viewportRows.children.length === nextRows.length + nextFillerCount) {
-      for (let index = 0; index < nextRows.length; index += 1) {
-        const view = rowViews[index];
-        const layoutRow = nextRows[index];
-        if (!view || !layoutRow) {
-          force = true;
-          break;
-        }
-        patchRowView(view, layoutRow);
-      }
-      if (!force) {
-        let fillerIndex = 0;
-        for (let index = nextRows.length; index < viewportRows.children.length; index += 1) {
-          const fillerRow = viewportRows.children[index] as HTMLDivElement;
-          const fillerNumber = fillerRow.querySelector(".wx-editor__gutter-number");
-          if (fillerNumber) {
-            fillerNumber.textContent = fillerIndex === 0 ? "~" : " ";
-          }
-          fillerRow.dataset.wxEditorFillerRow = String(fillerIndex);
-          fillerIndex += 1;
-        }
-        return;
-      }
-    }
-
-    rowViews = [];
-    const fragment = document.createDocumentFragment();
-
-    for (const row of nextRows) {
-      const view = createRowView(row.visualRowIndex);
-      patchRowView(view, row);
-      rowViews.push(view);
-      fragment.append(view.host);
-    }
-
-    for (let index = 0; index < nextFillerCount; index += 1) {
-      const fillerRow = document.createElement("div");
-      const fillerGutter = document.createElement("div");
-      const fillerMarker = document.createElement("span");
-      const fillerNumber = document.createElement("span");
-      const fillerChange = document.createElement("span");
-      const fillerContent = document.createElement("div");
-
-      fillerRow.className = "wx-editor__filler-row";
-      fillerGutter.className = "wx-editor__filler-gutter";
-      fillerMarker.className = "wx-editor__gutter-marker";
-      fillerNumber.className = "wx-editor__gutter-number";
-      fillerChange.className = "wx-editor__gutter-change";
-      fillerContent.className = "wx-editor__content";
-      fillerChange.dataset.deleted = "false";
-      fillerRow.dataset.wxEditorFillerRow = String(index);
-      fillerNumber.textContent = index === 0 ? "~" : " ";
-      fillerContent.textContent = " ";
-      fillerGutter.append(fillerMarker, fillerNumber, fillerChange);
-      fillerRow.append(fillerGutter, fillerContent);
-      fragment.append(fillerRow);
-    }
-
-    viewportRows.replaceChildren(fragment);
+    renderRuntime.renderVisibleRows(force);
   }
 
   function renderDirtyRows(dirtyLines: ReadonlySet<number>): boolean {
-    const visibleViewport = getVisibleViewport();
-
-    if (!viewportEquals(visibleViewport, renderedViewport)) {
-      return false;
-    }
-
-    const nextRows = viewportState.visibleVisualRows;
-    const nextFillerCount = Math.max(0, getVisibleLineCapacity() - nextRows.length);
-
-    if (rowViews.length !== nextRows.length || viewportRows.children.length !== nextRows.length + nextFillerCount) {
-      return false;
-    }
-
-    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const activeRow = getLayoutVisualRowForOffset(
-      state,
-      visualRows,
-      lineVisualRanges,
-      activeOffset,
-      softWrap,
-      softWrap ? Math.max(1, wrapColumns) : Number.MAX_SAFE_INTEGER
-    );
-    let patchedAnyRow = false;
-
-    for (let index = 0; index < nextRows.length; index += 1) {
-      const view = rowViews[index];
-      const visualRow = nextRows[index];
-
-      if (!view || !visualRow) {
-        return false;
-      }
-
-      if (!dirtyLines.has(visualRow.docLine)) {
-        continue;
-      }
-
-      const layoutRow = buildEditorLayoutRow(
-        {
-          state,
-          presentation,
-          hoverAnchor: {
-            col: Math.max(0, Math.floor(hoverAnchor.left / Math.max(metrics.charWidth, 1))),
-            row: Math.max(0, Math.floor(hoverAnchor.top / Math.max(metrics.lineHeight, 1)))
-          },
-          indentGuides
-        },
-        visualRow,
-        { activeOffset, activeRow }
-      );
-      patchRowView(view, layoutRow);
-      patchedAnyRow = true;
-    }
-
-    return patchedAnyRow;
+    return renderRuntime.renderDirtyRows(dirtyLines);
   }
 
   function patchStatus(): void {
-    const cursorOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const cursorPosition = state.doc.positionAt(cursorOffset);
-    const { errors, warnings } = getDiagnosticsSummary();
-
-    statusMode.textContent = getStatusModeText(state.mode, { flash: uiState.flash, pendingAction: uiState.pendingAction });
-    statusFile.textContent = ` ${filePath}`;
-    statusMeta.textContent = [
-      "1 sel",
-      errors > 0 ? `E${errors}` : "",
-      warnings > 0 ? `W${warnings}` : "",
-      `${cursorPosition.line + 1}:${cursorPosition.column + 1}`
-    ]
-      .filter(Boolean)
-      .join("   ");
-    renderedStatusSignature = getCurrentStatusSignature();
+    chromeRuntime.patchStatus();
   }
 
   function patchBottomRow(): void {
-    const layout = getRenderedLayout();
-    bottomRow.dataset.active = String(layout.bottomBar.active);
-    bottomRow.replaceChildren();
-    patchCommandPopover();
-    const promptRun = layout.bottomBar.runs.find((run) => run.part === "command-prompt");
-    const commandTextRun = layout.bottomBar.runs.find((run) => run.part === "command-text");
-    const pickerRuns = layout.bottomBar.runs.filter((run) => run.part === "code-action");
-    const pickerMessage = layout.bottomBar.runs.find((run) => run.part === "picker-loading" || run.part === "picker-error");
-    const messageRun = layout.bottomBar.runs.find((run) => run.part === "bottom-message");
-    const prefixRun = layout.bottomBar.runs.find((run) => run.part === "prefix-hint");
-
-    if (promptRun) {
-      const prompt = document.createElement("span");
-      const value = document.createElement("span");
-
-      prompt.className = "wx-editor__command-prompt";
-      prompt.dataset.wxEditorCommandPrompt = "true";
-      prompt.textContent = promptRun.text;
-
-      value.className = "wx-editor__command-text";
-      value.dataset.wxEditorCommandText = "true";
-      value.textContent = commandTextRun?.text ?? "";
-
-      bottomRow.append(prompt, value);
-      renderedBottomBarSignature = getCurrentBottomBarSignature();
-      return;
-    }
-
-    if (pickerRuns.length > 0 || pickerMessage) {
-      const actions = document.createElement("div");
-      actions.className = "wx-editor__code-actions";
-      actions.dataset.wxEditorCodeActions = "true";
-      actions.dataset.wxEditorPicker = "true";
-
-      if (pickerMessage) {
-        actions.textContent = pickerMessage.text;
-      } else {
-        pickerRuns.forEach((entry, index) => {
-          const pickerItem = document.createElement("span");
-          pickerItem.className = "wx-editor__code-action";
-          pickerItem.dataset.selected = String(!!entry.selectedInPicker);
-          pickerItem.dataset.wxEditorCodeAction = String(index + 1);
-          pickerItem.textContent = entry.text;
-          actions.append(pickerItem);
-        });
-      }
-
-      bottomRow.append(actions);
-      renderedBottomBarSignature = getCurrentBottomBarSignature();
-      return;
-    }
-
-    if (messageRun) {
-      const message = document.createElement("span");
-      message.className = "wx-editor__bottom-message";
-      message.dataset.tone = messageRun.tone ?? "info";
-      message.dataset.wxEditorBottomMessage = "true";
-      message.textContent = messageRun.text;
-      bottomRow.append(message);
-      renderedBottomBarSignature = getCurrentBottomBarSignature();
-      return;
-    }
-
-    if (prefixRun) {
-      const prefix = document.createElement("span");
-      prefix.className = "wx-editor__prefix-hint";
-      prefix.dataset.wxEditorPrefixHint =
-        uiState.flash.active
-          ? "flash"
-          : uiState.pendingAction?.kind === "flash-target"
-            ? "flash-target"
-            : uiState.pendingAction?.kind === "space"
-              ? "space"
-              : uiState.pendingAction?.kind === "z"
-                ? (uiState.pendingAction.sticky ? "Z" : "z")
-                : uiState.pendingAction?.kind ?? (uiState.pendingCount ? "count" : "prefix");
-      prefix.textContent = prefixRun.text;
-      bottomRow.append(prefix);
-      renderedBottomBarSignature = getCurrentBottomBarSignature();
-      return;
-    }
-
-    bottomRow.textContent = " ";
-    renderedBottomBarSignature = getCurrentBottomBarSignature();
+    chromeRuntime.patchBottomRow();
   }
 
   function renderSurfaceSnapshot(options: {
@@ -2000,82 +1411,11 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function patchCommandPopover(): void {
-    const items = uiState.commandCompletionItems;
-
-    if (items.length === 0 || !uiState.commandLine.active || uiState.commandLine.prompt !== ":") {
-      commandPopover.hidden = true;
-      commandPopover.replaceChildren();
-      return;
-    }
-
-    commandPopover.hidden = false;
-    const selectedIndex = Math.max(0, Math.min(items.length - 1, uiState.commandCompletionIndex));
-
-    const panel = document.createElement("div");
-    panel.className = "wx-editor__command-popover-panel";
-
-    items.slice(0, 6).forEach((item, index) => {
-      const row = document.createElement("div");
-      const label = document.createElement("span");
-      const detail = document.createElement("span");
-
-      row.className = "wx-editor__command-completion";
-      row.dataset.selected = String(index === selectedIndex);
-      row.dataset.wxEditorCommandCompletion = item.label;
-
-      label.className = "wx-editor__command-completion-label";
-      label.textContent = item.label;
-
-      detail.className = "wx-editor__command-completion-detail";
-      detail.textContent = item.detail ?? "";
-
-      row.append(label, detail);
-      panel.append(row);
-    });
-
-    commandPopover.replaceChildren(panel);
+    chromeRuntime.patchCommandPopover();
   }
 
   function patchTooltip(): void {
-    if (!uiState.hover.active) {
-      tooltip.hidden = true;
-      tooltip.replaceChildren();
-      renderedTooltipSignature = getCurrentTooltipSignature();
-      return;
-    }
-
-    const panel = getRenderedLayout().panels[0];
-
-    if (!panel) {
-      tooltip.hidden = true;
-      tooltip.replaceChildren();
-      renderedTooltipSignature = getCurrentTooltipSignature();
-      return;
-    }
-
-    tooltip.hidden = false;
-    tooltip.dataset.tone = panel.tone ?? "info";
-    tooltip.style.left = `${panel.anchor.col * metrics.charWidth}px`;
-    tooltip.style.top = `${panel.anchor.row * metrics.lineHeight}px`;
-    tooltip.replaceChildren();
-
-    for (const row of panel.rows) {
-      for (const run of row) {
-        if (run.part === "tooltip-source") {
-          const source = document.createElement("span");
-          source.className = "wx-editor__tooltip-source";
-          source.textContent = run.text;
-          tooltip.append(source);
-          continue;
-        }
-
-        const body = document.createElement("div");
-        body.textContent = run.text;
-        tooltip.append(body);
-      }
-    }
-
-    renderedTooltipSignature = getCurrentTooltipSignature();
+    chromeRuntime.patchTooltip();
   }
 
   function clearHover(preservePinned = false): void {

@@ -52,6 +52,7 @@ import {
 import { createCommandRuntime, type CommandRuntime } from "./command-runtime";
 import { createCommandsRuntime, type CommandsRuntime } from "./commands";
 import { createCompatibilityApi } from "./compat";
+import { createControllerLifecycleRuntime } from "./controller-lifecycle";
 import {
   commandForBracketPrefix,
   commandForGotoPrefix,
@@ -64,25 +65,19 @@ import { createKeyRuntime } from "./key-input";
 import { createLanguageRuntime, type LanguageRuntime } from "./language";
 import { createPickerRuntime, type PickerRuntime } from "./picker";
 import { createPresentationState } from "./presentation";
+import { createRegistersJumpsRuntime } from "./registers-jumps";
 import { collectSearchMatches } from "./search";
 import { createSessionRuntime } from "./session";
 import {
   createJumpEntry,
-  jumpEntryEquals,
   normalizeLanguageServices,
   normalizeRegisterName,
-  selectionEquals,
-  transactionRequiresFullDocumentLanguageSync
 } from "./session";
 import {
   alignSelectionTopVisualRow,
-  getVisibleHighlightViewport as getVisibleHighlightViewportFromPresentation,
-  getVisibleLineViewport as getVisibleLineViewportFromPresentation,
-  getVisualRowAtIndex,
-  rebuildViewportPresentation,
-  revealSelectionTopVisualRow,
   syncVisibleViewportRows as syncVisibleViewportRowsInPresentation
 } from "./viewport";
+import { createViewportModelRuntime } from "./viewport-model";
 import { createViewportRuntime, type ViewportRuntime } from "./viewport-runtime";
 import type {
   CreateEditorControllerOptions,
@@ -157,9 +152,6 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let jumpCursor = presentation.jumps.cursor;
   const registers = presentation.registers;
   let searchMatchCache = [...presentation.search.matches];
-  let viewportModelRevision = -1;
-  let viewportModelWrapColumns = presentation.viewport.wrapColumns;
-  let viewportModelSoftWrap = presentation.viewport.softWrap;
   let controller!: EditorController;
   let commandRuntime!: CommandRuntime;
   let commandsRuntime!: CommandsRuntime;
@@ -167,9 +159,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let languageRuntime!: LanguageRuntime;
   let pickerRuntime!: PickerRuntime;
   let sessionRuntime!: ReturnType<typeof createSessionRuntime>;
+  let registersJumpsRuntime!: ReturnType<typeof createRegistersJumpsRuntime>;
+  let viewportModelRuntime!: ReturnType<typeof createViewportModelRuntime>;
   let viewportRuntime!: ViewportRuntime;
-  let pendingDeferredPresentationUpdate = false;
-  let deferredPresentationEffectType = "presentation.update";
+  let lifecycleRuntime!: ReturnType<typeof createControllerLifecycleRuntime>;
 
   const refreshSearchMatchCache = (targetState: EditorState = state) => {
     searchMatchCache = collectSearchMatches(targetState.doc.text, presentation.search.query);
@@ -180,184 +173,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     Object.assign(searchState, next);
     refreshSearchMatchCache();
     languageRuntime.syncVisibleLanguageDecorations();
-    emitPresentationUpdate(effectType);
-  };
-
-  const applyRegisterValue = (name: string | null, value: string | null, effectType = "register.update") => {
-    const normalized = normalizeRegisterName(name);
-
-    if (!normalized) {
-      registers.unnamed = value;
-    } else if (normalized === "/") {
-      registers.search = value;
-    } else if (value === null) {
-      delete registers.named[normalized];
-    } else {
-      registers.named[normalized] = value;
-    }
-
-    emitPresentationUpdate(effectType);
+    lifecycleRuntime.emitPresentationUpdate(effectType);
   };
 
   const syncVisibleViewportRows = () => syncVisibleViewportRowsInPresentation(presentation);
-
-  const notify = (
-    prevState: EditorState,
-    nextState: EditorState,
-    transaction: Transaction,
-    options: { recordHistory?: boolean } = {}
-  ) => {
-    const update: EditorUpdate = {
-      prevState,
-      nextState,
-      transaction,
-      docChanged: prevState.doc.text !== nextState.doc.text,
-      selectionChanged: !selectionEquals(prevState.selection, nextState.selection),
-      modeChanged: prevState.mode !== nextState.mode
-    };
-
-    const shouldCheckpointHistory = prevState.mode === "insert" && nextState.mode !== "insert";
-
-    if (options.recordHistory !== false && (update.docChanged || shouldCheckpointHistory)) {
-      history?.record(update, { checkpoint: shouldCheckpointHistory });
-    }
-
-    if (update.docChanged) {
-      documentRevision += 1;
-      sessionRuntime.clearFlashState(null);
-      sessionRuntime.clearHoverState({ effectType: null });
-      const changes = transaction.changes ?? [];
-      refreshSearchMatchCache(nextState);
-      languageRuntime.handleDocumentChange(prevState, nextState, changes);
-    }
-
-    if (update.nextState.yankBuffer !== update.prevState.yankBuffer) {
-      registers.unnamed = update.nextState.yankBuffer;
-      const selected = normalizeRegisterName(registers.selected);
-
-      if (selected && selected !== "/") {
-        if (registers.unnamed === null) {
-          delete registers.named[selected];
-        } else {
-          registers.named[selected] = registers.unnamed;
-        }
-      }
-    }
-
-    let viewportChanged = false;
-
-    if (update.selectionChanged || update.modeChanged || update.docChanged) {
-      rebuildViewportModel();
-      const didReveal = revealSelectionWithinViewport();
-      viewportChanged = syncVisibleViewportRows() || didReveal;
-      if (update.docChanged || viewportChanged) {
-        languageRuntime.syncVisibleLanguageDecorations();
-      }
-    }
-
-    if (viewportChanged) {
-      void languageRuntime.ensureVisibleHighlightCoverage();
-    }
-
-    if (update.docChanged) {
-      void languageRuntime.syncLanguage({
-        changes: transaction.changes ?? [],
-        forceDocumentSync: transactionRequiresFullDocumentLanguageSync(transaction),
-        refreshHighlights: true,
-        refreshDiagnostics: true,
-        refreshLineChanges: true
-      });
-    }
-
-    for (const listener of listeners) {
-      listener(update);
-    }
-  };
-
-  const dispatch = (transaction: Transaction) => {
-    const prevState = state;
-    state = applyTransaction(state, transaction);
-    notify(prevState, state, transaction);
-  };
-
-  const applyHistoryEntry = (entry: HistoryEntry | null, effectType: string) => {
-    if (!entry) {
-      return false;
-    }
-
-    const prevState = state;
-    state = restoreEditorState(state, entry);
-    notify(prevState, state, {
-      effects: [{ type: effectType }]
-    }, { recordHistory: false });
-    return true;
-  };
-
-  const historyControls: NonNullable<CommandContext["history"]> = {
-    undo: () => applyHistoryEntry(history?.undo(state) ?? null, "history.undo"),
-    redo: () => applyHistoryEntry(history?.redo(state) ?? null, "history.redo"),
-    checkpoint: () => history?.checkpoint() ?? false
-  };
-
-  const emitPresentationUpdate = (effectType = "presentation.update") => {
-    notify(state, state, { effects: [{ type: effectType }] }, { recordHistory: false });
-  };
-
-  const schedulePresentationUpdate = (effectType = "presentation.update") => {
-    deferredPresentationEffectType = effectType;
-
-    if (pendingDeferredPresentationUpdate) {
-      return;
-    }
-
-    pendingDeferredPresentationUpdate = true;
-    queueMicrotask(() => {
-      pendingDeferredPresentationUpdate = false;
-      const nextEffectType = deferredPresentationEffectType;
-      deferredPresentationEffectType = "presentation.update";
-      emitPresentationUpdate(nextEffectType);
-    });
-  };
-
-  const updatePresentationStateValue = (
-    updater: (presentation: EditorPresentationState) => void,
-    effectType = "presentation.update",
-    options: { defer?: boolean } = {}
-  ) => {
-    updater(presentation);
-    if (options.defer) {
-      schedulePresentationUpdate(effectType);
-    } else {
-      emitPresentationUpdate(effectType);
-    }
-  };
-
-  const rebuildViewportModel = () => {
-    if (
-      viewportModelRevision === state.revision &&
-      viewportModelWrapColumns === presentation.viewport.wrapColumns &&
-      viewportModelSoftWrap === presentation.viewport.softWrap &&
-      presentation.viewport.visualRows.length > 0
-    ) {
-      return;
-    }
-
-    rebuildViewportPresentation(state, presentation);
-    viewportModelRevision = state.revision;
-    viewportModelWrapColumns = presentation.viewport.wrapColumns;
-    viewportModelSoftWrap = presentation.viewport.softWrap;
-  };
-
-  const getVisibleLineViewportValue = (): EditorLineRange => {
-    rebuildViewportModel();
-    return getVisibleLineViewportFromPresentation(state, presentation);
-  };
-
-  const getVisibleHighlightViewportValue = (): EditorLineRange => {
-    rebuildViewportModel();
-    return getVisibleHighlightViewportFromPresentation(state, presentation);
-  };
-
   const syncVisibleLanguageDecorations = () => languageRuntime.syncVisibleLanguageDecorations();
 
   const getSnapshot = () => ({
@@ -369,11 +188,11 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getState: () => state,
     getPresentation: () => presentation,
     getSearchMatchCache: () => searchMatchCache,
-    getVisibleLineViewport: getVisibleLineViewportValue,
-    getVisibleHighlightViewport: getVisibleHighlightViewportValue,
+    getVisibleLineViewport: () => viewportModelRuntime.getVisibleLineViewportValue(),
+    getVisibleHighlightViewport: () => viewportModelRuntime.getVisibleHighlightViewportValue(),
     getSnapshot,
-    emitPresentationUpdate,
-    dispatch
+    emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
+    dispatch: (transaction) => lifecycleRuntime.dispatch(transaction)
   });
 
   const getCommentToggler = () => presentation.language.services.find((services) => services.comments)?.comments;
@@ -394,14 +213,14 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   const applySelectionRange = (from: number, to: number) => {
     if (state.mode === "visual") {
       const anchor = state.selection.ranges[state.selection.primaryIndex]?.anchor ?? from;
-      dispatch({
-        selection: createSelection(anchor, Math.max(from, to - 1)),
-        mode: "visual"
-      });
+    lifecycleRuntime.dispatch({
+      selection: createSelection(anchor, Math.max(from, to - 1)),
+      mode: "visual"
+    });
       return;
     }
 
-    dispatch({
+    lifecycleRuntime.dispatch({
       selection: createSelection(from, Math.max(from, to - 1)),
       mode: "normal"
     });
@@ -409,7 +228,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
   const dispatchOffsetSelection = (targetOffset: number, preferredColumn: number | null): boolean => {
     if (state.mode === "insert") {
-      dispatch({
+      lifecycleRuntime.dispatch({
         selection: createSelection(targetOffset, targetOffset, preferredColumn)
       });
       return true;
@@ -417,86 +236,17 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
     if (state.mode === "visual") {
       const anchor = state.selection.ranges[state.selection.primaryIndex]?.anchor ?? targetOffset;
-      dispatch({
+      lifecycleRuntime.dispatch({
         selection: createSelection(anchor, targetOffset, preferredColumn),
         mode: "visual"
       });
       return true;
     }
 
-    dispatch({
+    lifecycleRuntime.dispatch({
       selection: createCharacterSelection(state.doc, targetOffset, preferredColumn)
     });
     return true;
-  };
-
-  const getVisualRow = (visualRowIndex: number): EditorVisualRow => {
-    return getVisualRowAtIndex(presentation, visualRowIndex);
-  };
-
-  const getVisibleLineCount = () => Math.max(1, presentation.viewport.visibleVisualRows.length || presentation.viewport.visibleRowCapacity);
-
-  const moveByVisualRows = (delta: number): boolean => {
-    rebuildViewportModel();
-    const activeOffset = getActiveOffset();
-    const current = getVisualRowForOffset(
-      state,
-      presentation.viewport.visualRows,
-      presentation.viewport.lineVisualRanges,
-      activeOffset,
-      presentation.viewport.softWrap,
-      presentation.viewport.wrapColumns
-    );
-    const preferredColumn = state.selection.ranges[state.selection.primaryIndex]?.preferredColumn ?? current.column;
-    const targetRowIndex = Math.max(0, Math.min(presentation.viewport.visualRows.length - 1, current.rowIndex + delta));
-    const targetRow = getVisualRow(targetRowIndex);
-    const segmentLength = targetRow.segmentEnd - targetRow.segmentStart;
-    const maxColumn = state.mode === "insert" ? segmentLength : Math.max(0, segmentLength - 1);
-    const targetColumn = Math.max(0, Math.min(preferredColumn, maxColumn));
-    const targetOffset = segmentLength === 0 ? targetRow.segmentStart : targetRow.segmentStart + targetColumn;
-    return dispatchOffsetSelection(targetOffset, preferredColumn);
-  };
-
-  const gotoVisibleRow = (position: "top" | "center" | "bottom"): boolean => {
-    rebuildViewportModel();
-    const rows = presentation.viewport.visibleVisualRows;
-    const targetRow =
-      rows.length === 0
-        ? getVisualRow(0)
-        : position === "top"
-          ? rows[0]
-          : position === "bottom"
-            ? rows[rows.length - 1]
-            : rows[Math.floor(rows.length / 2)] ?? rows[0];
-    return dispatchOffsetSelection(targetRow.segmentStart, 0);
-  };
-
-  const restoreJump = (entry: EditorJumpEntry | null): boolean => {
-    if (!entry) {
-      return false;
-    }
-
-    dispatch({
-      selection: entry.selection,
-      mode: entry.mode
-    });
-    revealSelectionWithinViewport();
-    syncVisibleViewportRows();
-    syncVisibleLanguageDecorations();
-    return true;
-  };
-
-  const primeRegisterForPaste = () => {
-    const selected = registers.selected;
-    registers.selected = null;
-    if (!selected) {
-      return;
-    }
-
-    const value = controller.getRegister(selected);
-    dispatch({
-      yankBuffer: value
-    });
   };
 
   const recordRepeatableMotion = (candidate: EditorRepeatableMotion, didChange: boolean) => {
@@ -504,75 +254,101 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       sessionRuntime.setLastRepeatableMotion(candidate);
     }
   };
-
-  const revealSelectionWithinViewport = (): boolean => {
-    rebuildViewportModel();
-    const previousTop = presentation.viewport.topVisualRow;
-    presentation.viewport.topVisualRow = revealSelectionTopVisualRow(state, presentation, getActiveOffset());
-    return presentation.viewport.topVisualRow !== previousTop;
-  };
-
-  const trimJumpTail = () => {
-    if (jumpCursor < jumpList.length) {
-      jumpList.splice(jumpCursor);
-    }
-  };
-
-  const pushJumpEntry = (entry: EditorJumpEntry): boolean => {
-    trimJumpTail();
-    const previous = jumpList[jumpList.length - 1];
-
-    if (previous && jumpEntryEquals(previous, entry)) {
-      jumpCursor = jumpList.length;
-      presentation.jumps.cursor = jumpCursor;
-      return false;
-    }
-
-    jumpList.push(entry);
-    if (jumpList.length > 100) {
-      jumpList.shift();
-    }
-    jumpCursor = jumpList.length;
-    presentation.jumps.cursor = jumpCursor;
-    return true;
-  };
-
-  refreshSearchMatchCache();
-  rebuildViewportModel();
-  syncVisibleLanguageDecorations();
   sessionRuntime = createSessionRuntime({
     presentation,
-    emitPresentationUpdate
+    emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType)
   });
+  viewportModelRuntime = createViewportModelRuntime({
+    getState: () => state,
+    presentation,
+    getActiveOffset,
+    dispatchOffsetSelection
+  });
+  lifecycleRuntime = createControllerLifecycleRuntime({
+    presentation,
+    history,
+    listeners,
+    getState: () => state,
+    setState(next) {
+      state = next;
+    },
+    getDocumentRevision: () => documentRevision,
+    setDocumentRevision(next) {
+      documentRevision = next;
+    },
+    clearFlashOnDocChange: () => {
+      sessionRuntime.clearFlashState(null);
+    },
+    clearHoverOnDocChange: () => {
+      sessionRuntime.clearHoverState({ effectType: null });
+    },
+    refreshSearchMatchCache,
+    handleLanguageDocumentChange(prevState, nextState, changes) {
+      languageRuntime.handleDocumentChange(prevState, nextState, changes);
+    },
+    syncVisibleLanguageDecorations,
+    ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
+    rebuildViewportModel: () => viewportModelRuntime.rebuildViewportModel(),
+    revealSelectionWithinViewport: () => viewportModelRuntime.revealSelectionWithinViewport(),
+    syncVisibleViewportRows,
+    syncLanguage: (options) => languageRuntime.syncLanguage(options),
+    handleYankBufferChanged(prevState, nextState) {
+      if (nextState.yankBuffer !== prevState.yankBuffer) {
+        registers.unnamed = nextState.yankBuffer;
+        const selected = normalizeRegisterName(registers.selected);
+        if (selected && selected !== "/") {
+          if (registers.unnamed === null) {
+            delete registers.named[selected];
+          } else {
+            registers.named[selected] = registers.unnamed;
+          }
+        }
+      }
+    }
+  });
+  registersJumpsRuntime = createRegistersJumpsRuntime({
+    presentation,
+    registers,
+    jumpList: jumpList as EditorJumpEntry[],
+    getState: () => state,
+    dispatch: (transaction) => lifecycleRuntime.dispatch(transaction),
+    emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
+    revealSelectionWithinViewport: () => viewportModelRuntime.revealSelectionWithinViewport(),
+    syncVisibleViewportRows,
+    syncVisibleLanguageDecorations
+  });
+  refreshSearchMatchCache();
+  viewportModelRuntime.rebuildViewportModel();
+  syncVisibleLanguageDecorations();
 
   commandsRuntime = createCommandsRuntime({
     getState: () => state,
     getPresentation: () => presentation,
     getController: () => controller,
-    dispatch,
+    dispatch: (transaction) => lifecycleRuntime.dispatch(transaction),
     getSnapshot,
     getActiveOffset,
-    getVisibleLineCount,
-    getVisibleLineViewport: getVisibleLineViewportValue,
+    getVisibleLineCount: () => viewportModelRuntime.getVisibleLineCount(),
+    getVisibleLineViewport: () => viewportModelRuntime.getVisibleLineViewportValue(),
     readPendingCount: () => sessionRuntime.readPendingCount(),
-    historyControls,
+    historyControls: lifecycleRuntime.historyControls,
     setBottomMessage: sessionRuntime.setBottomMessage,
     clearFlashState: sessionRuntime.clearFlashState,
     closePicker,
     syncVisibleLanguageDecorations,
     ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
-    revealSelectionWithinViewport,
+    revealSelectionWithinViewport: () => viewportModelRuntime.revealSelectionWithinViewport(),
     syncVisibleViewportRows,
-    pushJumpEntry,
+    pushJumpEntry: registersJumpsRuntime.pushJumpEntry,
     createJumpEntry: () => createJumpEntry(state),
     dispatchOffsetSelection,
-    moveByVisualRows,
-    gotoVisibleRow,
+    moveByVisualRows: (delta) => viewportModelRuntime.moveByVisualRows(delta),
+    gotoVisibleRow: (position) => viewportModelRuntime.gotoVisibleRow(position),
     getCommentToggler,
     getSyntaxSelector,
     getSyntaxTextobjectProvider,
     getSyntaxNavigationProvider,
-    restoreJump
+    restoreJump: registersJumpsRuntime.restoreJump
   });
 
   pickerRuntime = createPickerRuntime({
@@ -580,15 +356,15 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getPresentation: () => presentation,
     getController: () => controller,
     setBottomMessage: sessionRuntime.setBottomMessage,
-    emitPresentationUpdate,
+    emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
     jumpToSelection(from, to) {
-      pushJumpEntry(createJumpEntry(state));
+      registersJumpsRuntime.pushJumpEntry(createJumpEntry(state));
       applySelectionRange(from, to);
-      revealSelectionWithinViewport();
+      viewportModelRuntime.revealSelectionWithinViewport();
       syncVisibleViewportRows();
       syncVisibleLanguageDecorations();
     },
-    restoreJump
+    restoreJump: registersJumpsRuntime.restoreJump
   });
 
   commandRuntime = createCommandRuntime({
@@ -598,33 +374,31 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getSearchState: () => searchState,
     getActiveOffset,
     applySearchState,
-    applyRegisterValue,
+    applyRegisterValue: registersJumpsRuntime.applyRegisterValue,
     applySelectionRange,
-    revealSelectionWithinViewport,
+    revealSelectionWithinViewport: () => viewportModelRuntime.revealSelectionWithinViewport(),
     syncVisibleViewportRows,
     syncVisibleLanguageDecorations,
     ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
     setBottomMessage: sessionRuntime.setBottomMessage,
     setCommandLineState: sessionRuntime.setCommandLineState,
-    emitPresentationUpdate,
+    emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
     loadCodeActions: () => pickerRuntime.loadCodeActions()
   });
 
   viewportRuntime = createViewportRuntime({
     viewport: presentation.viewport,
-    resetViewportModelCache() {
-      viewportModelRevision = -1;
-    },
-    rebuildViewportModel,
-    revealSelectionWithinViewport,
+    resetViewportModelCache: () => viewportModelRuntime.resetViewportModelCache(),
+    rebuildViewportModel: () => viewportModelRuntime.rebuildViewportModel(),
+    revealSelectionWithinViewport: () => viewportModelRuntime.revealSelectionWithinViewport(),
     syncVisibleViewportRows,
     syncVisibleLanguageDecorations,
-    emitPresentationUpdate,
+    emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
     ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage()
   });
 
   const compatibilityApi = createCompatibilityApi({
-    updatePresentationState: updatePresentationStateValue,
+    updatePresentationState: lifecycleRuntime.updatePresentationStateValue,
     openCommandLine: commandRuntime.openCommandLineState,
     requestRawHover,
     invalidateHoverRequest: () => {
@@ -638,7 +412,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getPresentation: () => presentation,
     getController: () => controller,
     getActiveOffset,
-    getVisibleLineCount,
+    getVisibleLineCount: () => viewportModelRuntime.getVisibleLineCount(),
     executeEditorCommand: commandsRuntime.executeEditorCommand,
     executeCommandWithCount: commandsRuntime.executeCommandWithCount,
     executeCommandWithCountSync: commandsRuntime.executeCommandWithCountSync,
@@ -664,14 +438,14 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     closePicker: pickerRuntime.closePicker,
     setBottomMessage: sessionRuntime.setBottomMessage,
     clearHover: () => sessionRuntime.clearHoverState(),
-    restoreJump,
+    restoreJump: registersJumpsRuntime.restoreJump,
     openDiagnosticsPicker: pickerRuntime.openDiagnosticsPicker,
     openJumpListPicker: pickerRuntime.openJumpListPicker,
     loadCodeActions: pickerRuntime.loadCodeActions,
     collectVisibleFlashHints: commandsRuntime.collectVisibleFlashHints,
     applyFlashJump: commandsRuntime.applyFlashJump,
     clearFlashState: sessionRuntime.clearFlashState,
-    emitPresentationUpdate
+    emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType)
   });
 
   controller = {
@@ -682,7 +456,9 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       return presentation;
     },
     ...compatibilityApi,
-    dispatch,
+    dispatch(transaction) {
+      lifecycleRuntime.dispatch(transaction);
+    },
     replaceState(nextState, transaction = { effects: [{ type: "controller.replace-state" }] }) {
       const prevState = state;
       state = {
@@ -693,14 +469,14 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       refreshSearchMatchCache(state);
       languageRuntime.resetRequestTracking();
       languageRuntime.clearLanguageState();
-      rebuildViewportModel();
+      viewportModelRuntime.rebuildViewportModel();
       languageRuntime.syncVisibleLanguageDecorations();
-      notify(prevState, state, transaction, { recordHistory: false });
+      lifecycleRuntime.notify(prevState, state, transaction, { recordHistory: false });
     },
     execute(command, context = {}) {
-      return command(state, dispatch, {
+      return command(state, (transaction) => lifecycleRuntime.dispatch(transaction), {
         ...context,
-        history: historyControls
+        history: lifecycleRuntime.historyControls
       });
     },
     subscribe(listener) {
@@ -729,69 +505,28 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       );
     },
     pushJump() {
-      const pushed = pushJumpEntry(createJumpEntry(state));
-      presentation.jumps.cursor = jumpCursor;
-      return pushed;
+      return registersJumpsRuntime.pushJumpEntry(createJumpEntry(state));
     },
     jumpBackward() {
-      if (jumpList.length === 0) {
-        return null;
-      }
-
-      if (jumpCursor === jumpList.length) {
-        pushJumpEntry(createJumpEntry(state));
-      }
-
-      if (jumpCursor <= 1) {
-        return null;
-      }
-
-      jumpCursor -= 2;
-      const target = jumpList[jumpCursor] ?? null;
-      jumpCursor += 1;
-      presentation.jumps.cursor = jumpCursor;
-      return target;
+      return registersJumpsRuntime.jumpBackward();
     },
     jumpForward() {
-      if (jumpCursor >= jumpList.length) {
-        return null;
-      }
-
-      const target = jumpList[jumpCursor] ?? null;
-      if (!target) {
-        return null;
-      }
-
-      jumpCursor += 1;
-      presentation.jumps.cursor = jumpCursor;
-      return target;
+      return registersJumpsRuntime.jumpForward();
     },
     getJumpList() {
-      return [...jumpList];
+      return registersJumpsRuntime.getJumpList();
     },
     getRegister(name = null) {
-      const normalized = normalizeRegisterName(name ?? registers.selected);
-      if (!normalized || normalized === "\"") {
-        return registers.unnamed;
-      }
-      if (normalized === "/") {
-        return registers.search;
-      }
-      return registers.named[normalized] ?? null;
+      return registersJumpsRuntime.getRegister(name);
     },
     setRegister(name, value) {
-      applyRegisterValue(name, value, "register.update");
+      registersJumpsRuntime.applyRegisterValue(name, value, "register.update");
     },
     selectRegister(name) {
-      const next = normalizeRegisterName(name);
-      if (registers.selected === next) {
-        return;
-      }
-      registers.selected = next;
-      emitPresentationUpdate("register.select");
+      registersJumpsRuntime.selectRegister(name);
     },
     getSelectedRegister() {
-      return registers.selected;
+      return registersJumpsRuntime.getSelectedRegister();
     },
     setBottomMessage(message) {
       sessionRuntime.setBottomMessage(message);
@@ -820,7 +555,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       languageRuntime.clearLanguageState();
       refreshSearchMatchCache(state);
       languageRuntime.syncVisibleLanguageDecorations();
-      emitPresentationUpdate("language.services");
+      lifecycleRuntime.emitPresentationUpdate("language.services");
       void languageRuntime.syncLanguage({
         forceDocumentSync: true,
         refreshHighlights: true,
@@ -833,7 +568,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         return;
       }
       presentation.language.host = host;
-      emitPresentationUpdate("host.services");
+      lifecycleRuntime.emitPresentationUpdate("host.services");
       void languageRuntime.syncLanguage({
         refreshHighlights: false,
         refreshDiagnostics: false,
@@ -845,7 +580,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         return;
       }
       presentation.filePath = filePath;
-      emitPresentationUpdate("presentation.file-path");
+      lifecycleRuntime.emitPresentationUpdate("presentation.file-path");
       void languageRuntime.syncLanguage({
         refreshHighlights: false,
         refreshDiagnostics: false,
@@ -857,7 +592,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
         return;
       }
       presentation.themeName = themeName;
-      emitPresentationUpdate("presentation.theme-name");
+      lifecycleRuntime.emitPresentationUpdate("presentation.theme-name");
     },
     handleKeyInput(input, options = {}) {
       return keyRuntime.handleKeyInput(input, options);
@@ -890,7 +625,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
           if (options.pinned) {
             sessionRuntime.setBottomMessage({ tone: "info", text: "No hover information" });
           } else if (hoverCleared) {
-            emitPresentationUpdate("ui.hover.clear");
+            lifecycleRuntime.emitPresentationUpdate("ui.hover.clear");
           }
           return false;
         }

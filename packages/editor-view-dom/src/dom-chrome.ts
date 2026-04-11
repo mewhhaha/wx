@@ -1,0 +1,244 @@
+import { getActiveCharacterOffset, getCursorOffset, type EditorState } from "@wx/editor-core";
+import type { EditorPresentationState } from "../../editor-controller/src/index";
+import type { EditorLayoutModel } from "../../editor-layout/src/index";
+
+interface CreateDomChromeRuntimeOptions {
+  bottomRow: HTMLDivElement;
+  commandPopover: HTMLDivElement;
+  statusMode: HTMLDivElement;
+  statusFile: HTMLDivElement;
+  statusMeta: HTMLDivElement;
+  tooltip: HTMLDivElement;
+  getState(): EditorState;
+  getPresentation(): EditorPresentationState;
+  getUiState(): EditorPresentationState["ui"];
+  getFilePath(): string;
+  getMetrics(): { charWidth: number; lineHeight: number };
+  getRenderedLayout(): EditorLayoutModel;
+  getDiagnosticsSummary(): { errors: number; warnings: number };
+  getCurrentStatusSignature(): string;
+  setRenderedStatusSignature(signature: string): void;
+  getCurrentBottomBarSignature(): string;
+  setRenderedBottomBarSignature(signature: string): void;
+  getCurrentTooltipSignature(): string;
+  setRenderedTooltipSignature(signature: string): void;
+}
+
+function getStatusModeText(
+  mode: EditorState["mode"],
+  ui: { flash: { active: boolean }; pendingAction: { kind: string } | null }
+): string {
+  if (ui.flash.active || ui.pendingAction?.kind === "flash-target") {
+    return " JMP ";
+  }
+
+  if (mode === "insert") {
+    return " INS ";
+  }
+
+  if (mode === "visual") {
+    return " VIS ";
+  }
+
+  return " NOR ";
+}
+
+export interface DomChromeRuntime {
+  patchCommandPopover(): void;
+  patchStatus(): void;
+  patchBottomRow(): void;
+  patchTooltip(): void;
+}
+
+export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): DomChromeRuntime {
+  return {
+    patchCommandPopover() {
+      const uiState = options.getUiState();
+      const items = uiState.commandCompletionItems;
+
+      if (items.length === 0 || !uiState.commandLine.active || uiState.commandLine.prompt !== ":") {
+        options.commandPopover.hidden = true;
+        options.commandPopover.replaceChildren();
+        return;
+      }
+
+      options.commandPopover.hidden = false;
+      const selectedIndex = Math.max(0, Math.min(items.length - 1, uiState.commandCompletionIndex));
+      const panel = document.createElement("div");
+      panel.className = "wx-editor__command-popover-panel";
+
+      items.slice(0, 6).forEach((item, index) => {
+        const row = document.createElement("div");
+        const label = document.createElement("span");
+        const detail = document.createElement("span");
+
+        row.className = "wx-editor__command-completion";
+        row.dataset.selected = String(index === selectedIndex);
+        row.dataset.wxEditorCommandCompletion = item.label;
+
+        label.className = "wx-editor__command-completion-label";
+        label.textContent = item.label;
+
+        detail.className = "wx-editor__command-completion-detail";
+        detail.textContent = item.detail ?? "";
+
+        row.append(label, detail);
+        panel.append(row);
+      });
+
+      options.commandPopover.replaceChildren(panel);
+    },
+    patchStatus() {
+      const state = options.getState();
+      const uiState = options.getUiState();
+      const cursorOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+      const cursorPosition = state.doc.positionAt(cursorOffset);
+      const { errors, warnings } = options.getDiagnosticsSummary();
+
+      options.statusMode.textContent = getStatusModeText(state.mode, {
+        flash: uiState.flash,
+        pendingAction: uiState.pendingAction
+      });
+      options.statusFile.textContent = ` ${options.getFilePath()}`;
+      options.statusMeta.textContent = [
+        "1 sel",
+        errors > 0 ? `E${errors}` : "",
+        warnings > 0 ? `W${warnings}` : "",
+        `${cursorPosition.line + 1}:${cursorPosition.column + 1}`
+      ]
+        .filter(Boolean)
+        .join("   ");
+      options.setRenderedStatusSignature(options.getCurrentStatusSignature());
+    },
+    patchBottomRow() {
+      const layout = options.getRenderedLayout();
+      const uiState = options.getUiState();
+      options.bottomRow.dataset.active = String(layout.bottomBar.active);
+      options.bottomRow.replaceChildren();
+      this.patchCommandPopover();
+      const promptRun = layout.bottomBar.runs.find((run) => run.part === "command-prompt");
+      const commandTextRun = layout.bottomBar.runs.find((run) => run.part === "command-text");
+      const pickerRuns = layout.bottomBar.runs.filter((run) => run.part === "code-action");
+      const pickerMessage = layout.bottomBar.runs.find((run) => run.part === "picker-loading" || run.part === "picker-error");
+      const messageRun = layout.bottomBar.runs.find((run) => run.part === "bottom-message");
+      const prefixRun = layout.bottomBar.runs.find((run) => run.part === "prefix-hint");
+
+      if (promptRun) {
+        const prompt = document.createElement("span");
+        const value = document.createElement("span");
+
+        prompt.className = "wx-editor__command-prompt";
+        prompt.dataset.wxEditorCommandPrompt = "true";
+        prompt.textContent = promptRun.text;
+
+        value.className = "wx-editor__command-text";
+        value.dataset.wxEditorCommandText = "true";
+        value.textContent = commandTextRun?.text ?? "";
+
+        options.bottomRow.append(prompt, value);
+        options.setRenderedBottomBarSignature(options.getCurrentBottomBarSignature());
+        return;
+      }
+
+      if (pickerRuns.length > 0 || pickerMessage) {
+        const actions = document.createElement("div");
+        actions.className = "wx-editor__code-actions";
+        actions.dataset.wxEditorCodeActions = "true";
+        actions.dataset.wxEditorPicker = "true";
+
+        if (pickerMessage) {
+          actions.textContent = pickerMessage.text;
+        } else {
+          pickerRuns.forEach((entry, index) => {
+            const pickerItem = document.createElement("span");
+            pickerItem.className = "wx-editor__code-action";
+            pickerItem.dataset.selected = String(!!entry.selectedInPicker);
+            pickerItem.dataset.wxEditorCodeAction = String(index + 1);
+            pickerItem.textContent = entry.text;
+            actions.append(pickerItem);
+          });
+        }
+
+        options.bottomRow.append(actions);
+        options.setRenderedBottomBarSignature(options.getCurrentBottomBarSignature());
+        return;
+      }
+
+      if (messageRun) {
+        const message = document.createElement("span");
+        message.className = "wx-editor__bottom-message";
+        message.dataset.tone = messageRun.tone ?? "info";
+        message.dataset.wxEditorBottomMessage = "true";
+        message.textContent = messageRun.text;
+        options.bottomRow.append(message);
+        options.setRenderedBottomBarSignature(options.getCurrentBottomBarSignature());
+        return;
+      }
+
+      if (prefixRun) {
+        const prefix = document.createElement("span");
+        prefix.className = "wx-editor__prefix-hint";
+        prefix.dataset.wxEditorPrefixHint =
+          uiState.flash.active
+            ? "flash"
+            : uiState.pendingAction?.kind === "flash-target"
+              ? "flash-target"
+              : uiState.pendingAction?.kind === "space"
+                ? "space"
+                : uiState.pendingAction?.kind === "z"
+                  ? (uiState.pendingAction.sticky ? "Z" : "z")
+                  : uiState.pendingAction?.kind ?? (uiState.pendingCount ? "count" : "prefix");
+        prefix.textContent = prefixRun.text;
+        options.bottomRow.append(prefix);
+        options.setRenderedBottomBarSignature(options.getCurrentBottomBarSignature());
+        return;
+      }
+
+      options.bottomRow.textContent = " ";
+      options.setRenderedBottomBarSignature(options.getCurrentBottomBarSignature());
+    },
+    patchTooltip() {
+      const uiState = options.getUiState();
+      if (!uiState.hover.active) {
+        options.tooltip.hidden = true;
+        options.tooltip.replaceChildren();
+        options.setRenderedTooltipSignature(options.getCurrentTooltipSignature());
+        return;
+      }
+
+      const panel = options.getRenderedLayout().panels[0];
+
+      if (!panel) {
+        options.tooltip.hidden = true;
+        options.tooltip.replaceChildren();
+        options.setRenderedTooltipSignature(options.getCurrentTooltipSignature());
+        return;
+      }
+
+      const metrics = options.getMetrics();
+      options.tooltip.hidden = false;
+      options.tooltip.dataset.tone = panel.tone ?? "info";
+      options.tooltip.style.left = `${panel.anchor.col * metrics.charWidth}px`;
+      options.tooltip.style.top = `${panel.anchor.row * metrics.lineHeight}px`;
+      options.tooltip.replaceChildren();
+
+      for (const row of panel.rows) {
+        for (const run of row) {
+          if (run.part === "tooltip-source") {
+            const source = document.createElement("span");
+            source.className = "wx-editor__tooltip-source";
+            source.textContent = run.text;
+            options.tooltip.append(source);
+            continue;
+          }
+
+          const body = document.createElement("div");
+          body.textContent = run.text;
+          options.tooltip.append(body);
+        }
+      }
+
+      options.setRenderedTooltipSignature(options.getCurrentTooltipSignature());
+    }
+  };
+}
