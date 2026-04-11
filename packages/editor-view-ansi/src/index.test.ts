@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -11,6 +13,7 @@ import {
   moveRight
 } from "../../editor-core/src/index";
 import { createEditorController } from "../../editor-controller/src/index";
+import { createEditor } from "../../editor-view-dom/src/index";
 
 import { createAnsiEditorMirror, renderEditorAnsiFrame } from "./index";
 import { createAnsiEditorTerminal } from "./index";
@@ -107,12 +110,21 @@ class FakeOutput {
 
 describe("@wx/editor-view-ansi", () => {
   it("keeps tree-sitter runtime ownership in the shared tree-sitter package", () => {
-    const source = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8");
+    const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/index.ts"), "utf8");
 
     expect(source).toContain("../../editor-tree-sitter/src/node");
     expect(source).not.toContain("treeSitter.worker");
     expect(source).not.toContain("worker_threads");
     expect(source).not.toContain("createNodeWorkerBridge");
+  });
+
+  it("routes ANSI runtime keyboard input through controller key APIs only", () => {
+    const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/index.ts"), "utf8");
+
+    expect(source).toContain("controller.handleKeyInput");
+    expect(source).not.toContain("controller.openCommandLine(");
+    expect(source).not.toContain("controller.handleCommandLineKey(");
+    expect(source).not.toContain("controller.updatePresentationState(");
   });
 
   it("renders plain text rows with gutters, status, and bottom rows", () => {
@@ -219,6 +231,48 @@ describe("@wx/editor-view-ansi", () => {
     for (const label of labels.slice(0, 4)) {
       expect(frame).toContain(label);
     }
+  });
+
+  it("keeps DOM and ANSI key sequences on the same controller-visible state", async () => {
+    const value = "alpha beta\nbeta alpha";
+    const domContainer = document.createElement("div");
+    document.body.append(domContainer);
+
+    const domController = createEditorController({ value });
+    const domEditor = createEditor(domContainer, { controller: domController });
+    const textarea = domContainer.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    const ansiController = createEditorController({ value });
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = createAnsiEditorTerminal({
+      controller: ansiController,
+      input,
+      output,
+      write() {},
+      cols: 30,
+      rows: 6
+    });
+
+    terminal.mount();
+
+    for (const key of ["/", "b", "e"]) {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      input.emit(key);
+    }
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    input.emit("\r");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
+    input.emit("n");
+
+    await flushAsyncWork();
+
+    expect(domController.getState().selection).toEqual(ansiController.getState().selection);
+    expect(domController.getPresentationState().ui.commandLine).toEqual(ansiController.getPresentationState().ui.commandLine);
+    expect(domController.getSearchState()).toEqual(ansiController.getSearchState());
+
+    terminal.destroy();
+    domEditor.destroy();
   });
 
   it("renders diagnostics and diff gutter markers", () => {

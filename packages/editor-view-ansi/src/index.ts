@@ -837,12 +837,6 @@ export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOption
   let destroyed = false;
   let keyQueue = Promise.resolve();
 
-  const syncBottomMessage = (message: EditorPresentationState["ui"]["bottomMessage"]) => {
-    controller.updatePresentationState((presentation) => {
-      presentation.ui.bottomMessage = message;
-    }, "ansi.bottom-message", { defer: true });
-  };
-
   const handleKey = async (key: string) => {
     if (destroyed) {
       return;
@@ -925,7 +919,7 @@ export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOption
     input.resume();
     input.on("data", handleData);
     output?.on?.("resize", handleResize);
-    syncBottomMessage({ tone: "info", text: "Ctrl+C or :q to quit" });
+    controller.setBottomMessage({ tone: "info", text: "Ctrl+C or :q to quit" });
   };
 
   const destroy = () => {

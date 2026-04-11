@@ -56,9 +56,7 @@ export function createPresentationState(
         pinned: false,
         offset: null,
         content: "",
-        tone: "info",
-        left: 16,
-        top: 16
+        tone: "info"
       },
       flash: {
         active: false,

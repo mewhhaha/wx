@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { createCharacterSelection, createTextDocument, getSelectionOffsets } from "@wx/editor-core";
 import { createEditorController } from "@wx/editor-controller";
 import type { HighlightSpan, LanguageProvider } from "@wx/editor-language";
 
 import { createEditor } from "./index";
+import { computeRenderWork } from "./render-work";
 
 async function flushAsyncWork(times = 4): Promise<void> {
   for (let index = 0; index < times; index += 1) {
@@ -35,6 +38,74 @@ function visibleRows(container: HTMLElement): number[] {
 }
 
 describe("createEditor", () => {
+  it("routes runtime keyboard input through controller key APIs, not compatibility helpers", () => {
+    const source = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/index.ts"), "utf8");
+
+    expect(source).toContain("controller.handleKeyInput");
+    expect(source).toContain("controller.handleTextInput");
+    expect(source).not.toContain("controller.openCommandLine(");
+    expect(source).not.toContain("controller.handleCommandLineKey(");
+    expect(source).not.toContain("controller.updatePresentationState(");
+  });
+
+  it("chooses simple-cursor work for plain movement without bottom-bar or tooltip churn", () => {
+    expect(
+      computeRenderWork({
+        hasDocumentChanges: false,
+        selectionChanged: true,
+        modeChanged: false,
+        insertModeTransition: false,
+        viewportChanged: false,
+        digitsChanged: false,
+        isPresentationOnlyUpdate: false,
+        hasDirtyLines: true,
+        effectTypes: [],
+        themeChanged: false,
+        statusChanged: true,
+        bottomBarChanged: false,
+        tooltipChanged: false
+      })
+    ).toEqual({
+      refreshGutterMetrics: false,
+      syncTheme: false,
+      renderVisibleRows: false,
+      trySimpleCursorPatch: true,
+      tryDirtyRowPatch: true,
+      patchStatus: true,
+      patchBottomRow: false,
+      patchTooltip: false
+    });
+  });
+
+  it("keeps theme sync isolated from row rerenders", () => {
+    expect(
+      computeRenderWork({
+        hasDocumentChanges: false,
+        selectionChanged: false,
+        modeChanged: false,
+        insertModeTransition: false,
+        viewportChanged: false,
+        digitsChanged: false,
+        isPresentationOnlyUpdate: true,
+        hasDirtyLines: false,
+        effectTypes: ["ui.preview-theme"],
+        themeChanged: true,
+        statusChanged: false,
+        bottomBarChanged: false,
+        tooltipChanged: false
+      })
+    ).toEqual({
+      refreshGutterMetrics: false,
+      syncTheme: true,
+      renderVisibleRows: false,
+      trySimpleCursorPatch: false,
+      tryDirtyRowPatch: false,
+      patchStatus: false,
+      patchBottomRow: false,
+      patchTooltip: false
+    });
+  });
+
   it("renders rows and gutters", () => {
     const container = document.createElement("div");
     document.body.append(container);

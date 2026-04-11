@@ -110,8 +110,6 @@ export interface EditorHoverState {
   content: string;
   source?: string;
   tone: "info" | "warning" | "error";
-  left: number;
-  top: number;
 }
 
 export interface EditorFlashHintState {
@@ -276,6 +274,8 @@ export interface EditorController {
     effectType?: string,
     options?: { defer?: boolean }
   ): void;
+  setBottomMessage(message: EditorBottomMessageState | null): void;
+  clearBottomMessage(): void;
   setViewportMetrics(metrics: { visibleRowCapacity: number; wrapColumns: number; softWrap: boolean }): void;
   scrollViewportBy(rowsDelta: number): boolean;
   alignViewportToSelection(position: "top" | "center" | "bottom"): boolean;
@@ -299,6 +299,10 @@ export interface EditorController {
     refreshDiagnostics?: boolean;
     refreshLineChanges?: boolean;
   }): Promise<void>;
+  requestHoverAt(offset: number, options?: { pinned?: boolean }): Promise<boolean>;
+  showDiagnosticHover(diagnostic: EditorDiagnostic, options?: { pinned?: boolean }): boolean;
+  clearHover(options?: { preservePinned?: boolean }): boolean;
+  clearFlash(): boolean;
   requestHover(offset: number): Promise<EditorHover | null>;
   dismissHover(): void;
   requestCodeActions(): Promise<readonly EditorCodeAction[]>;

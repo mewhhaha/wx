@@ -163,9 +163,7 @@ function createInput(value: string) {
           pinned: false,
           offset: null,
           content: "",
-          tone: "info" as const,
-          left: 0,
-          top: 0
+          tone: "info" as const
         },
         flash: {
           active: false,
@@ -382,9 +380,7 @@ describe("buildEditorLayout", () => {
             offset: 0,
             content: "body line",
             source: "source",
-            tone: "warning",
-            left: 0,
-            top: 0
+            tone: "warning"
           }
         }
       },

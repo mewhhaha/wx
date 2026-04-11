@@ -21,11 +21,11 @@ import {
   type EditorLayoutRun,
   type EditorLayoutToken
 } from "../../editor-layout/src/index";
+import { computeRenderWork } from "./render-work";
 import type {
   DiagnosticSeverity,
   EditorCodeAction,
   EditorDiagnostic,
-  EditorHover,
   EditorLanguageServiceInput,
   EditorLanguageServices,
   HighlightRole,
@@ -79,55 +79,6 @@ export interface EditorHandle {
   setLanguage(language: LanguageProvider | null): Promise<void>;
   setTheme(theme: ThemeSpec): void;
   setValue(value: string): Promise<void>;
-}
-
-interface CommandLineState {
-  active: boolean;
-  value: string;
-  prompt: ":" | "/" | "?";
-}
-
-interface BottomMessageState {
-  tone: "info" | "warning" | "error";
-  text: string;
-}
-
-interface PickerItem {
-  label: string;
-  detail?: string;
-  run(): void | Promise<void>;
-}
-
-interface PickerState {
-  active: boolean;
-  loading: boolean;
-  title: string;
-  items: readonly PickerItem[];
-  selectedIndex: number;
-  error: string | null;
-}
-
-interface HoverState {
-  active: boolean;
-  pinned: boolean;
-  offset: number | null;
-  content: string;
-  source?: string;
-  tone: "info" | "warning" | "error";
-  left: number;
-  top: number;
-}
-
-interface FlashHint {
-  offset: number;
-  label: string;
-}
-
-interface FlashState {
-  active: boolean;
-  target: string;
-  input: string;
-  hints: readonly FlashHint[];
 }
 
 interface LineChangeState {
@@ -1014,25 +965,15 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   let lineVisualRanges = [...viewportState.lineVisualRanges] as Array<{ from: number; to: number }>;
   let wrapColumns = viewportState.wrapColumns;
   let wrapRevision = viewportState.wrapRevision;
-  let commandLine: CommandLineState = uiState.commandLine;
-  let bottomMessage: BottomMessageState | null = uiState.bottomMessage as BottomMessageState | null;
-  let pickerState: PickerState = {
-    active: uiState.picker.active,
-    loading: uiState.picker.loading,
-    title: uiState.picker.title,
-    items: [],
-    selectedIndex: uiState.picker.selectedIndex,
-    error: uiState.picker.error
-  };
-  let stickyViewMode = uiState.stickyViewMode;
-  let hoverState: HoverState = uiState.hover as HoverState;
   let diagnostics = languageState.diagnostics;
   let diagnosticsByLine = languageState.diagnosticsByLine;
   let lineChangesByLine: LineChangesByLine = languageState.lineChangesByLine as LineChangesByLine;
-  let flashState: FlashState = uiState.flash as FlashState;
-  let pendingAction = uiState.pendingAction;
-  let pendingCount = uiState.pendingCount;
-  let hoverRenderRequestId = 0;
+  let hoverAnchor = { left: 16, top: 16 };
+  let hoverAnchorFollowsCursor = false;
+  let appliedThemeName: string | null = null;
+  let renderedStatusSignature = "";
+  let renderedBottomBarSignature = "";
+  let renderedTooltipSignature = "";
   let gutterWidth = 0;
   let anchoredTopVisualRow = viewportState.topVisualRow;
   let visibleLineCapacity = viewportState.visibleRowCapacity;
@@ -1059,72 +1000,125 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     lineChangesByLine = languageState.lineChangesByLine as LineChangesByLine;
   }
 
-  function syncUiMirrors(): void {
-    commandLine = uiState.commandLine;
-    bottomMessage = uiState.bottomMessage as BottomMessageState | null;
-    stickyViewMode = uiState.stickyViewMode;
-    hoverState = uiState.hover as HoverState;
-    flashState = uiState.flash as FlashState;
-    pendingAction = uiState.pendingAction;
-    pendingCount = uiState.pendingCount;
-    pickerState = {
-      active: uiState.picker.active,
-      loading: uiState.picker.loading,
-      title: uiState.picker.title,
-      items: uiState.picker.items.map((item) => ({
-        label: item.label,
-        detail: item.detail,
-        run() {}
-      })),
-      selectedIndex: uiState.picker.selectedIndex,
-      error: uiState.picker.error
-    };
-  }
-
   function syncPresentationMirrors(): void {
     filePath = presentation.filePath;
     syncViewportMirrors();
     syncLanguageMirrors();
-    syncUiMirrors();
     currentLayoutModel = null;
   }
 
   syncPresentationMirrors();
 
-  function updateControllerUiPresentation(
-    updater: (ui: typeof uiState) => void,
-    effectType = "presentation.ui"
-  ): void {
-    controller.updatePresentationState((presentation) => {
-      updater(presentation.ui);
-    }, effectType, { defer: true });
-  }
-
-  function setBottomMessageState(next: BottomMessageState | null): void {
-    if (
-      bottomMessage?.tone === next?.tone &&
-      bottomMessage?.text === next?.text &&
-      (!!bottomMessage === !!next)
-    ) {
+  function setHoverAnchor(next: { left: number; top: number }, followsCursor = false): void {
+    if (hoverAnchor.left === next.left && hoverAnchor.top === next.top && hoverAnchorFollowsCursor === followsCursor) {
       return;
     }
-    bottomMessage = next;
-    currentLayoutModel = null;
-    updateControllerUiPresentation((ui) => {
-      ui.bottomMessage = next;
-    }, "ui.bottom-message");
-  }
 
-  function setHoverPresentation(next: HoverState): void {
-    hoverState = next;
-    uiState.hover = next;
+    hoverAnchor = next;
+    hoverAnchorFollowsCursor = followsCursor;
     currentLayoutModel = null;
   }
 
-  function setFlashPresentation(next: FlashState): void {
-    flashState = next;
-    uiState.flash = next;
-    currentLayoutModel = null;
+  function serializePendingAction(): string {
+    const pendingAction = uiState.pendingAction;
+
+    if (!pendingAction) {
+      return "";
+    }
+
+    if (pendingAction.kind === "z") {
+      return `${pendingAction.kind}:${pendingAction.sticky ? 1 : 0}`;
+    }
+
+    if (pendingAction.kind === "find") {
+      return `${pendingAction.kind}:${pendingAction.variant}`;
+    }
+
+    if (pendingAction.kind === "textobject") {
+      return `${pendingAction.kind}:${pendingAction.mode}`;
+    }
+
+    if (pendingAction.kind === "surround-replace-to") {
+      return `${pendingAction.kind}:${pendingAction.fromObject}`;
+    }
+
+    if (pendingAction.kind === "register-select") {
+      return `${pendingAction.kind}:${pendingAction.insert ? 1 : 0}`;
+    }
+
+    return pendingAction.kind;
+  }
+
+  function getEffectiveThemeSpec(): ThemeSpec {
+    const previewName = presentation.ui.previewTheme;
+    if (previewName) {
+      return availableCommandThemes.find((entry) => entry.name === previewName) ?? theme;
+    }
+
+    const committedName = presentation.themeName;
+    if (committedName) {
+      return availableCommandThemes.find((entry) => entry.name === committedName) ?? theme;
+    }
+
+    return theme;
+  }
+
+  function getEffectiveThemeName(): string {
+    return presentation.ui.previewTheme ?? presentation.themeName ?? theme.name;
+  }
+
+  function readStatusSignature(): string {
+    const cursorOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
+    const cursorPosition = state.doc.positionAt(cursorOffset);
+    const { errors, warnings } = getDiagnosticsSummary();
+
+    return [
+      state.mode,
+      uiState.flash.active ? "flash" : "",
+      serializePendingAction(),
+      filePath,
+      errors,
+      warnings,
+      cursorPosition.line,
+      cursorPosition.column
+    ].join("|");
+  }
+
+  function readBottomBarSignature(): string {
+    return [
+      uiState.commandLine.active ? 1 : 0,
+      uiState.commandLine.prompt,
+      uiState.commandLine.value,
+      uiState.commandCompletionIndex,
+      uiState.commandCompletionItems.map((item) => `${item.label}:${item.detail ?? ""}`).join(";"),
+      uiState.picker.active ? 1 : 0,
+      uiState.picker.loading ? 1 : 0,
+      uiState.picker.title,
+      uiState.picker.selectedIndex,
+      uiState.picker.error ?? "",
+      uiState.picker.items.map((item) => `${item.label}:${item.detail ?? ""}:${item.selected ? 1 : 0}`).join(";"),
+      uiState.bottomMessage?.tone ?? "",
+      uiState.bottomMessage?.text ?? "",
+      uiState.flash.active ? 1 : 0,
+      uiState.flash.target,
+      uiState.flash.input,
+      uiState.flash.hints.map((hint) => `${hint.offset}:${hint.label}`).join(";"),
+      serializePendingAction(),
+      uiState.pendingCount
+    ].join("|");
+  }
+
+  function readTooltipSignature(): string {
+    return [
+      uiState.hover.active ? 1 : 0,
+      uiState.hover.pinned ? 1 : 0,
+      uiState.hover.offset ?? -1,
+      uiState.hover.source ?? "",
+      uiState.hover.tone,
+      uiState.hover.content,
+      hoverAnchor.left,
+      hoverAnchor.top
+    ].join("|");
   }
 
   function buildLayoutModelForViewport(_viewport: LineViewport): EditorLayoutModel {
@@ -1136,8 +1130,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       state,
       presentation,
       hoverAnchor: {
-        col: Math.max(0, Math.floor(hoverState.left / Math.max(metrics.charWidth, 1))),
-        row: Math.max(0, Math.floor(hoverState.top / Math.max(metrics.lineHeight, 1)))
+        col: Math.max(0, Math.floor(hoverAnchor.left / Math.max(metrics.charWidth, 1))),
+        row: Math.max(0, Math.floor(hoverAnchor.top / Math.max(metrics.lineHeight, 1)))
       },
       indentGuides
     });
@@ -1180,6 +1174,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   mountStyles(root);
   applyThemeVariables(root, theme);
+  appliedThemeName = theme.name;
 
   root.className = "wx-editor";
   root.dataset.wxEditor = "root";
@@ -1601,7 +1596,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function tryPatchSimpleCursorMove(previousState: EditorState, nextState: EditorState): boolean {
-    if (flashState.active || pendingAction !== null) {
+    if (uiState.flash.active || uiState.pendingAction !== null) {
       return false;
     }
 
@@ -1973,8 +1968,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
           state,
           presentation,
           hoverAnchor: {
-            col: Math.max(0, Math.floor(hoverState.left / Math.max(metrics.charWidth, 1))),
-            row: Math.max(0, Math.floor(hoverState.top / Math.max(metrics.lineHeight, 1)))
+            col: Math.max(0, Math.floor(hoverAnchor.left / Math.max(metrics.charWidth, 1))),
+            row: Math.max(0, Math.floor(hoverAnchor.top / Math.max(metrics.lineHeight, 1)))
           },
           indentGuides
         },
@@ -1993,7 +1988,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const cursorPosition = state.doc.positionAt(cursorOffset);
     const { errors, warnings } = getDiagnosticsSummary();
 
-    statusMode.textContent = getStatusModeText(state.mode, { flash: flashState, pendingAction });
+    statusMode.textContent = getStatusModeText(state.mode, { flash: uiState.flash, pendingAction: uiState.pendingAction });
     statusFile.textContent = ` ${filePath}`;
     statusMeta.textContent = [
       "1 sel",
@@ -2003,6 +1998,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     ]
       .filter(Boolean)
       .join("   ");
+    renderedStatusSignature = readStatusSignature();
   }
 
   function patchBottomRow(): void {
@@ -2030,6 +2026,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       value.textContent = commandTextRun?.text ?? "";
 
       bottomRow.append(prompt, value);
+      renderedBottomBarSignature = readBottomBarSignature();
       return;
     }
 
@@ -2053,6 +2050,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       }
 
       bottomRow.append(actions);
+      renderedBottomBarSignature = readBottomBarSignature();
       return;
     }
 
@@ -2063,6 +2061,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       message.dataset.wxEditorBottomMessage = "true";
       message.textContent = messageRun.text;
       bottomRow.append(message);
+      renderedBottomBarSignature = readBottomBarSignature();
       return;
     }
 
@@ -2070,27 +2069,30 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       const prefix = document.createElement("span");
       prefix.className = "wx-editor__prefix-hint";
       prefix.dataset.wxEditorPrefixHint =
-        flashState.active
+        uiState.flash.active
           ? "flash"
-          : pendingAction?.kind === "flash-target"
+          : uiState.pendingAction?.kind === "flash-target"
             ? "flash-target"
-            : pendingAction?.kind === "space"
+            : uiState.pendingAction?.kind === "space"
               ? "space"
-              : pendingAction?.kind === "z"
-                ? (pendingAction.sticky ? "Z" : "z")
-                : pendingAction?.kind ?? (pendingCount ? "count" : "prefix");
+              : uiState.pendingAction?.kind === "z"
+                ? (uiState.pendingAction.sticky ? "Z" : "z")
+                : uiState.pendingAction?.kind ?? (uiState.pendingCount ? "count" : "prefix");
       prefix.textContent = prefixRun.text;
       bottomRow.append(prefix);
+      renderedBottomBarSignature = readBottomBarSignature();
       return;
     }
 
     bottomRow.textContent = " ";
+    renderedBottomBarSignature = readBottomBarSignature();
   }
 
   function handleControllerUpdate(update: EditorUpdate): void {
     const previousState = update.prevState;
     const nextState = update.nextState;
     const previousVisibleViewport = getVisibleViewport();
+    const effectTypes = (update.transaction.effects ?? []).map((effect) => effect.type);
     const changes = update.transaction.changes ?? [];
     const hasDocumentChanges = update.docChanged || changes.length > 0;
     const isPresentationOnlyUpdate = !hasDocumentChanges && !update.selectionChanged && !update.modeChanged;
@@ -2105,123 +2107,79 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     state = nextState;
     syncPresentationMirrors();
-    syncRenderedThemeFromPresentation();
     const viewportChanged = !viewportEquals(previousVisibleViewport, getVisibleViewport());
+    const work = computeRenderWork({
+      hasDocumentChanges,
+      selectionChanged: update.selectionChanged,
+      modeChanged: update.modeChanged,
+      insertModeTransition,
+      viewportChanged,
+      digitsChanged: previousDigits !== nextDigits,
+      isPresentationOnlyUpdate,
+      hasDirtyLines: !!dirtyLines && dirtyLines.size > 0,
+      effectTypes,
+      themeChanged: appliedThemeName !== getEffectiveThemeName(),
+      statusChanged: renderedStatusSignature !== readStatusSignature(),
+      bottomBarChanged: renderedBottomBarSignature !== readBottomBarSignature(),
+      tooltipChanged: renderedTooltipSignature !== readTooltipSignature()
+    });
 
-    if (isPresentationOnlyUpdate) {
-      renderVisibleRows(true);
-      patchStatus();
-      patchBottomRow();
-      patchTooltip();
-      return;
+    if (work.syncTheme) {
+      syncRenderedThemeFromPresentation();
     }
 
-    if (hasDocumentChanges) {
-      if (flashState.active) {
-        setFlashPresentation({ active: false, target: "", input: "", hints: [] });
-      }
-      invalidateHover();
-
-      if (previousDigits !== nextDigits) {
-        refreshGutterWidth(true);
-        if (refreshViewportMetricsIfNeeded(true)) {
-          return;
-        }
-      }
-
-      renderVisibleRows(true);
-      patchStatus();
-      patchBottomRow();
-      patchTooltip();
-      return;
-    }
-
-    if (previousDigits !== nextDigits) {
+    if (work.refreshGutterMetrics) {
       refreshGutterWidth(true);
       if (refreshViewportMetricsIfNeeded(true)) {
         return;
       }
     }
 
-    if (viewportChanged) {
+    if (work.renderVisibleRows) {
       renderVisibleRows(true);
-      patchStatus();
-      if (update.modeChanged) {
-        patchBottomRow();
-      }
-      patchTooltip();
-      return;
+    } else if (work.trySimpleCursorPatch && dirtyLines && tryPatchSimpleCursorMove(previousState, nextState)) {
+      // Fast path applied.
+    } else if (work.tryDirtyRowPatch && dirtyLines && renderDirtyRows(dirtyLines)) {
+      // Dirty row patch applied.
+    } else if (work.trySimpleCursorPatch || work.tryDirtyRowPatch) {
+      renderVisibleRows(true);
     }
 
-    if (dirtyLines && tryPatchSimpleCursorMove(previousState, nextState)) {
+    if (work.patchStatus) {
       patchStatus();
-      patchTooltip();
-      return;
     }
 
-    if (dirtyLines && renderDirtyRows(dirtyLines)) {
-      patchStatus();
-      if (update.modeChanged) {
-        patchBottomRow();
-      }
-      patchTooltip();
-      return;
-    }
-
-    renderVisibleRows(true);
-    patchStatus();
-    if (update.modeChanged) {
+    if (work.patchBottomRow) {
       patchBottomRow();
     }
-    patchTooltip();
+
+    if (work.patchTooltip) {
+      patchTooltip();
+    }
   }
 
-  function applyRenderedTheme(nextTheme: ThemeSpec): void {
+  function syncRenderedThemeFromPresentation(force = false): boolean {
+    const nextTheme = getEffectiveThemeSpec();
+    const nextThemeName = getEffectiveThemeName();
+
+    if (!presentation.ui.previewTheme && presentation.themeName && nextTheme.name === presentation.themeName) {
+      theme = nextTheme;
+      availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
+    }
+
+    if (!force && appliedThemeName === nextThemeName) {
+      return false;
+    }
+
     applyThemeVariables(root, nextTheme);
-    renderVisibleRows(true);
-    patchStatus();
-  }
-
-  function syncRenderedThemeFromPresentation(): void {
-    const previewName = presentation.ui.previewTheme;
-    if (previewName) {
-      const nextTheme = availableCommandThemes.find((entry) => entry.name === previewName);
-      if (nextTheme) {
-        applyThemeVariables(root, nextTheme);
-        return;
-      }
-    }
-
-    const committedName = presentation.themeName;
-    if (committedName) {
-      const nextTheme = availableCommandThemes.find((entry) => entry.name === committedName);
-      if (nextTheme) {
-        theme = nextTheme;
-        availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
-        applyThemeVariables(root, nextTheme);
-        return;
-      }
-    }
-
-    applyThemeVariables(root, theme);
-  }
-
-  function setBottomMessage(message: BottomMessageState | null): void {
-    if (
-      bottomMessage?.tone === message?.tone &&
-      bottomMessage?.text === message?.text &&
-      (!!bottomMessage === !!message)
-    ) {
-      return;
-    }
-    setBottomMessageState(message);
-    patchBottomRow();
+    appliedThemeName = nextThemeName;
+    return true;
   }
 
   function patchCommandPopover(): void {
     const items = uiState.commandCompletionItems;
 
-    if (items.length === 0 || !commandLine.active || commandLine.prompt !== ":") {
+    if (items.length === 0 || !uiState.commandLine.active || uiState.commandLine.prompt !== ":") {
       commandPopover.hidden = true;
       commandPopover.replaceChildren();
       return;
@@ -2261,6 +2219,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     if (!panel) {
       tooltip.hidden = true;
       tooltip.replaceChildren();
+      renderedTooltipSignature = readTooltipSignature();
       return;
     }
 
@@ -2285,67 +2244,16 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
         tooltip.append(body);
       }
     }
-  }
 
-  function setHoverState(next: HoverState): void {
-    setHoverPresentation(next);
-    patchTooltip();
+    renderedTooltipSignature = readTooltipSignature();
   }
 
   function clearHover(preservePinned = false): void {
-    if (preservePinned && hoverState.pinned) {
-      return;
+    if (controller.clearHover({ preservePinned })) {
+      hoverAnchorFollowsCursor = false;
+      syncPresentationMirrors();
+      patchTooltip();
     }
-
-    if (!hoverState.active) {
-      return;
-    }
-
-    setHoverState({
-      active: false,
-      pinned: false,
-      offset: null,
-      content: "",
-      tone: "info",
-      left: hoverState.left,
-      top: hoverState.top
-    });
-  }
-
-  function invalidateHover(keepPosition = true): void {
-    controller.dismissHover();
-    hoverRenderRequestId += 1;
-
-    if (!hoverState.active) {
-      return;
-    }
-
-    setHoverState({
-      active: false,
-      pinned: false,
-      offset: null,
-      content: "",
-      tone: "info",
-      left: keepPosition ? hoverState.left : 16,
-      top: keepPosition ? hoverState.top : 16
-    });
-  }
-
-  function normalizeHover(hover: EditorHover | null): HoverState | null {
-    if (!hover || !hover.content.trim()) {
-      return null;
-    }
-
-    return {
-      active: true,
-      pinned: false,
-      offset: null,
-      content: hover.content,
-      source: hover.source,
-      tone: "info",
-      left: 16,
-      top: 16
-    };
   }
 
   function getTooltipAnchorForRect(rect: DOMRect): { left: number; top: number } {
@@ -2356,49 +2264,24 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function showDiagnosticTooltip(diagnostic: EditorDiagnostic, anchor: DOMRect, pinned = false): void {
-    setBottomMessage(null);
-    setHoverState({
-      active: true,
-      pinned,
-      offset: diagnostic.from,
-      content: diagnostic.message,
-      source: diagnostic.source,
-      tone: toneForSeverity(diagnostic.severity),
-      ...getTooltipAnchorForRect(anchor)
-    });
+    setHoverAnchor(getTooltipAnchorForRect(anchor), false);
+    controller.showDiagnosticHover(diagnostic, { pinned });
   }
 
   async function requestHover(offset: number, anchor: DOMRect, pinned = false): Promise<boolean> {
-    if (hoverState.active && hoverState.offset === offset && hoverState.pinned === pinned) {
+    if (uiState.hover.active && uiState.hover.offset === offset && uiState.hover.pinned === pinned) {
+      setHoverAnchor(getTooltipAnchorForRect(anchor), pinned);
+      patchTooltip();
       return true;
     }
 
-    const requestId = ++hoverRenderRequestId;
-    const nextHover = await controller.requestHover(offset);
-
-    if (destroyed || requestId !== hoverRenderRequestId) {
-      return false;
+    setHoverAnchor(getTooltipAnchorForRect(anchor), pinned);
+    const shown = await controller.requestHoverAt(offset, { pinned });
+    if (!destroyed) {
+      syncPresentationMirrors();
+      patchTooltip();
     }
-
-    const normalized = normalizeHover(nextHover);
-
-    if (!normalized) {
-      if (pinned) {
-        setBottomMessage({ tone: "info", text: "No hover information" });
-      } else {
-        clearHover();
-      }
-      return false;
-    }
-
-    setBottomMessage(null);
-    setHoverState({
-      ...normalized,
-      pinned,
-      offset,
-      ...getTooltipAnchorForRect(anchor)
-    });
-    return true;
+    return shown;
   }
 
   async function applyCodeActionInternal(action: EditorCodeAction): Promise<boolean> {
@@ -2409,14 +2292,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     const clipboard = navigator.clipboard;
 
     if (!clipboard?.readText) {
-      setBottomMessage({ tone: "warning", text: "System clipboard is unavailable" });
+      controller.setBottomMessage({ tone: "warning", text: "System clipboard is unavailable" });
       return null;
     }
 
     try {
       return await clipboard.readText();
     } catch {
-      setBottomMessage({ tone: "error", text: "Could not read the system clipboard" });
+      controller.setBottomMessage({ tone: "error", text: "Could not read the system clipboard" });
       return null;
     }
   }
@@ -2450,7 +2333,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
           event.key === "ArrowDown" ||
           event.key === "." ||
           event.key === "*" ||
-          (pendingAction?.kind === "space" && event.key.toLowerCase() === "c"))
+          (uiState.pendingAction?.kind === "space" && event.key.toLowerCase() === "c"))
       );
     }
 
@@ -2462,20 +2345,14 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function syncKeyboardHoverAnchor(): void {
-    if (!hoverState.active || !hoverState.pinned) {
-      return;
-    }
-
-    if (hoverState.left !== 16 || hoverState.top !== 16) {
+    if (!uiState.hover.active || !uiState.hover.pinned || !hoverAnchorFollowsCursor) {
       return;
     }
 
     const anchorElement = root.querySelector<HTMLElement>("[data-wx-editor-cursor='true']");
     const anchorRect = anchorElement?.getBoundingClientRect() ?? root.getBoundingClientRect();
-    setHoverState({
-      ...hoverState,
-      ...getTooltipAnchorForRect(anchorRect)
-    });
+    setHoverAnchor(getTooltipAnchorForRect(anchorRect), true);
+    patchTooltip();
   }
 
   async function forwardKeydownToController(event: KeyboardEvent): Promise<void> {
@@ -2490,6 +2367,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
     syncPresentationMirrors();
     syncRenderedThemeFromPresentation();
+    if (uiState.hover.active && uiState.hover.pinned) {
+      hoverAnchorFollowsCursor = true;
+    }
     syncKeyboardHoverAnchor();
 
     if (result.themeName !== undefined) {
@@ -2501,8 +2381,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   function handleKeydown(event: KeyboardEvent): void {
     const browserPasteShortcut =
       state.mode === "insert" &&
-      !commandLine.active &&
-      !pickerState.active &&
+      !uiState.commandLine.active &&
+      !uiState.picker.active &&
       !event.altKey &&
       ((event.ctrlKey && !event.metaKey && event.key.toLowerCase() === "v") ||
         (event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "v"));
@@ -2512,7 +2392,12 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     }
 
     const hasCommandState =
-      flashState.active || commandLine.active || pickerState.active || !!pendingAction || stickyViewMode || hoverState.active;
+      uiState.flash.active ||
+      uiState.commandLine.active ||
+      uiState.picker.active ||
+      !!uiState.pendingAction ||
+      uiState.stickyViewMode ||
+      uiState.hover.active;
     const plainEditorKey = !event.metaKey && !event.ctrlKey && !event.altKey;
     const shouldRoute =
       hasCommandState ||
@@ -2529,7 +2414,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function handleWheel(event: WheelEvent): void {
-    if (event.metaKey || event.ctrlKey || commandLine.active) {
+    if (event.metaKey || event.ctrlKey || uiState.commandLine.active) {
       return;
     }
 
@@ -2544,7 +2429,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function handlePaste(event: ClipboardEvent): void {
-    if (state.mode !== "insert" || commandLine.active || pickerState.active) {
+    if (state.mode !== "insert" || uiState.commandLine.active || uiState.picker.active) {
       return;
     }
 
@@ -2563,7 +2448,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   }
 
   function handleMouseMove(event: MouseEvent): void {
-    if (commandLine.active || pickerState.active) {
+    if (uiState.commandLine.active || uiState.picker.active) {
       return;
     }
 
@@ -2600,7 +2485,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       return;
     }
 
-    if (hoverState.active && hoverState.offset === offset && !hoverState.pinned) {
+    if (uiState.hover.active && uiState.hover.offset === offset && !uiState.hover.pinned) {
       return;
     }
 
@@ -2720,7 +2605,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       theme = nextTheme;
       controller.setThemeName(nextTheme.name);
       availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
-      applyRenderedTheme(theme);
+      appliedThemeName = null;
+      syncRenderedThemeFromPresentation(true);
       patchBottomRow();
     },
     async setValue(value: string) {

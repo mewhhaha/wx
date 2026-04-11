@@ -45,17 +45,21 @@ import {
 import type {
   EditorCodeAction,
   EditorDiagnostic,
-  EditorHover,
   EditorLineRange,
   HighlightSpan,
   SyntaxTextobjectMode
 } from "@wx/editor-language";
 import {
-  buildVisualRows,
   getVisualRowForOffset,
   type EditorVisualRow
 } from "../../editor-layout/src/index";
 import { buildFlashLabels } from "./flash-labels";
+import {
+  getCommandCompletionItems,
+  hasRunnableCommandLineValue,
+  resolveCommandPreviewTheme
+} from "./command-line";
+import { createCompatibilityApi } from "./compat";
 import {
   commandForBracketPrefix,
   commandForGotoPrefix,
@@ -64,18 +68,10 @@ import {
   commandForVisualMode
 } from "./keymap";
 import { createSnapshotHistory, restoreEditorState } from "./history";
-import {
-  buildDiagnosticsCache,
-  buildHighlightCache,
-  buildLineChangesMap,
-  diagnosticsEqual,
-  highlightMapsEqual,
-  lineChangesEqual,
-  remapHighlightSpans,
-  spansEqual
-} from "./language-state";
+import { createKeyRuntime, type PickerActionItem } from "./key-input";
+import { createLanguageRuntime, type LanguageRuntime } from "./language";
 import { createPresentationState } from "./presentation";
-import { collectSearchMatches, escapeRegex, searchMatchesByLineEqual } from "./search";
+import { collectSearchMatches, escapeRegex } from "./search";
 import {
   createJumpEntry,
   jumpEntryEquals,
@@ -84,10 +80,18 @@ import {
   selectionEquals,
   transactionRequiresFullDocumentLanguageSync
 } from "./session";
+import {
+  alignSelectionTopVisualRow,
+  getVisibleHighlightViewport as getVisibleHighlightViewportFromPresentation,
+  getVisibleLineViewport as getVisibleLineViewportFromPresentation,
+  getVisualRowAtIndex,
+  rebuildViewportPresentation,
+  revealSelectionTopVisualRow,
+  syncVisibleViewportRows as syncVisibleViewportRowsInPresentation
+} from "./viewport";
 import type {
   CreateEditorControllerOptions,
   EditorBottomMessageState,
-  EditorCommandCompletionItem,
   EditorCommandLineKeyOptions,
   EditorCommandLineKeyResult,
   EditorController,
@@ -143,12 +147,6 @@ export type {
   HistoryPlugin
 } from "./types";
 
-interface PickerActionItem {
-  label: string;
-  detail?: string;
-  run: () => Promise<void> | void;
-}
-
 export { createSnapshotHistory };
 
 export function createEditorController(options: CreateEditorControllerOptions = {}): EditorController {
@@ -161,6 +159,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       language: options.language,
       theme: options.theme
     });
+  let documentRevision = 0;
   const presentation = createPresentationState(state, options);
   const listeners = new Set<EditorUpdateListener>();
   const history = options.history === false ? null : options.history ?? createSnapshotHistory();
@@ -172,10 +171,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let viewportModelRevision = -1;
   let viewportModelWrapColumns = presentation.viewport.wrapColumns;
   let viewportModelSoftWrap = presentation.viewport.softWrap;
-  let inFlightVisibleHighlightRequestKey: string | null = null;
-  let inFlightVisibleHighlightRequest: Promise<void> | null = null;
   let pickerActions: readonly PickerActionItem[] = [];
   let controller!: EditorController;
+  let keyRuntime!: ReturnType<typeof createKeyRuntime>;
+  let languageRuntime!: LanguageRuntime;
   let searchPreviewState:
     | null
     | {
@@ -197,7 +196,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   const applySearchState = (next: Partial<EditorSearchState>, effectType = "search.update") => {
     Object.assign(searchState, next);
     refreshSearchMatchCache();
-    syncVisibleLanguageDecorations();
+    languageRuntime.syncVisibleLanguageDecorations();
     emitPresentationUpdate(effectType);
   };
 
@@ -217,28 +216,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     emitPresentationUpdate(effectType);
   };
 
-  const syncVisibleViewportRows = (): boolean => {
-    const visualRows = presentation.viewport.visualRows;
-
-    if (visualRows.length === 0) {
-      const changed = presentation.viewport.visibleVisualRows.length > 0;
-      presentation.viewport.visibleVisualRows = [];
-      return changed;
-    }
-
-    const fromRowIndex = Math.max(0, Math.min(visualRows.length - 1, presentation.viewport.topVisualRow));
-    const toRowIndex = Math.max(
-      fromRowIndex,
-      Math.min(visualRows.length - 1, fromRowIndex + presentation.viewport.visibleRowCapacity - 1)
-    );
-    const nextVisibleRows = visualRows.slice(fromRowIndex, toRowIndex + 1);
-    const changed =
-      nextVisibleRows.length !== presentation.viewport.visibleVisualRows.length ||
-      nextVisibleRows.some((row, index) => presentation.viewport.visibleVisualRows[index] !== row);
-
-    presentation.viewport.visibleVisualRows = nextVisibleRows;
-    return changed;
-  };
+  const syncVisibleViewportRows = () => syncVisibleViewportRowsInPresentation(presentation);
 
   const notify = (
     prevState: EditorState,
@@ -262,30 +240,12 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     }
 
     if (update.docChanged) {
-      presentation.language.lastHighlightedRevision = -1;
+      documentRevision += 1;
+      clearFlashState(null);
+      clearHoverState({ effectType: null });
       const changes = transaction.changes ?? [];
       refreshSearchMatchCache(nextState);
-
-      if (changes.length > 0) {
-        presentation.language.visibleHighlights = remapHighlightSpans(
-          nextState.doc,
-          presentation.language.visibleHighlights,
-          changes
-        );
-        remapHighlightCacheForChanges(prevState, nextState, changes);
-        remapHighlightCoverageForChanges(prevState, nextState, changes);
-        remapDiagnosticsForChanges(prevState, nextState, changes);
-        const changedViewport = getChangedHighlightViewport(prevState, nextState, changes);
-        if (changedViewport) {
-          invalidateHighlightViewport(changedViewport);
-        }
-      } else {
-        presentation.language.highlightCoverage.clear();
-        presentation.language.visibleHighlights = [];
-        presentation.language.visibleHighlightsByLine = new Map();
-        presentation.language.visibleDiagnostics = [];
-        presentation.language.visibleLineChanges = [];
-      }
+      languageRuntime.handleDocumentChange(prevState, nextState, changes);
     }
 
     if (update.nextState.yankBuffer !== update.prevState.yankBuffer) {
@@ -308,16 +268,16 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       const didReveal = revealSelectionWithinViewport();
       viewportChanged = syncVisibleViewportRows() || didReveal;
       if (update.docChanged || viewportChanged) {
-        syncVisibleLanguageDecorations();
+        languageRuntime.syncVisibleLanguageDecorations();
       }
     }
 
     if (viewportChanged) {
-      ensureVisibleHighlightCoverage();
+      void languageRuntime.ensureVisibleHighlightCoverage();
     }
 
     if (update.docChanged) {
-      void syncLanguage({
+      void languageRuntime.syncLanguage({
         changes: transaction.changes ?? [],
         forceDocumentSync: transactionRequiresFullDocumentLanguageSync(transaction),
         refreshHighlights: true,
@@ -376,6 +336,19 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     });
   };
 
+  const updatePresentationStateValue = (
+    updater: (presentation: EditorPresentationState) => void,
+    effectType = "presentation.update",
+    options: { defer?: boolean } = {}
+  ) => {
+    updater(presentation);
+    if (options.defer) {
+      schedulePresentationUpdate(effectType);
+    } else {
+      emitPresentationUpdate(effectType);
+    }
+  };
+
   const rebuildViewportModel = () => {
     if (
       viewportModelRevision === state.revision &&
@@ -386,162 +359,40 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       return;
     }
 
-    const nextInput = {
-      state,
-      filePath: presentation.filePath,
-      searchState: presentation.search,
-      highlights: [] as HighlightSpan[],
-      diagnostics: [] as EditorDiagnostic[],
-      lineChanges: [] as EditorLineChange[],
-      commandLine: presentation.ui.commandLine,
-      bottomMessage: presentation.ui.bottomMessage,
-      picker: presentation.ui.picker,
-      hover: presentation.ui.hover,
-      flash: presentation.ui.flash,
-      pendingAction:
-        presentation.ui.pendingAction?.kind === "g" ||
-        presentation.ui.pendingAction?.kind === "[" ||
-        presentation.ui.pendingAction?.kind === "]" ||
-        presentation.ui.pendingAction?.kind === "m" ||
-        presentation.ui.pendingAction?.kind === "space" ||
-        presentation.ui.pendingAction?.kind === "flash-target" ||
-        presentation.ui.pendingAction?.kind === "z"
-          ? presentation.ui.pendingAction
-          : null,
-      pendingCount: presentation.ui.pendingCount,
-      viewport: {
-        cols: Math.max(1, presentation.viewport.wrapColumns),
-        rows: Math.max(1, presentation.viewport.visibleRowCapacity),
-        topVisualRow: presentation.viewport.topVisualRow
-      },
-      softWrap: presentation.viewport.softWrap,
-      indentGuides: {
-        render: false,
-        character: "│",
-        skipLevels: 0,
-        indentWidth: 2
-      }
-    };
-    const { visualRows, lineVisualRanges } = buildVisualRows(nextInput);
-    presentation.viewport.visualRows = visualRows;
-    presentation.viewport.lineVisualRanges = lineVisualRanges;
-    presentation.viewport.wrapRevision = state.revision;
+    rebuildViewportPresentation(state, presentation);
     viewportModelRevision = state.revision;
     viewportModelWrapColumns = presentation.viewport.wrapColumns;
     viewportModelSoftWrap = presentation.viewport.softWrap;
-    const maxTop = Math.max(0, visualRows.length - presentation.viewport.visibleRowCapacity);
-    presentation.viewport.topVisualRow = Math.max(0, Math.min(maxTop, presentation.viewport.topVisualRow));
-    syncVisibleViewportRows();
   };
 
-  const getVisibleLineViewport = (): EditorLineRange => {
+  const getVisibleLineViewportValue = (): EditorLineRange => {
     rebuildViewportModel();
-    const visualRows = presentation.viewport.visibleVisualRows;
-
-    if (visualRows.length === 0) {
-      return { fromLine: 0, toLine: Math.max(0, state.doc.lineCount - 1) };
-    }
-    const fromRow = visualRows[0];
-    const toRow = visualRows[visualRows.length - 1];
-
-    return {
-      fromLine: fromRow?.docLine ?? 0,
-      toLine: toRow?.docLine ?? Math.max(0, state.doc.lineCount - 1)
-    };
+    return getVisibleLineViewportFromPresentation(state, presentation);
   };
 
-  const getVisibleHighlightViewport = (): EditorLineRange => {
-    const viewport = getVisibleLineViewport();
-    const contextLines = Math.max(4, presentation.viewport.visibleRowCapacity);
-
-    return {
-      fromLine: Math.max(0, viewport.fromLine - contextLines),
-      toLine: Math.min(state.doc.lineCount - 1, viewport.toLine + contextLines)
-    };
+  const getVisibleHighlightViewportValue = (): EditorLineRange => {
+    rebuildViewportModel();
+    return getVisibleHighlightViewportFromPresentation(state, presentation);
   };
 
-  const syncVisibleLanguageDecorations = (): boolean => {
-    const viewport = getVisibleLineViewport();
-    const visibleHighlights: HighlightSpan[] = [];
-    const visibleHighlightsByLine = new Map<number, HighlightSpan[]>();
-    const visibleDiagnostics: EditorDiagnostic[] = [];
-    const visibleLineChanges: EditorLineChange[] = [];
-    const visibleSearchMatchesByLine = new Map<number, { from: number; to: number }[]>();
-
-    for (let lineIndex = viewport.fromLine; lineIndex <= viewport.toLine; lineIndex += 1) {
-      const highlights = presentation.language.highlightCache.get(lineIndex);
-      if (highlights && highlights.length > 0) {
-        visibleHighlights.push(...highlights);
-        visibleHighlightsByLine.set(lineIndex, highlights);
-      }
-
-      const lineDiagnostics = presentation.language.diagnosticsByLine.get(lineIndex);
-      if (lineDiagnostics && lineDiagnostics.length > 0) {
-        for (const diagnostic of lineDiagnostics) {
-          if (
-            visibleDiagnostics.length === 0 ||
-            visibleDiagnostics[visibleDiagnostics.length - 1] !== diagnostic
-          ) {
-            visibleDiagnostics.push(diagnostic);
-          }
-        }
-      }
-
-      const lineChange = presentation.language.lineChangesByLine.get(lineIndex);
-      if (!lineChange) {
-        const line = state.doc.lineAt(lineIndex);
-        const lineEnd = line.start + line.text.length;
-        const lineSearchMatches = searchMatchCache.filter((entry) => entry.from < lineEnd && entry.to > line.start);
-        if (lineSearchMatches.length > 0) {
-          visibleSearchMatchesByLine.set(lineIndex, lineSearchMatches);
-        }
-        continue;
-      }
-
-      if (lineChange.kind) {
-        visibleLineChanges.push({ line: lineIndex, kind: lineChange.kind });
-      }
-
-      if (lineChange.deleted) {
-        visibleLineChanges.push({ line: lineIndex, kind: "deleted" });
-      }
-
-      const line = state.doc.lineAt(lineIndex);
-      const lineEnd = line.start + line.text.length;
-      const lineSearchMatches = searchMatchCache.filter((entry) => entry.from < lineEnd && entry.to > line.start);
-      if (lineSearchMatches.length > 0) {
-        visibleSearchMatchesByLine.set(lineIndex, lineSearchMatches);
-      }
-    }
-
-    const highlightsChanged = !spansEqual(presentation.language.visibleHighlights, visibleHighlights);
-    const highlightsByLineChanged = !highlightMapsEqual(
-      presentation.language.visibleHighlightsByLine,
-      visibleHighlightsByLine
-    );
-    const diagnosticsChanged = !diagnosticsEqual(presentation.language.visibleDiagnostics, visibleDiagnostics);
-    const lineChangesChanged = !lineChangesEqual(presentation.language.visibleLineChanges, visibleLineChanges);
-    const searchChanged = !searchMatchesByLineEqual(presentation.search.visibleMatchesByLine, visibleSearchMatchesByLine);
-
-    presentation.language.visibleHighlights = visibleHighlights;
-    presentation.language.visibleHighlightsByLine = visibleHighlightsByLine;
-    presentation.language.visibleDiagnostics = visibleDiagnostics;
-    presentation.language.visibleLineChanges = visibleLineChanges;
-    presentation.search.visibleMatchesByLine = visibleSearchMatchesByLine;
-
-    return highlightsChanged || highlightsByLineChanged || diagnosticsChanged || lineChangesChanged || searchChanged;
-  };
+  const syncVisibleLanguageDecorations = () => languageRuntime.syncVisibleLanguageDecorations();
 
   const getSnapshot = () => ({
-    revision: state.revision,
+    revision: documentRevision,
     doc: state.doc
   });
 
-  const getHighlighter = () => presentation.language.services.find((services) => services.highlighter)?.highlighter;
-  const getHoverSource = () => presentation.language.services.find((services) => services.hover)?.hover;
-  const getDiagnosticsSource = () => presentation.language.services.find((services) => services.diagnostics)?.diagnostics;
-  const getCodeActionSource = () => presentation.language.services.find((services) => services.codeActions)?.codeActions;
-  const getFormatter = () => presentation.language.services.find((services) => services.formatter)?.formatter;
+  languageRuntime = createLanguageRuntime({
+    getState: () => state,
+    getPresentation: () => presentation,
+    getSearchMatchCache: () => searchMatchCache,
+    getVisibleLineViewport: getVisibleLineViewportValue,
+    getVisibleHighlightViewport: getVisibleHighlightViewportValue,
+    getSnapshot,
+    emitPresentationUpdate,
+    dispatch
+  });
+
   const getCommentToggler = () => presentation.language.services.find((services) => services.comments)?.comments;
   const getSyntaxSelector = () => presentation.language.services.find((services) => services.syntaxSelector)?.syntaxSelector;
   const getSyntaxTextobjectProvider = () =>
@@ -551,7 +402,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
   const getActiveOffset = () => (state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state));
 
-  const setBottomMessage = (message: EditorBottomMessageState | null, effectType = "ui.bottom-message") => {
+  const setBottomMessageValue = (message: EditorBottomMessageState | null) => {
     const current = presentation.ui.bottomMessage;
 
     if (
@@ -559,12 +410,94 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       current?.text === message?.text &&
       (!!current === !!message)
     ) {
-      return;
+      return false;
     }
 
     presentation.ui.bottomMessage = message;
+    return true;
+  };
+
+  const setBottomMessage = (message: EditorBottomMessageState | null, effectType = "ui.bottom-message") => {
+    if (!setBottomMessageValue(message)) {
+      return;
+    }
+
     emitPresentationUpdate(effectType);
   };
+
+  const hoverStateEquals = (left: typeof presentation.ui.hover, right: typeof presentation.ui.hover) =>
+    left.active === right.active &&
+    left.pinned === right.pinned &&
+    left.offset === right.offset &&
+    left.content === right.content &&
+    left.source === right.source &&
+    left.tone === right.tone;
+
+  const setHoverStateValue = (next: typeof presentation.ui.hover) => {
+    if (hoverStateEquals(presentation.ui.hover, next)) {
+      return false;
+    }
+
+    presentation.ui.hover = next;
+    return true;
+  };
+
+  const clearHoverState = (
+    options: {
+      preservePinned?: boolean;
+      effectType?: string;
+      invalidateRequest?: boolean;
+    } = {}
+  ) => {
+    if (options.preservePinned && presentation.ui.hover.pinned) {
+      return false;
+    }
+
+    if (options.invalidateRequest !== false) {
+      presentation.language.hoverRequestId += 1;
+    }
+
+    const changed = setHoverStateValue({
+      active: false,
+      pinned: false,
+      offset: null,
+      content: "",
+      tone: "info"
+    });
+
+    if (changed && options.effectType !== null) {
+      emitPresentationUpdate(options.effectType ?? "ui.hover.clear");
+    }
+
+    return changed;
+  };
+
+  const showHoverState = (
+    next: typeof presentation.ui.hover,
+    options: {
+      effectType?: string;
+      clearBottomMessage?: boolean;
+      invalidateRequest?: boolean;
+    } = {}
+  ) => {
+    if (options.invalidateRequest) {
+      presentation.language.hoverRequestId += 1;
+    }
+
+    const hoverChanged = setHoverStateValue(next);
+    const bottomMessageChanged = options.clearBottomMessage ? setBottomMessageValue(null) : false;
+
+    if (hoverChanged || bottomMessageChanged) {
+      emitPresentationUpdate(options.effectType ?? "ui.hover");
+    }
+
+    return hoverChanged || bottomMessageChanged;
+  };
+
+  const hoverToneForDiagnostic = (severity: EditorDiagnostic["severity"]): "info" | "warning" | "error" =>
+    severity === "error" ? "error" : severity === "warning" ? "warning" : "info";
+
+  const requestRawHover = (offset: number) => languageRuntime.requestRawHover(offset);
 
   const setCommandLineState = (next: EditorCommandLineState, effectType = "ui.command-line") => {
     const current = presentation.ui.commandLine;
@@ -627,6 +560,9 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   };
 
   const setLastRepeatableMotion = (next: EditorRepeatableMotion | null, effectType = "ui.repeatable-motion") => {
+    if (presentation.ui.lastRepeatableMotion?.kind === next?.kind && JSON.stringify(presentation.ui.lastRepeatableMotion) === JSON.stringify(next)) {
+      return;
+    }
     presentation.ui.lastRepeatableMotion = next;
     emitPresentationUpdate(effectType);
   };
@@ -692,9 +628,44 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     );
   };
 
-  const clearFlashState = (effectType = "ui.flash") => {
+  const movePicker = (delta: number): boolean => {
+    if (presentation.ui.picker.items.length === 0) {
+      return false;
+    }
+
+    const nextIndex = Math.max(
+      0,
+      Math.min(presentation.ui.picker.items.length - 1, presentation.ui.picker.selectedIndex + delta)
+    );
+
+    setPickerState(
+      {
+        active: true,
+        loading: presentation.ui.picker.loading,
+        title: presentation.ui.picker.title,
+        items: pickerActions,
+        selectedIndex: nextIndex,
+        error: presentation.ui.picker.error
+      },
+      "ui.picker"
+    );
+    return true;
+  };
+
+  const acceptPicker = async (index = presentation.ui.picker.selectedIndex): Promise<boolean> => {
+    const item = pickerActions[index];
+    if (!item) {
+      closePicker("ui.picker.close");
+      return false;
+    }
+
+    await item.run();
+    return true;
+  };
+
+  const clearFlashState = (effectType: string | null = "ui.flash") => {
     if (!presentation.ui.flash.active) {
-      return;
+      return false;
     }
 
     presentation.ui.flash = {
@@ -703,7 +674,12 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       input: "",
       hints: []
     };
-    emitPresentationUpdate(effectType);
+
+    if (effectType !== null) {
+      emitPresentationUpdate(effectType);
+    }
+
+    return true;
   };
 
   const findSearchMatch = (
@@ -791,7 +767,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     revealSelectionWithinViewport();
     syncVisibleViewportRows();
     syncVisibleLanguageDecorations();
-    ensureVisibleHighlightCoverage();
+    void languageRuntime.ensureVisibleHighlightCoverage();
     setBottomMessage(null);
     return true;
   };
@@ -835,15 +811,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   };
 
   const getVisualRow = (visualRowIndex: number): EditorVisualRow => {
-    return presentation.viewport.visualRows[Math.max(0, Math.min(presentation.viewport.visualRows.length - 1, visualRowIndex))] ?? {
-      docLine: 0,
-      visualRowIndex: 0,
-      segmentStart: 0,
-      segmentEnd: 0,
-      startColumn: 0,
-      isContinuation: false,
-      isLastSegment: true
-    };
+    return getVisualRowAtIndex(presentation, visualRowIndex);
   };
 
   const getVisibleLineCount = () => Math.max(1, presentation.viewport.visibleVisualRows.length || presentation.viewport.visibleRowCapacity);
@@ -959,7 +927,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       }
     }
 
-    const viewport = getVisibleLineViewport();
+    const viewport = getVisibleLineViewportValue();
     const didRun = command(state, dispatch, {
       history: historyControls,
       viewport: {
@@ -1264,96 +1232,30 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     revealSelectionWithinViewport();
     syncVisibleViewportRows();
     syncVisibleLanguageDecorations();
-    ensureVisibleHighlightCoverage();
-  };
-
-  const getCommandCompletionItems = (themeNames: readonly string[] = []): EditorCommandCompletionItem[] => {
-    const commandLine = presentation.ui.commandLine;
-
-    if (!commandLine.active || commandLine.prompt !== ":") {
-      return [];
-    }
-
-    const rawValue = commandLine.value;
-    const trimmedStart = rawValue.trimStart();
-
-    if (!trimmedStart) {
-      return [
-        { label: "theme", detail: "switch theme" },
-        { label: "write", detail: "save document" },
-        { label: "format", detail: "format document" },
-        { label: "code-actions", detail: "show code actions" }
-      ];
-    }
-
-    const parts = trimmedStart.split(/\s+/);
-    const commandName = (parts[0] ?? "").toLowerCase();
-    const hasArgumentSpace = /\s$/.test(rawValue);
-    const commandArgument = trimmedStart.slice(parts[0]?.length ?? 0).trim();
-
-    if (commandName === "theme") {
-      return themeNames
-        .filter((entry) => entry.toLowerCase().includes(commandArgument.toLowerCase()))
-        .map((entry) => ({ label: entry, detail: "theme" }));
-    }
-
-    if (!hasArgumentSpace) {
-      return [
-        { label: "theme", detail: "switch theme" },
-        { label: "write", detail: "save document" },
-        { label: "format", detail: "format document" },
-        { label: "code-actions", detail: "show code actions" }
-      ].filter((entry) => entry.label.startsWith(commandName));
-    }
-
-    return [];
+    void languageRuntime.ensureVisibleHighlightCoverage();
   };
 
   const syncCommandPreviewTheme = (themeNames: readonly string[] = []) => {
-    const items = getCommandCompletionItems(themeNames);
-    const rawValue = presentation.ui.commandLine.value.trimStart();
-    const activeCommandName = rawValue.split(/\s+/)[0]?.toLowerCase() ?? "";
-    const previousItems = presentation.ui.commandCompletionItems;
-    let changed =
-      previousItems.length !== items.length ||
-      previousItems.some((item, index) => item.label !== items[index]?.label || item.detail !== items[index]?.detail);
+    const next = resolveCommandPreviewTheme({
+      commandLine: presentation.ui.commandLine,
+      commandCompletionIndex: presentation.ui.commandCompletionIndex,
+      commandCompletionItems: presentation.ui.commandCompletionItems,
+      previewTheme: presentation.ui.previewTheme,
+      themeName: presentation.themeName,
+      themeNames
+    });
 
-    if (changed) {
-      presentation.ui.commandCompletionItems = items;
-    }
-
-    if (
-      items.length === 0 ||
-      !presentation.ui.commandLine.active ||
-      presentation.ui.commandLine.prompt !== ":" ||
-      activeCommandName !== "theme"
-    ) {
-      if (presentation.ui.previewTheme !== null) {
-        presentation.ui.previewTheme = null;
-        changed = true;
-      }
-      if (presentation.ui.commandCompletionIndex !== 0 && items.length === 0) {
-        presentation.ui.commandCompletionIndex = 0;
-        changed = true;
-      }
-      return { themeName: presentation.themeName, changed };
+    if (next.changed) {
+      presentation.ui.commandCompletionItems = next.items;
+      presentation.ui.commandCompletionIndex = next.index;
+      presentation.ui.previewTheme = next.previewTheme;
     }
 
-    const index = Math.max(0, Math.min(items.length - 1, presentation.ui.commandCompletionIndex));
-    if (presentation.ui.commandCompletionIndex !== index) {
-      presentation.ui.commandCompletionIndex = index;
-      changed = true;
-    }
-    const nextTheme = themeNames.find((entry) => entry === items[index]?.label) ?? items[index]?.label ?? null;
-    if (presentation.ui.previewTheme !== nextTheme) {
-      presentation.ui.previewTheme = nextTheme;
-      changed = true;
-    }
-    return { themeName: nextTheme ?? presentation.themeName, changed };
+    return { themeName: next.themeName, changed: next.changed };
   };
 
   const applyCommandCompletion = async (themeNames: readonly string[] = []): Promise<EditorKeyInputResult | null> => {
-    const items = getCommandCompletionItems(themeNames);
+    const items = getCommandCompletionItems(presentation.ui.commandLine, themeNames);
     if (items.length === 0) {
       return null;
     }
@@ -1369,7 +1271,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
     if (selected.detail === "theme" && presentation.ui.commandLine.value.trimStart().toLowerCase().startsWith("theme")) {
       setCommandLineState({ ...presentation.ui.commandLine, value: `theme ${selected.label}` }, "ui.command-line.input");
-      const result = await controller.handleCommandLineKey("Enter", { themeNames });
+      const result = await handleCommandLineKeyInput("Enter", { themeNames });
       return { ...result, themeName: result.themeName ?? presentation.themeName };
     }
 
@@ -1384,33 +1286,143 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     return { handled: true, themeName };
   };
 
-  const hasRunnableCommandLineValue = (rawValue: string, themeNames: readonly string[] = []): boolean => {
-    const trimmed = rawValue.trim();
-
-    if (!trimmed) {
-      return false;
+  const openCommandLineState = (prompt: ":" | "/" | "?") => {
+    if (prompt === "/" || prompt === "?") {
+      searchPreviewState = {
+        active: true,
+        direction: prompt === "/" ? "forward" : "backward",
+        selection: state.selection,
+        mode: state.mode,
+        search: { ...searchState },
+        startOffset: getActiveOffset()
+      };
+    } else {
+      searchPreviewState = null;
     }
 
-    const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
-    const value = commandName.toLowerCase();
-    const commandArgument = argumentParts.join(" ").trim();
+    presentation.ui.pendingAction = null;
+    presentation.ui.commandCompletionIndex = 0;
+    presentation.ui.commandCompletionItems = [];
+    presentation.ui.previewTheme = null;
+    setCommandLineState({ active: true, value: "", prompt }, "ui.command-line.open");
+  };
 
-    if (["format", "fmt", "w", "write", "code-actions", "codeaction", "ca", "q", "quit"].includes(value)) {
-      return true;
+  const handleCommandLineKeyInput = async (
+    key: string,
+    options: EditorCommandLineKeyOptions = {}
+  ): Promise<EditorCommandLineKeyResult> => {
+    const commandLine = presentation.ui.commandLine;
+
+    if (!commandLine.active) {
+      return { handled: false };
     }
 
-    if (value !== "theme") {
-      return false;
+    if (key === "Escape") {
+      restoreSearchPreview();
+      searchPreviewState = null;
+      presentation.ui.commandCompletionIndex = 0;
+      presentation.ui.commandCompletionItems = [];
+      presentation.ui.previewTheme = null;
+      setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.close");
+      return { handled: true };
     }
 
-    if (!commandArgument) {
-      return true;
+    if (key === "Backspace") {
+      const nextValue = commandLine.value.slice(0, -1);
+      setCommandLineState({ ...commandLine, value: nextValue }, "ui.command-line.input");
+      if (commandLine.prompt === "/" || commandLine.prompt === "?") {
+        previewSearch(nextValue, commandLine.prompt === "/" ? "forward" : "backward");
+      }
+      return { handled: true };
     }
 
-    const normalizedArgument = commandArgument.toLowerCase();
-    return themeNames.some(
-      (entry) => entry.toLowerCase() === normalizedArgument || entry.toLowerCase().startsWith(normalizedArgument)
-    );
+    if (key === "Enter") {
+      const trimmed = commandLine.value.trim();
+      const prompt = commandLine.prompt;
+      presentation.ui.commandCompletionIndex = 0;
+      presentation.ui.commandCompletionItems = [];
+      presentation.ui.previewTheme = null;
+      setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.commit");
+
+      if (prompt === "/" || prompt === "?") {
+        searchPreviewState = null;
+        if (!trimmed) {
+          return { handled: true };
+        }
+        runSearch(trimmed, prompt === "/" ? "forward" : "backward");
+        return { handled: true };
+      }
+
+      if (!trimmed) {
+        return { handled: true };
+      }
+
+      const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
+      const value = commandName.toLowerCase();
+      const commandArgument = argumentParts.join(" ").trim();
+
+      if (value === "q" || value === "quit") {
+        return { handled: true, quit: true };
+      }
+
+      if (value === "format" || value === "fmt") {
+        const didFormat = await controller.formatDocument();
+        setBottomMessage({ tone: "info", text: didFormat ? "Formatted document" : "Already formatted" });
+        return { handled: true };
+      }
+
+      if (value === "w" || value === "write") {
+        const targetPath = commandArgument || presentation.filePath;
+        const didSave = await controller.saveDocument(targetPath);
+        setBottomMessage({
+          tone: didSave ? "info" : "error",
+          text: didSave ? `Wrote ${targetPath}` : `Write failed for ${targetPath}`
+        });
+        return { handled: true };
+      }
+
+      if (value === "theme") {
+        if (!commandArgument) {
+          setBottomMessage({ tone: "warning", text: "Theme name required" });
+          return { handled: true };
+        }
+
+        const normalizedArgument = commandArgument.toLowerCase();
+        const matchedTheme =
+          options.themeNames?.find((entry) => entry.toLowerCase() === normalizedArgument) ??
+          options.themeNames?.find((entry) => entry.toLowerCase().startsWith(normalizedArgument)) ??
+          commandArgument;
+
+        if (!matchedTheme) {
+          setBottomMessage({ tone: "warning", text: `Unknown theme: ${commandArgument}` });
+          return { handled: true };
+        }
+
+        presentation.themeName = matchedTheme;
+        setBottomMessage({ tone: "info", text: `Theme ${matchedTheme}` });
+        emitPresentationUpdate("presentation.theme-name");
+        return { handled: true, themeName: matchedTheme };
+      }
+
+      if (value === "code-actions" || value === "codeaction" || value === "ca") {
+        await loadCodeActions();
+        return { handled: true };
+      }
+
+      setBottomMessage({ tone: "warning", text: `Unknown command: ${trimmed}` });
+      return { handled: true };
+    }
+
+    if (key.length === 1) {
+      const nextValue = `${commandLine.value}${key}`;
+      setCommandLineState({ ...commandLine, value: nextValue }, "ui.command-line.input");
+      if (commandLine.prompt === "/" || commandLine.prompt === "?") {
+        previewSearch(nextValue, commandLine.prompt === "/" ? "forward" : "backward");
+      }
+      return { handled: true };
+    }
+
+    return { handled: false };
   };
 
   const openDiagnosticsPicker = () => {
@@ -1581,442 +1593,11 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     });
   };
 
-  const hasMissingHighlightCoverage = (viewport: EditorLineRange): boolean => {
-    for (let lineIndex = viewport.fromLine; lineIndex <= viewport.toLine; lineIndex += 1) {
-      if (!presentation.language.highlightCoverage.has(lineIndex)) {
-        return true;
-      }
-    }
-
-    return false;
-  };
-
-  const getChangedHighlightViewport = (
-    previousState: EditorState,
-    nextState: EditorState,
-    changes: readonly TextChange[]
-  ): EditorLineRange | null => {
-    if (changes.length === 0) {
-      return null;
-    }
-
-    let fromLine = Number.POSITIVE_INFINITY;
-    let toLine = 0;
-
-    for (const change of changes) {
-      const nextStartLine = nextState.doc.positionAt(change.from).line;
-      const nextEndOffset = change.insert.length > 0 ? change.from + change.insert.length - 1 : change.from;
-      const nextEndLine = nextState.doc.positionAt(Math.min(nextEndOffset, nextState.doc.length)).line;
-      fromLine = Math.min(fromLine, nextStartLine);
-      toLine = Math.max(toLine, nextEndLine);
-    }
-
-    if (!Number.isFinite(fromLine)) {
-      return null;
-    }
-
-    return {
-      fromLine: Math.max(0, fromLine - 2),
-      toLine: Math.min(nextState.doc.lineCount - 1, toLine + 2)
-    };
-  };
-
-  const replaceHighlightCache = (spans: HighlightSpan[], viewport: EditorLineRange): boolean => {
-    const nextCache = buildHighlightCache(state.doc, spans);
-    let hasVisibleDirty = false;
-
-    for (let index = viewport.fromLine; index <= viewport.toLine; index += 1) {
-      presentation.language.highlightCoverage.add(index);
-      const previous = presentation.language.highlightCache.get(index) ?? [];
-      const next = nextCache.get(index) ?? [];
-
-      if (!spansEqual(previous, next)) {
-        hasVisibleDirty = true;
-      }
-
-      if (next.length > 0) {
-        presentation.language.highlightCache.set(index, next);
-      } else {
-        presentation.language.highlightCache.delete(index);
-      }
-    }
-
-    return hasVisibleDirty;
-  };
-
-  const remapHighlightCacheForChanges = (previousState: EditorState, nextState: EditorState, changes: readonly TextChange[]) => {
-    if (changes.length === 0) {
-      return;
-    }
-
-    const nextCache = new Map<number, HighlightSpan[]>();
-
-    for (const spans of presentation.language.highlightCache.values()) {
-      for (const span of spans) {
-        const originalLength = Math.max(0, span.to - span.from);
-        const hasOverlappingChange = changes.some((change) => change.from < span.to && change.to > span.from);
-        const startAffinity = changes.some(
-          (change) => change.from === span.from && change.to === span.from && change.insert.length > 0
-        )
-          ? "right"
-          : "left";
-        const mappedFrom = Math.max(
-          0,
-          Math.min(nextState.doc.length, mapOffsetThroughChanges(span.from, changes, startAffinity))
-        );
-        const nextTo = Math.max(
-          mappedFrom,
-          Math.min(nextState.doc.length, mapOffsetThroughChanges(span.to, changes, "right"))
-        );
-        const mappedTo = hasOverlappingChange
-          ? nextTo
-          : Math.max(mappedFrom, Math.min(nextState.doc.length, mappedFrom + originalLength));
-
-        if (mappedTo <= mappedFrom) {
-          continue;
-        }
-
-        const startLine = nextState.doc.positionAt(mappedFrom).line;
-        const endLine = nextState.doc.positionAt(Math.max(mappedFrom, mappedTo - 1)).line;
-
-        for (let line = startLine; line <= endLine; line += 1) {
-          const lineInfo = nextState.doc.lineAt(line);
-          const from = Math.max(mappedFrom, lineInfo.start);
-          const to = Math.min(mappedTo, lineInfo.end);
-
-          if (to <= from) {
-            continue;
-          }
-
-          const entry = nextCache.get(line);
-          const clipped = { from, to, role: span.role };
-
-          if (entry) {
-            entry.push(clipped);
-          } else {
-            nextCache.set(line, [clipped]);
-          }
-        }
-      }
-    }
-
-    presentation.language.highlightCache = nextCache;
-    syncVisibleLanguageDecorations();
-  };
-
-  const remapHighlightCoverageForChanges = (previousState: EditorState, nextState: EditorState, changes: readonly TextChange[]) => {
-    if (changes.length === 0) {
-      return;
-    }
-
-    const nextCoverage = new Set<number>();
-
-    for (const lineIndex of presentation.language.highlightCoverage) {
-      const previousLine = previousState.doc.lineAt(lineIndex);
-      const mappedOffset = Math.max(
-        0,
-        Math.min(nextState.doc.length, mapOffsetThroughChanges(previousLine.start, changes, "left"))
-      );
-      nextCoverage.add(nextState.doc.positionAt(mappedOffset).line);
-    }
-
-    presentation.language.highlightCoverage = nextCoverage;
-  };
-
-  const remapDiagnosticsForChanges = (previousState: EditorState, nextState: EditorState, changes: readonly TextChange[]) => {
-    if (changes.length === 0 || presentation.language.diagnostics.length === 0) {
-      return;
-    }
-
-    presentation.language.diagnostics = presentation.language.diagnostics
-      .map((diagnostic) => {
-        const from = Math.max(
-          0,
-          Math.min(nextState.doc.length, mapOffsetThroughChanges(diagnostic.from, changes, "left"))
-        );
-        const to = Math.max(
-          from,
-          Math.min(nextState.doc.length, mapOffsetThroughChanges(Math.max(diagnostic.from + 1, diagnostic.to), changes, "right"))
-        );
-
-        if (to <= from) {
-          return null;
-        }
-
-        return {
-          ...diagnostic,
-          from,
-          to
-        };
-      })
-      .filter((diagnostic): diagnostic is EditorDiagnostic => diagnostic !== null);
-
-    presentation.language.diagnosticsByLine = buildDiagnosticsCache(state.doc, presentation.language.diagnostics);
-    syncVisibleLanguageDecorations();
-  };
-
-  const invalidateHighlightViewport = (viewport: EditorLineRange) => {
-    for (let index = viewport.fromLine; index <= viewport.toLine; index += 1) {
-      presentation.language.highlightCoverage.delete(index);
-    }
-  };
-
-  const refreshHighlights = async (viewport: EditorLineRange, force = false): Promise<void> => {
-    const highlighter = getHighlighter();
-
-    if (!highlighter || presentation.language.languageRevision < 0) {
-      if (presentation.language.highlightCache.size > 0) {
-        presentation.language.highlightCache.clear();
-        presentation.language.highlightCoverage.clear();
-        presentation.language.visibleHighlightsByLine.clear();
-        syncVisibleLanguageDecorations();
-        emitPresentationUpdate("language.highlights.clear");
-      }
-      return;
-    }
-
-    if (presentation.language.languageRevision !== state.revision) {
-      return;
-    }
-
-    const needsViewportHighlights =
-      force ||
-      presentation.language.lastHighlightedRevision !== presentation.language.languageRevision ||
-      hasMissingHighlightCoverage(viewport);
-
-    if (!needsViewportHighlights) {
-      return;
-    }
-
-    const requestId = ++presentation.language.highlightRequestId;
-    const next = await highlighter.getHighlights(viewport, presentation.language.languageRevision);
-
-    if (requestId !== presentation.language.highlightRequestId) {
-      return;
-    }
-
-    const changed = replaceHighlightCache(next, viewport);
-    presentation.language.lastHighlightedRevision = presentation.language.languageRevision;
-    const visibleChanged = syncVisibleLanguageDecorations();
-
-    if (changed || visibleChanged) {
-      emitPresentationUpdate("language.highlights");
-    }
-  };
-
-  const ensureVisibleHighlightCoverage = (force = false): Promise<void> => {
-    const highlighter = getHighlighter();
-
-    if (!highlighter || presentation.language.languageRevision < 0) {
-      return Promise.resolve();
-    }
-
-    if (presentation.language.languageRevision !== state.revision) {
-      return Promise.resolve();
-    }
-
-    const viewport = getVisibleHighlightViewport();
-    const needsViewportHighlights =
-      force ||
-      presentation.language.lastHighlightedRevision !== presentation.language.languageRevision ||
-      hasMissingHighlightCoverage(viewport);
-
-    if (!needsViewportHighlights) {
-      return Promise.resolve();
-    }
-
-    const requestKey = `${presentation.language.languageRevision}:${viewport.fromLine}:${viewport.toLine}:${force ? 1 : 0}`;
-
-    if (inFlightVisibleHighlightRequestKey === requestKey) {
-      return inFlightVisibleHighlightRequest ?? Promise.resolve();
-    }
-
-    inFlightVisibleHighlightRequestKey = requestKey;
-    inFlightVisibleHighlightRequest = refreshHighlights(viewport, force).finally(() => {
-      if (inFlightVisibleHighlightRequestKey === requestKey) {
-        inFlightVisibleHighlightRequestKey = null;
-        inFlightVisibleHighlightRequest = null;
-      }
-    });
-    return inFlightVisibleHighlightRequest;
-  };
-
-  const refreshDiagnostics = async (): Promise<void> => {
-    const diagnosticsSource = getDiagnosticsSource();
-    const requestId = ++presentation.language.diagnosticsRequestId;
-
-    if (!diagnosticsSource) {
-      if (presentation.language.diagnostics.length > 0 || presentation.language.diagnosticsByLine.size > 0) {
-        presentation.language.diagnostics = [];
-        presentation.language.diagnosticsByLine.clear();
-        syncVisibleLanguageDecorations();
-        emitPresentationUpdate("language.diagnostics.clear");
-      }
-      return;
-    }
-
-    try {
-      const nextDiagnostics = await diagnosticsSource.diagnostics(getSnapshot());
-
-      if (requestId !== presentation.language.diagnosticsRequestId) {
-        return;
-      }
-
-      presentation.language.diagnostics = nextDiagnostics;
-      presentation.language.diagnosticsByLine = buildDiagnosticsCache(state.doc, nextDiagnostics);
-      syncVisibleLanguageDecorations();
-      emitPresentationUpdate("language.diagnostics");
-    } catch {
-      if (requestId !== presentation.language.diagnosticsRequestId) {
-        return;
-      }
-
-      presentation.language.diagnostics = [];
-      presentation.language.diagnosticsByLine = new Map();
-      syncVisibleLanguageDecorations();
-      emitPresentationUpdate("language.diagnostics.error");
-    }
-  };
-
-  const refreshLineChanges = async (): Promise<void> => {
-    const getLineChanges = presentation.language.host?.getLineChanges;
-    const requestId = ++presentation.language.lineChangesRequestId;
-
-    if (!getLineChanges) {
-      if (presentation.language.lineChangesByLine.size > 0) {
-        presentation.language.lineChangesByLine.clear();
-        syncVisibleLanguageDecorations();
-        emitPresentationUpdate("language.line-changes.clear");
-      }
-      return;
-    }
-
-    try {
-      const changes = await getLineChanges({
-        filePath: presentation.filePath,
-        text: state.doc.text
-      });
-
-      if (requestId !== presentation.language.lineChangesRequestId) {
-        return;
-      }
-
-      presentation.language.lineChangesByLine = buildLineChangesMap(changes);
-      syncVisibleLanguageDecorations();
-      emitPresentationUpdate("language.line-changes");
-    } catch {
-      if (requestId !== presentation.language.lineChangesRequestId) {
-        return;
-      }
-
-      presentation.language.lineChangesByLine = new Map();
-      syncVisibleLanguageDecorations();
-      emitPresentationUpdate("language.line-changes.error");
-    }
-  };
-
-  const syncLanguage = async (options: {
-    changes?: readonly TextChange[];
-    forceDocumentSync?: boolean;
-    highlightViewport?: EditorLineRange;
-    refreshHighlights?: boolean;
-    refreshDiagnostics?: boolean;
-    refreshLineChanges?: boolean;
-  } = {}): Promise<void> => {
-    const changes = options.changes ?? [];
-    const forceDocumentSync = options.forceDocumentSync ?? false;
-    const shouldRefreshHighlights = options.refreshHighlights ?? true;
-    const shouldRefreshDiagnostics = options.refreshDiagnostics ?? true;
-    const shouldRefreshLineChanges = options.refreshLineChanges ?? true;
-    const highlightViewport = options.highlightViewport ?? getVisibleHighlightViewport();
-
-    if (changes.length > 0) {
-      invalidateHighlightViewport(highlightViewport);
-    }
-
-    const highlighter = getHighlighter();
-
-    if (highlighter && shouldRefreshHighlights) {
-      if (forceDocumentSync || presentation.language.languageRevision < 0) {
-        await highlighter.open(getSnapshot());
-        presentation.language.languageRevision = state.revision;
-        presentation.language.lastHighlightedRevision = -1;
-        await refreshHighlights(highlightViewport, true);
-      } else if (changes.length > 0) {
-        await highlighter.update(getSnapshot(), changes);
-        presentation.language.languageRevision = state.revision;
-        presentation.language.lastHighlightedRevision = -1;
-        await refreshHighlights(highlightViewport, true);
-      } else if (presentation.language.languageRevision === state.revision) {
-        await refreshHighlights(highlightViewport, false);
-      }
-
-      await ensureVisibleHighlightCoverage(false);
-    }
-
-    if (shouldRefreshDiagnostics) {
-      void refreshDiagnostics();
-    }
-
-    if (shouldRefreshLineChanges) {
-      void refreshLineChanges();
-    }
-  };
-
-  const getCodeActionContext = () => {
-    const selection = getSelectionOffsets(state);
-    const overlappingDiagnostics = presentation.language.diagnostics.filter(
-      (entry) => entry.from < selection.to && entry.to > selection.from
-    );
-    const activeLine = state.doc.positionAt(getActiveOffset()).line;
-    const fallbackDiagnostics =
-      overlappingDiagnostics.length > 0
-        ? overlappingDiagnostics
-        : presentation.language.diagnosticsByLine.get(activeLine) ?? [];
-
-    return {
-      document: getSnapshot(),
-      selection,
-      diagnostics: fallbackDiagnostics
-    };
-  };
-
-  const resolveCodeActionChanges = async (action: EditorCodeAction): Promise<readonly TextChange[] | null> => {
-    if (action.changes && action.changes.length > 0) {
-      return action.changes;
-    }
-
-    return (await action.apply?.(getCodeActionContext())) ?? null;
-  };
-
   const revealSelectionWithinViewport = (): boolean => {
     rebuildViewportModel();
-    const visual = getVisualRowForOffset(
-      state,
-      presentation.viewport.visualRows,
-      presentation.viewport.lineVisualRanges,
-      getActiveOffset(),
-      presentation.viewport.softWrap,
-      presentation.viewport.wrapColumns
-    );
-    const visibleCount = Math.max(1, presentation.viewport.visibleRowCapacity);
-    const scrolloff = Math.max(0, Math.min(presentation.viewport.scrolloffRows, Math.floor((visibleCount - 1) / 2)));
-    const maxTop = Math.max(0, presentation.viewport.visualRows.length - visibleCount);
-    const minRow = presentation.viewport.topVisualRow + scrolloff;
-    const maxRow = presentation.viewport.topVisualRow + visibleCount - 1 - scrolloff;
     const previousTop = presentation.viewport.topVisualRow;
-
-    if (visual.rowIndex < minRow) {
-      presentation.viewport.topVisualRow = Math.max(0, visual.rowIndex - scrolloff);
-      return presentation.viewport.topVisualRow !== previousTop;
-    }
-
-    if (visual.rowIndex > maxRow) {
-      presentation.viewport.topVisualRow = Math.min(maxTop, Math.max(0, visual.rowIndex + scrolloff - visibleCount + 1));
-      return presentation.viewport.topVisualRow !== previousTop;
-    }
-
-    return false;
+    presentation.viewport.topVisualRow = revealSelectionTopVisualRow(state, presentation, getActiveOffset());
+    return presentation.viewport.topVisualRow !== previousTop;
   };
 
   const trimJumpTail = () => {
@@ -2048,6 +1629,82 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   rebuildViewportModel();
   syncVisibleLanguageDecorations();
 
+  const compatibilityApi = createCompatibilityApi({
+    updatePresentationState: updatePresentationStateValue,
+    openCommandLine: openCommandLineState,
+    requestRawHover,
+    invalidateHoverRequest: () => {
+      presentation.language.hoverRequestId += 1;
+    },
+    handleCommandLineKey: handleCommandLineKeyInput
+  });
+
+  keyRuntime = createKeyRuntime({
+    getState: () => state,
+    getPresentation: () => presentation,
+    getController: () => controller,
+    getActiveOffset,
+    getVisibleLineCount,
+    executeEditorCommand,
+    executeCommandWithCount,
+    executeCommandWithCountSync,
+    runRepeatableMotion,
+    recordRepeatableMotion,
+    async handleAltArrowSyntaxSelection(key) {
+      const syntaxSelector = getSyntaxSelector();
+      const syntaxSelection =
+        key === "ArrowUp"
+          ? syntaxSelector?.expandSelection?.bind(syntaxSelector)
+          : syntaxSelector?.shrinkSelection?.bind(syntaxSelector);
+
+      if (!syntaxSelection) {
+        return false;
+      }
+
+      const revision = state.revision;
+      const syntaxRevision = presentation.language.languageRevision;
+      const selection = getSelectionOffsets(state);
+      const activeOffset = getActiveCharacterOffset(state);
+      const nextSelection = await syntaxSelection(selection, activeOffset, syntaxRevision);
+      if (!nextSelection || state.revision !== revision || nextSelection.to <= nextSelection.from) {
+        return true;
+      }
+
+      dispatch({
+        selection: createSelection(nextSelection.from, Math.max(nextSelection.from, nextSelection.to - 1))
+      });
+      return true;
+    },
+    searchFromSelection,
+    repeatSearch,
+    toggleComments,
+    navigateDiagnostic,
+    navigateSyntax,
+    selectTextobjectWithFallback,
+    syncCommandPreviewTheme,
+    applyCommandCompletion,
+    openCommandLine: openCommandLineState,
+    handleCommandLineKeyInput,
+    clearPendingCount,
+    setPendingActionState,
+    setPendingCountState,
+    setStickyViewMode,
+    setPickerState,
+    movePicker,
+    acceptPicker,
+    closePicker,
+    setBottomMessage,
+    clearHover: () => clearHoverState(),
+    restoreJump,
+    openDiagnosticsPicker,
+    openJumpListPicker,
+    loadCodeActions,
+    collectVisibleFlashHints,
+    applyFlashJump,
+    clearFlashState,
+    emitPresentationUpdate
+  });
+
   controller = {
     getState() {
       return state;
@@ -2055,6 +1712,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getPresentationState() {
       return presentation;
     },
+    ...compatibilityApi,
     dispatch,
     replaceState(nextState, transaction = { effects: [{ type: "controller.replace-state" }] }) {
       const prevState = state;
@@ -2064,22 +1722,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       };
       history?.clear();
       refreshSearchMatchCache(state);
-      presentation.language.languageRevision = -1;
-      presentation.language.lastHighlightedRevision = -1;
-      presentation.language.highlightRequestId = 0;
-      inFlightVisibleHighlightRequestKey = null;
-      inFlightVisibleHighlightRequest = null;
-      presentation.language.diagnosticsRequestId = 0;
-      presentation.language.lineChangesRequestId = 0;
-      presentation.language.hoverRequestId = 0;
-      presentation.language.highlightCache.clear();
-      presentation.language.highlightCoverage.clear();
-      presentation.language.visibleHighlightsByLine.clear();
-      presentation.language.diagnostics = [];
-      presentation.language.diagnosticsByLine.clear();
-      presentation.language.lineChangesByLine.clear();
+      languageRuntime.resetRequestTracking();
+      languageRuntime.clearLanguageState();
       rebuildViewportModel();
-      syncVisibleLanguageDecorations();
+      languageRuntime.syncVisibleLanguageDecorations();
       notify(prevState, state, transaction, { recordHistory: false });
     },
     execute(command, context = {}) {
@@ -2168,19 +1814,21 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       applyRegisterValue(name, value, "register.update");
     },
     selectRegister(name) {
-      registers.selected = normalizeRegisterName(name);
+      const next = normalizeRegisterName(name);
+      if (registers.selected === next) {
+        return;
+      }
+      registers.selected = next;
       emitPresentationUpdate("register.select");
     },
     getSelectedRegister() {
       return registers.selected;
     },
-    updatePresentationState(updater, effectType = "presentation.update", options = {}) {
-      updater(presentation);
-      if (options.defer) {
-        schedulePresentationUpdate(effectType);
-      } else {
-        emitPresentationUpdate(effectType);
-      }
+    setBottomMessage(message) {
+      setBottomMessage(message);
+    },
+    clearBottomMessage() {
+      setBottomMessage(null);
     },
     setViewportMetrics(metrics) {
       presentation.viewport.visibleRowCapacity = Math.max(1, metrics.visibleRowCapacity);
@@ -2190,10 +1838,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       rebuildViewportModel();
       const didReveal = revealSelectionWithinViewport();
       const viewportChanged = syncVisibleViewportRows() || didReveal;
-      syncVisibleLanguageDecorations();
+      languageRuntime.syncVisibleLanguageDecorations();
       emitPresentationUpdate("viewport.metrics");
       if (viewportChanged) {
-        ensureVisibleHighlightCoverage();
+        void languageRuntime.ensureVisibleHighlightCoverage();
       }
     },
     scrollViewportBy(rowsDelta) {
@@ -2205,73 +1853,46 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       const maxTop = Math.max(0, presentation.viewport.visualRows.length - presentation.viewport.visibleRowCapacity);
       presentation.viewport.topVisualRow = Math.max(0, Math.min(maxTop, presentation.viewport.topVisualRow + rowsDelta));
       const viewportChanged = syncVisibleViewportRows();
-      syncVisibleLanguageDecorations();
+      languageRuntime.syncVisibleLanguageDecorations();
       emitPresentationUpdate("viewport.scroll");
       if (viewportChanged) {
-        ensureVisibleHighlightCoverage();
+        void languageRuntime.ensureVisibleHighlightCoverage();
       }
       return true;
     },
     alignViewportToSelection(position) {
       rebuildViewportModel();
-      const visual = getVisualRowForOffset(
+      presentation.viewport.topVisualRow = alignSelectionTopVisualRow(
         state,
-        presentation.viewport.visualRows,
-        presentation.viewport.lineVisualRanges,
+        presentation,
         getActiveOffset(),
-        presentation.viewport.softWrap,
-        presentation.viewport.wrapColumns
+        position
       );
-      const visibleCount = Math.max(1, presentation.viewport.visibleRowCapacity);
-      const maxTop = Math.max(0, presentation.viewport.visualRows.length - visibleCount);
-      const nextTop =
-        position === "top"
-          ? visual.rowIndex
-          : position === "bottom"
-            ? visual.rowIndex - visibleCount + 1
-            : visual.rowIndex - Math.floor(visibleCount / 2);
-      presentation.viewport.topVisualRow = Math.max(0, Math.min(maxTop, nextTop));
       const viewportChanged = syncVisibleViewportRows();
-      syncVisibleLanguageDecorations();
+      languageRuntime.syncVisibleLanguageDecorations();
       emitPresentationUpdate("viewport.align");
       if (viewportChanged) {
-        ensureVisibleHighlightCoverage();
+        void languageRuntime.ensureVisibleHighlightCoverage();
       }
       return true;
     },
     revealSelection() {
       const didReveal = revealSelectionWithinViewport();
       const viewportChanged = syncVisibleViewportRows() || didReveal;
-      syncVisibleLanguageDecorations();
+      languageRuntime.syncVisibleLanguageDecorations();
       emitPresentationUpdate("viewport.reveal");
       if (viewportChanged) {
-        ensureVisibleHighlightCoverage();
+        void languageRuntime.ensureVisibleHighlightCoverage();
       }
     },
     setLanguageServices(languageServices) {
       presentation.language.services = normalizeLanguageServices(languageServices);
-      presentation.language.languageRevision = -1;
-      presentation.language.lastHighlightedRevision = -1;
-      presentation.language.highlightRequestId = 0;
-      inFlightVisibleHighlightRequestKey = null;
-      inFlightVisibleHighlightRequest = null;
-      presentation.language.diagnosticsRequestId = 0;
-      presentation.language.lineChangesRequestId = 0;
-      presentation.language.hoverRequestId = 0;
-      presentation.language.highlightCache.clear();
-      presentation.language.highlightCoverage.clear();
-      presentation.language.visibleHighlightsByLine.clear();
-      presentation.language.diagnostics = [];
-      presentation.language.diagnosticsByLine.clear();
-      presentation.language.lineChangesByLine.clear();
-      presentation.language.visibleHighlights = [];
-      presentation.language.visibleHighlightsByLine = new Map();
-      presentation.language.visibleDiagnostics = [];
-      presentation.language.visibleLineChanges = [];
-      presentation.search.matches = [];
-      presentation.search.visibleMatchesByLine = new Map();
+      languageRuntime.resetRequestTracking();
+      languageRuntime.clearLanguageState();
+      refreshSearchMatchCache(state);
+      languageRuntime.syncVisibleLanguageDecorations();
       emitPresentationUpdate("language.services");
-      void syncLanguage({
+      void languageRuntime.syncLanguage({
         forceDocumentSync: true,
         refreshHighlights: true,
         refreshDiagnostics: true,
@@ -2279,945 +1900,116 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       });
     },
     setHostServices(host) {
+      if (presentation.language.host === host) {
+        return;
+      }
       presentation.language.host = host;
       emitPresentationUpdate("host.services");
-      void syncLanguage({
+      void languageRuntime.syncLanguage({
         refreshHighlights: false,
         refreshDiagnostics: false,
         refreshLineChanges: true
       });
     },
     setFilePath(filePath) {
+      if (presentation.filePath === filePath) {
+        return;
+      }
       presentation.filePath = filePath;
       emitPresentationUpdate("presentation.file-path");
-      void syncLanguage({
+      void languageRuntime.syncLanguage({
         refreshHighlights: false,
         refreshDiagnostics: false,
         refreshLineChanges: true
       });
     },
     setThemeName(themeName) {
+      if (presentation.themeName === themeName) {
+        return;
+      }
       presentation.themeName = themeName;
       emitPresentationUpdate("presentation.theme-name");
     },
-    async handleKeyInput(input, options = {}) {
-      const key = input.key;
-      const ctrl = !!input.ctrl;
-      const alt = !!input.alt;
-      const meta = !!input.meta;
-      const shift = !!input.shift;
-
-      if (presentation.ui.flash.active || presentation.ui.pendingAction?.kind === "flash-target") {
-        const handled = controller.handleFlashKey(key);
-        if (handled) {
-          return { handled: true };
-        }
-      }
-
-      if (presentation.ui.picker.active) {
-        if (key === "Escape") {
-          closePicker("ui.picker.close");
-          return { handled: true };
-        }
-
-        if (key === "ArrowLeft" || key === "h" || key === "ArrowUp" || key === "k") {
-          if (presentation.ui.picker.items.length > 0) {
-            setPickerState(
-              {
-                active: true,
-                loading: presentation.ui.picker.loading,
-                title: presentation.ui.picker.title,
-                items: pickerActions,
-                selectedIndex: Math.max(0, presentation.ui.picker.selectedIndex - 1),
-                error: presentation.ui.picker.error
-              },
-              "ui.picker"
-            );
-          }
-          return { handled: true };
-        }
-
-        if (key === "ArrowRight" || key === "l" || key === "ArrowDown" || key === "j") {
-          if (presentation.ui.picker.items.length > 0) {
-            setPickerState(
-              {
-                active: true,
-                loading: presentation.ui.picker.loading,
-                title: presentation.ui.picker.title,
-                items: pickerActions,
-                selectedIndex: Math.min(presentation.ui.picker.items.length - 1, presentation.ui.picker.selectedIndex + 1),
-                error: presentation.ui.picker.error
-              },
-              "ui.picker"
-            );
-          }
-          return { handled: true };
-        }
-
-        if (key === "Enter") {
-          const item = pickerActions[presentation.ui.picker.selectedIndex];
-          if (item) {
-            await item.run();
-          } else {
-            closePicker("ui.picker.close");
-          }
-          return { handled: true };
-        }
-
-        if (/^[1-9]$/.test(key)) {
-          const item = pickerActions[Number(key) - 1];
-          if (item) {
-            await item.run();
-          }
-          return { handled: true };
-        }
-
-        return { handled: false };
-      }
-
-      if (presentation.ui.commandLine.active) {
-        if (key === "Tab") {
-          const completionItems = getCommandCompletionItems(options.themeNames ?? []);
-          if (completionItems.length === 0) {
-            return { handled: false };
-          }
-
-          const delta = shift ? -1 : 1;
-          presentation.ui.commandCompletionIndex =
-            (presentation.ui.commandCompletionIndex + delta + completionItems.length) % completionItems.length;
-          const { themeName } = syncCommandPreviewTheme(options.themeNames ?? []);
-          emitPresentationUpdate("ui.command-line.completion");
-          return { handled: true, themeName };
-        }
-
-      if (key === "Enter") {
-        const completionItems = getCommandCompletionItems(options.themeNames ?? []);
-        const nextValue = presentation.ui.commandLine.value;
-        const selectedCompletion = completionItems[presentation.ui.commandCompletionIndex];
-        const shouldTakeThemeCompletion =
-            !!selectedCompletion &&
-            presentation.ui.commandLine.prompt === ":" &&
-            /^\s*theme\s+$/i.test(nextValue);
-
-        if (shouldTakeThemeCompletion) {
-          const result = await applyCommandCompletion(options.themeNames ?? []);
-          return result ?? { handled: true, themeName: presentation.themeName };
-        }
-
-        if (selectedCompletion && !hasRunnableCommandLineValue(nextValue, options.themeNames ?? [])) {
-          const result = await applyCommandCompletion(options.themeNames ?? []);
-          return result ?? { handled: true, themeName: presentation.themeName };
-        }
-
-          const result = await controller.handleCommandLineKey("Enter", options);
-          return { ...result, themeName: result.themeName ?? presentation.themeName };
-        }
-
-        const result = await controller.handleCommandLineKey(key, options);
-        if (key.length === 1 || key === "Backspace" || key === "Escape") {
-          const { themeName, changed } = syncCommandPreviewTheme(options.themeNames ?? []);
-          if (changed) {
-            emitPresentationUpdate("ui.command-line.completion");
-          }
-          if (result.handled) {
-            return { ...result, themeName: result.themeName ?? themeName };
-          }
-        }
-        return result;
-      }
-
-      if (presentation.ui.hover.active && key === "Escape") {
-        presentation.ui.hover = {
-          ...presentation.ui.hover,
-          active: false,
-          pinned: false,
-          offset: null,
-          content: ""
-        };
-        emitPresentationUpdate("ui.hover.clear");
-        clearPendingCount();
-        return { handled: true };
-      }
-
-      if (presentation.ui.stickyViewMode && (state.mode === "normal" || state.mode === "visual")) {
-        if (key === "Escape") {
-          setStickyViewMode(false);
-          return { handled: true };
-        }
-
-        if (key === "j" || key === "ArrowDown") {
-          controller.scrollViewportBy(1);
-          return { handled: true };
-        }
-
-        if (key === "k" || key === "ArrowUp") {
-          controller.scrollViewportBy(-1);
-          return { handled: true };
-        }
-      }
-
-      if (alt && !meta && !ctrl && state.mode !== "insert" && (key === "ArrowUp" || key === "ArrowDown")) {
-        const syntaxSelector = getSyntaxSelector();
-        const syntaxSelection =
-          key === "ArrowUp"
-            ? syntaxSelector?.expandSelection?.bind(syntaxSelector)
-            : syntaxSelector?.shrinkSelection?.bind(syntaxSelector);
-
-        if (!syntaxSelection) {
-          return { handled: false };
-        }
-
-        const revision = state.revision;
-        const syntaxRevision = presentation.language.languageRevision;
-        const selection = getSelectionOffsets(state);
-        const activeOffset = getActiveCharacterOffset(state);
-        const nextSelection = await syntaxSelection(selection, activeOffset, syntaxRevision);
-        if (!nextSelection || state.revision !== revision || nextSelection.to <= nextSelection.from) {
-          return { handled: true };
-        }
-
-        dispatch({
-          selection: createSelection(nextSelection.from, Math.max(nextSelection.from, nextSelection.to - 1))
-        });
-        return { handled: true };
-      }
-
-      if (alt && !meta && !ctrl && state.mode !== "insert" && key === ".") {
-        if (!presentation.ui.lastRepeatableMotion) {
-          return { handled: false };
-        }
-
-        await runRepeatableMotion(presentation.ui.lastRepeatableMotion, options);
-        return { handled: true };
-      }
-
-      if (alt && !meta && !ctrl && state.mode !== "insert" && key === "*") {
-        searchFromSelection(true);
-        return { handled: true };
-      }
-
-      if (ctrl && !meta && !alt && state.mode === "insert" && key === "s") {
-        historyControls.checkpoint?.();
-        return { handled: true };
-      }
-
-      if (ctrl && !meta && !alt && state.mode === "insert" && key === "r") {
-        setPendingActionState({ kind: "register-select", insert: true });
-        return { handled: true };
-      }
-
-      if (ctrl && !meta && !alt && state.mode !== "insert" && key === "s") {
-        pushJumpEntry(createJumpEntry(state));
-        setBottomMessage({ tone: "info", text: "Saved jump" });
-        return { handled: true };
-      }
-
-      if (ctrl && !meta && !alt && state.mode !== "insert" && key === "o") {
-        restoreJump(controller.jumpBackward());
-        return { handled: true };
-      }
-
-      if (ctrl && !meta && !alt && state.mode !== "insert" && key === "i") {
-        restoreJump(controller.jumpForward());
-        return { handled: true };
-      }
-
-      if (ctrl && !meta && !alt && (state.mode !== "insert" || presentation.ui.stickyViewMode) && ["b", "d", "f", "u"].includes(key)) {
-        if (presentation.ui.stickyViewMode) {
-          const delta =
-            key === "b"
-              ? -(Math.max(1, getVisibleLineCount() - 1))
-              : key === "f"
-                ? Math.max(1, getVisibleLineCount() - 1)
-                : key === "u"
-                  ? -Math.max(1, Math.floor(getVisibleLineCount() / 2))
-                  : Math.max(1, Math.floor(getVisibleLineCount() / 2));
-          controller.scrollViewportBy(delta);
-          return { handled: true };
-        }
-
-        const command = key === "b" ? pageUp : key === "f" ? pageDown : key === "u" ? halfPageUp : halfPageDown;
-        executeCommandWithCountSync(command);
-        return { handled: true };
-      }
-
-      if (presentation.ui.pendingAction) {
-        const nextPending = presentation.ui.pendingAction;
-
-        if (key === "Escape") {
-          if (nextPending.kind === "flash-target") {
-            controller.handleFlashKey("Escape");
-          } else {
-            setPendingActionState(null);
-          }
-          clearPendingCount();
-          return { handled: true };
-        }
-
-        if (nextPending.kind !== "flash-target") {
-          setPendingActionState(null);
-        }
-
-        if (nextPending.kind === "g") {
-          if (key === "c") {
-            await toggleComments("line");
-            return { handled: true };
-          }
-
-          const chordCommand = commandForGotoPrefix(key);
-          if (chordCommand) {
-            executeCommandWithCountSync(chordCommand);
-            return { handled: true };
-          }
-        }
-
-        if (nextPending.kind === "[" || nextPending.kind === "]") {
-          if (key === "d" || key === "D") {
-            navigateDiagnostic(nextPending.kind === "]" ? "next" : "prev", key === "D");
-            return { handled: true };
-          }
-
-          if (["f", "t", "a", "c", "T", "g", "x"].includes(key)) {
-            await navigateSyntax(nextPending.kind === "]" ? "next" : "prev", key);
-            return { handled: true };
-          }
-
-          const chordCommand = commandForBracketPrefix(nextPending.kind, key);
-          if (chordCommand) {
-            const previousRevision = state.revision;
-            executeCommandWithCountSync(chordCommand);
-            recordRepeatableMotion(
-              { kind: "paragraph", direction: nextPending.kind === "]" ? "next" : "prev" },
-              state.revision !== previousRevision
-            );
-            return { handled: true };
-          }
-        }
-
-        if (nextPending.kind === "m") {
-          if (key === "m") {
-            const previousRevision = state.revision;
-            executeEditorCommand(gotoMatchingBracket);
-            recordRepeatableMotion({ kind: "matching-bracket" }, state.revision !== previousRevision);
-            return { handled: true };
-          }
-
-          if (key === "a" || key === "i") {
-            setPendingActionState({ kind: "textobject", mode: key === "a" ? "around" : "inside" });
-            return { handled: true };
-          }
-
-          if (key === "s") {
-            setPendingActionState({ kind: "surround-add" });
-            return { handled: true };
-          }
-
-          if (key === "d") {
-            setPendingActionState({ kind: "surround-delete" });
-            return { handled: true };
-          }
-
-          if (key === "r") {
-            setPendingActionState({ kind: "surround-replace-from" });
-            return { handled: true };
-          }
-        }
-
-        if (nextPending.kind === "space") {
-          if (!ctrl && !meta && key.toLowerCase() === "c") {
-            await toggleComments(alt ? "line" : shift ? "block" : "smart");
-            return { handled: true };
-          }
-
-          if (key === "a") {
-            await loadCodeActions();
-            return { handled: true };
-          }
-
-          if (key === "d") {
-            openDiagnosticsPicker();
-            return { handled: true };
-          }
-
-          if (key === "j") {
-            openJumpListPicker();
-            return { handled: true };
-          }
-
-          if (key === "k") {
-            const hoverOffset = getActiveOffset();
-            const activeDiagnostic =
-              presentation.language.diagnostics.find((entry) => hoverOffset >= entry.from && hoverOffset < entry.to) ?? null;
-
-            if (activeDiagnostic) {
-              presentation.ui.hover = {
-                active: true,
-                pinned: true,
-                offset: activeDiagnostic.from,
-                content: activeDiagnostic.message,
-                source: activeDiagnostic.source,
-                tone: activeDiagnostic.severity === "error" ? "error" : activeDiagnostic.severity === "warning" ? "warning" : "info",
-                left: presentation.ui.hover.left,
-                top: presentation.ui.hover.top
-              };
-              emitPresentationUpdate("ui.hover");
-              return { handled: true };
-            }
-
-            const nextHover = await controller.requestHover(hoverOffset);
-            if (!nextHover || !nextHover.content.trim()) {
-              setBottomMessage({ tone: "info", text: "No hover information" });
-              return { handled: true };
-            }
-
-            presentation.ui.hover = {
-              active: true,
-              pinned: true,
-              offset: hoverOffset,
-              content: nextHover.content,
-              source: nextHover.source,
-              tone: "info",
-              left: presentation.ui.hover.left,
-              top: presentation.ui.hover.top
-            };
-            emitPresentationUpdate("ui.hover");
-            return { handled: true };
-          }
-        }
-
-        if (nextPending.kind === "find") {
-          const previousRevision = state.revision;
-          executeEditorCommand(
-            nextPending.variant === "f"
-              ? findNextChar(key)
-              : nextPending.variant === "F"
-                ? findPrevChar(key)
-                : nextPending.variant === "t"
-                  ? findTillNextChar(key)
-                  : findTillPrevChar(key)
-          );
-          recordRepeatableMotion(
-            { kind: "find", variant: nextPending.variant, target: key },
-            state.revision !== previousRevision
-          );
-          return { handled: true };
-        }
-
-        if (nextPending.kind === "textobject") {
-          const previousRevision = state.revision;
-          const didRun = await selectTextobjectWithFallback(nextPending.mode, key);
-          recordRepeatableMotion(
-            { kind: "textobject", mode: nextPending.mode, object: key },
-            didRun || state.revision !== previousRevision
-          );
-          return { handled: true };
-        }
-
-        if (nextPending.kind === "surround-add") {
-          executeEditorCommand(addSurround(key));
-          return { handled: true };
-        }
-
-        if (nextPending.kind === "surround-delete") {
-          executeEditorCommand(deleteSurround(key));
-          return { handled: true };
-        }
-
-        if (nextPending.kind === "surround-replace-from") {
-          setPendingActionState({ kind: "surround-replace-to", fromObject: key });
-          return { handled: true };
-        }
-
-        if (nextPending.kind === "surround-replace-to") {
-          executeEditorCommand(replaceSurround(nextPending.fromObject, key));
-          return { handled: true };
-        }
-
-        if (nextPending.kind === "register-select") {
-          if (nextPending.insert && state.mode === "insert") {
-            const value = key === "+" ? await options.readClipboardText?.() ?? null : controller.getRegister(key);
-            controller.selectRegister(null);
-
-            if (!value) {
-              setBottomMessage({ tone: "warning", text: `Register ${key} is empty` });
-              return { handled: true };
-            }
-
-            executeEditorCommand(insertText(value));
-          } else {
-            controller.selectRegister(key);
-            setBottomMessage({ tone: "info", text: `Register "${key}" selected` });
-          }
-          return { handled: true };
-        }
-
-        if (nextPending.kind === "z") {
-          if (key === "Escape") {
-            setStickyViewMode(false);
-            return { handled: true };
-          }
-
-          if (key === "z" || key === "c" || key === "m") {
-            controller.alignViewportToSelection("center");
-          } else if (key === "t") {
-            controller.alignViewportToSelection("top");
-          } else if (key === "b") {
-            controller.alignViewportToSelection("bottom");
-          } else if (key === "j") {
-            controller.scrollViewportBy(1);
-          } else if (key === "k") {
-            controller.scrollViewportBy(-1);
-          }
-
-          if (!nextPending.sticky) {
-            setStickyViewMode(false);
-          }
-          return { handled: true };
-        }
-      }
-
-      if (meta || ctrl || alt) {
-        return { handled: false };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === ":") {
-        clearPendingCount();
-        controller.openCommandLine(":");
-        const { themeName, changed } = syncCommandPreviewTheme(options.themeNames ?? []);
-        if (changed) {
-          emitPresentationUpdate("ui.command-line.completion");
-        }
-        return { handled: true, themeName };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === "/") {
-        clearPendingCount();
-        controller.openCommandLine("/");
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === "?") {
-        clearPendingCount();
-        controller.openCommandLine("?");
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === "\"") {
-        setPendingActionState({ kind: "register-select", insert: false });
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && /^[0-9]$/.test(key) && !(presentation.ui.pendingCount === "" && key === "0")) {
-        setPendingCountState(`${presentation.ui.pendingCount}${key}`);
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === " ") {
-        setPendingActionState({ kind: "space" });
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === ",") {
-        controller.beginFlashTarget();
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === "z") {
-        setStickyViewMode(false);
-        setPendingActionState({ kind: "z", sticky: false });
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === "Z") {
-        setStickyViewMode(true);
-        setPendingActionState({ kind: "z", sticky: true });
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === "n") {
-        controller.repeatSearch(false);
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === "N") {
-        controller.repeatSearch(true);
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === "*") {
-        searchFromSelection(false);
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === "g") {
-        setPendingActionState({ kind: "g" });
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && (key === "[" || key === "]")) {
-        setPendingActionState({ kind: key });
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && key === "m") {
-        setPendingActionState({ kind: "m" });
-        return { handled: true };
-      }
-
-      if ((state.mode === "normal" || state.mode === "visual") && ["f", "F", "t", "T"].includes(key)) {
-        setPendingActionState({ kind: "find", variant: key as "f" | "F" | "t" | "T" });
-        return { handled: true };
-      }
-
-      const command =
-        state.mode === "normal"
-          ? commandForNormalMode(key)
-          : state.mode === "visual"
-            ? commandForVisualMode(key)
-            : commandForInsertMode(key);
-
-      if (!command) {
-        return { handled: false };
-      }
-
-      if (command === pasteAfter && controller.getSelectedRegister() === "+" && options.readClipboardText) {
-        await executeCommandWithCount(command, options);
-      } else {
-        executeCommandWithCountSync(command);
-      }
-      return { handled: true };
+    handleKeyInput(input, options = {}) {
+      return keyRuntime.handleKeyInput(input, options);
     },
-    async handleTextInput(text, options = {}) {
-      let handled = false;
-      let themeName: string | null | undefined;
-      let quit = false;
-
-      for (const char of text) {
-        const result = await controller.handleKeyInput({ key: char, text: char }, options);
-        handled = handled || result.handled;
-        if (result.themeName !== undefined) {
-          themeName = result.themeName;
-        }
-        quit = quit || !!result.quit;
-      }
-
-      return { handled, themeName, quit };
-    },
-    openCommandLine(prompt) {
-      if (prompt === "/" || prompt === "?") {
-        searchPreviewState = {
-          active: true,
-          direction: prompt === "/" ? "forward" : "backward",
-          selection: state.selection,
-          mode: state.mode,
-          search: { ...searchState },
-          startOffset: getActiveOffset()
-        };
-      } else {
-        searchPreviewState = null;
-      }
-
-      presentation.ui.pendingAction = null;
-      presentation.ui.commandCompletionIndex = 0;
-      presentation.ui.commandCompletionItems = [];
-      presentation.ui.previewTheme = null;
-      setCommandLineState({ active: true, value: "", prompt }, "ui.command-line.open");
-    },
-    async handleCommandLineKey(key, options = {}) {
-      const commandLine = presentation.ui.commandLine;
-
-      if (!commandLine.active) {
-        return { handled: false };
-      }
-
-      if (key === "Escape") {
-        restoreSearchPreview();
-        searchPreviewState = null;
-        presentation.ui.commandCompletionIndex = 0;
-        presentation.ui.commandCompletionItems = [];
-        presentation.ui.previewTheme = null;
-        setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.close");
-        return { handled: true };
-      }
-
-      if (key === "Backspace") {
-        const nextValue = commandLine.value.slice(0, -1);
-        setCommandLineState({ ...commandLine, value: nextValue }, "ui.command-line.input");
-        if (commandLine.prompt === "/" || commandLine.prompt === "?") {
-          previewSearch(nextValue, commandLine.prompt === "/" ? "forward" : "backward");
-        }
-        return { handled: true };
-      }
-
-      if (key === "Enter") {
-        const trimmed = commandLine.value.trim();
-        const prompt = commandLine.prompt;
-        presentation.ui.commandCompletionIndex = 0;
-        presentation.ui.commandCompletionItems = [];
-        presentation.ui.previewTheme = null;
-        setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.commit");
-
-        if (prompt === "/" || prompt === "?") {
-          searchPreviewState = null;
-          if (!trimmed) {
-            return { handled: true };
-          }
-          runSearch(trimmed, prompt === "/" ? "forward" : "backward");
-          return { handled: true };
-        }
-
-        if (!trimmed) {
-          return { handled: true };
-        }
-
-        const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
-        const value = commandName.toLowerCase();
-        const commandArgument = argumentParts.join(" ").trim();
-
-        if (value === "q" || value === "quit") {
-          return { handled: true, quit: true };
-        }
-
-        if (value === "format" || value === "fmt") {
-          const didFormat = await controller.formatDocument();
-          setBottomMessage({ tone: "info", text: didFormat ? "Formatted document" : "Already formatted" });
-          return { handled: true };
-        }
-
-        if (value === "w" || value === "write") {
-          const targetPath = commandArgument || presentation.filePath;
-          const didSave = await controller.saveDocument(targetPath);
-          setBottomMessage({
-            tone: didSave ? "info" : "error",
-            text: didSave ? `Wrote ${targetPath}` : `Write failed for ${targetPath}`
-          });
-          return { handled: true };
-        }
-
-        if (value === "theme") {
-          if (!commandArgument) {
-            setBottomMessage({ tone: "warning", text: "Theme name required" });
-            return { handled: true };
-          }
-
-          const normalizedArgument = commandArgument.toLowerCase();
-          const matchedTheme =
-            options.themeNames?.find((entry) => entry.toLowerCase() === normalizedArgument) ??
-            options.themeNames?.find((entry) => entry.toLowerCase().startsWith(normalizedArgument)) ??
-            commandArgument;
-
-          if (!matchedTheme) {
-            setBottomMessage({ tone: "warning", text: `Unknown theme: ${commandArgument}` });
-            return { handled: true };
-          }
-
-          presentation.themeName = matchedTheme;
-          setBottomMessage({ tone: "info", text: `Theme ${matchedTheme}` });
-          emitPresentationUpdate("presentation.theme-name");
-          return { handled: true, themeName: matchedTheme };
-        }
-
-        if (value === "code-actions" || value === "codeaction" || value === "ca") {
-          await loadCodeActions();
-          return { handled: true };
-        }
-
-        setBottomMessage({ tone: "warning", text: `Unknown command: ${trimmed}` });
-        return { handled: true };
-      }
-
-      if (key.length === 1) {
-        const nextValue = `${commandLine.value}${key}`;
-        setCommandLineState({ ...commandLine, value: nextValue }, "ui.command-line.input");
-        if (commandLine.prompt === "/" || commandLine.prompt === "?") {
-          previewSearch(nextValue, commandLine.prompt === "/" ? "forward" : "backward");
-        }
-        return { handled: true };
-      }
-
-      return { handled: false };
+    handleTextInput(text, options = {}) {
+      return keyRuntime.handleTextInput(text, options);
     },
     repeatSearch(reverseAgainstDirection = false) {
-      return repeatSearch(reverseAgainstDirection);
+      return keyRuntime.repeatSearch(reverseAgainstDirection);
     },
     beginFlashTarget() {
-      presentation.ui.pendingAction = { kind: "flash-target" };
-      emitPresentationUpdate("flash.pending");
+      keyRuntime.beginFlashTarget();
     },
     handleFlashKey(key) {
-      if (presentation.ui.flash.active) {
-        if (key === "Escape" || key === "Backspace") {
-          clearFlashState("flash.cancel");
-          return true;
-        }
-
-        if (!/^[a-z]$/i.test(key)) {
-          clearFlashState("flash.cancel");
-          return true;
-        }
-
-        const matchingHints = presentation.ui.flash.hints.filter((hint) => hint.label === key.toLowerCase());
-
-        if (matchingHints.length === 0) {
-          return true;
-        }
-
-        if (matchingHints.length === 1) {
-          applyFlashJump(matchingHints[0]!.offset);
-          return true;
-        }
-
-        const narrowedLabels = buildFlashLabels(key.toLowerCase(), matchingHints.length);
-        presentation.ui.flash = {
-          ...presentation.ui.flash,
-          input: `${presentation.ui.flash.input}${key.toLowerCase()}`,
-          hints: matchingHints.map((hint, index) => ({
-            offset: hint.offset,
-            label: narrowedLabels[index] ?? narrowedLabels[0] ?? presentation.ui.flash.target
-          }))
-        };
-        emitPresentationUpdate("flash.narrow");
-        return true;
-      }
-
-      if (presentation.ui.pendingAction?.kind !== "flash-target") {
-        return false;
-      }
-
-      presentation.ui.pendingAction = null;
-
-      if (key === "Escape") {
-        emitPresentationUpdate("flash.cancel");
-        return true;
-      }
-
-      if (!/^[a-z]$/i.test(key)) {
-        emitPresentationUpdate("flash.cancel");
-        return false;
-      }
-
-      const hints = collectVisibleFlashHints(key);
-
-      if (hints.length === 0) {
-        setBottomMessage({ tone: "warning", text: `No visible '${key}' targets` });
-        return true;
-      }
-
-      presentation.ui.flash = {
-        active: true,
-        target: key,
-        input: "",
-        hints
-      };
-      setBottomMessage(null);
-      emitPresentationUpdate("flash.start");
-      return true;
+      return keyRuntime.handleFlashKey(key);
     },
-    async refreshLanguage(options = {}) {
-      await syncLanguage(options);
+    refreshLanguage(options = {}) {
+      return languageRuntime.syncLanguage(options);
     },
-    requestHover(offset) {
-      const hoverSource = getHoverSource();
-
-      if (!hoverSource) {
-        return Promise.resolve(null);
-      }
-
-      const requestId = ++presentation.language.hoverRequestId;
-      const revision = state.revision;
-      return hoverSource.hover(getSnapshot(), offset).then((nextHover) => {
-        if (requestId !== presentation.language.hoverRequestId || revision !== state.revision) {
-          return null;
+    requestHoverAt(offset, options = {}) {
+      if (presentation.ui.hover.active && presentation.ui.hover.offset === offset && presentation.ui.hover.pinned === !!options.pinned) {
+        if (presentation.ui.hover.content.trim()) {
+          return Promise.resolve(true);
         }
-
-        return nextHover;
-      });
-    },
-    dismissHover() {
-      presentation.language.hoverRequestId += 1;
-    },
-    requestCodeActions() {
-      const codeActionSource = getCodeActionSource();
-
-      if (!codeActionSource) {
-        return Promise.resolve([]);
       }
 
-      return codeActionSource.getCodeActions(getCodeActionContext()).catch(() => []);
-    },
-    applyCodeAction(action) {
-      if (action.changes && action.changes.length > 0) {
-        dispatch({
-          changes: action.changes,
-          effects: [{ type: "language.code-action", value: action.title }]
-        });
-        return Promise.resolve(true);
-      }
-
-      return resolveCodeActionChanges(action).then((changes) => {
-        if (!changes || changes.length === 0) {
+      return requestRawHover(offset).then((nextHover) => {
+        if (!nextHover || !nextHover.content.trim()) {
+          const hoverCleared = clearHoverState({ effectType: null });
+          if (options.pinned) {
+            setBottomMessage({ tone: "info", text: "No hover information" });
+          } else if (hoverCleared) {
+            emitPresentationUpdate("ui.hover.clear");
+          }
           return false;
         }
 
-        dispatch({
-          changes,
-          effects: [{ type: "language.code-action", value: action.title }]
-        });
+        showHoverState(
+          {
+            active: true,
+            pinned: !!options.pinned,
+            offset,
+            content: nextHover.content,
+            source: nextHover.source,
+            tone: "info"
+          },
+          { clearBottomMessage: true }
+        );
         return true;
       });
     },
+    showDiagnosticHover(diagnostic, options = {}) {
+      return showHoverState(
+        {
+          active: true,
+          pinned: !!options.pinned,
+          offset: diagnostic.from,
+          content: diagnostic.message,
+          source: diagnostic.source,
+          tone: hoverToneForDiagnostic(diagnostic.severity)
+        },
+        { clearBottomMessage: true, invalidateRequest: true }
+      );
+    },
+    clearHover(options = {}) {
+      return clearHoverState({ preservePinned: options.preservePinned });
+    },
+    clearFlash() {
+      return clearFlashState();
+    },
+    requestCodeActions() {
+      return languageRuntime.requestCodeActions();
+    },
+    applyCodeAction(action) {
+      return languageRuntime.applyCodeAction(action);
+    },
     formatDocument() {
-      const formatter = getFormatter();
-
-      if (!formatter) {
-        return Promise.resolve(false);
-      }
-
-      return formatter
-        .format({
-          document: getSnapshot(),
-          selection: getSelectionOffsets(state)
-        })
-        .then((changes) => {
-          if (!changes || changes.length === 0) {
-            return false;
-          }
-
-          dispatch({
-            changes,
-            effects: [{ type: "language.format" }]
-          });
-          return true;
-        })
-        .catch(() => false);
+      return languageRuntime.formatDocument();
     },
     saveDocument(targetPath = presentation.filePath) {
-      const writeFile = presentation.language.host?.writeFile;
-
-      if (!writeFile) {
-        return Promise.resolve(false);
-      }
-
-      const savedText = state.doc.text;
-      return writeFile({
-        filePath: targetPath,
-        text: savedText
-      })
-        .then(() => {
-          presentation.filePath = targetPath;
-          emitPresentationUpdate("presentation.file-path");
-          void refreshLineChanges();
-          queueMicrotask(() => {
-            void Promise.resolve(
-              presentation.language.host?.didWriteFile?.({
-                filePath: targetPath,
-                text: savedText
-              })
-            ).catch(() => undefined);
-          });
-          return true;
-        })
-        .catch(() => false);
+      return languageRuntime.saveDocument(targetPath);
     }
   };
 

@@ -200,6 +200,80 @@ describe("editor controller", () => {
     expect(controller.getPresentationState().ui.flash.hints.length).toBeGreaterThan(0);
   });
 
+  it("sets semantic hover state through controller-owned hover requests", async () => {
+    const controller = createEditorController({ value: "alpha" });
+
+    controller.setLanguageServices([
+      {
+        hover: {
+          async hover() {
+            return { source: "fake-lsp", content: "hover:0" };
+          }
+        }
+      }
+    ]);
+
+    const shown = await controller.requestHoverAt(0, { pinned: true });
+
+    expect(shown).toBe(true);
+    expect(controller.getPresentationState().ui.hover).toEqual({
+      active: true,
+      pinned: true,
+      offset: 0,
+      content: "hover:0",
+      source: "fake-lsp",
+      tone: "info"
+    });
+  });
+
+  it("clears semantic hover and flash state on document edits", async () => {
+    const controller = createEditorController({ value: "alpha" });
+
+    controller.showDiagnosticHover({ from: 0, to: 5, severity: "warning", message: "warn" }, { pinned: true });
+    controller.beginFlashTarget();
+    controller.handleFlashKey("a");
+    controller.execute(enterInsertMode);
+    controller.execute(insertText("x"));
+
+    expect(controller.getPresentationState().ui.hover.active).toBe(false);
+    expect(controller.getPresentationState().ui.flash.active).toBe(false);
+  });
+
+  it("updates bottom messages through controller APIs", () => {
+    const controller = createEditorController({ value: "alpha" });
+
+    controller.setBottomMessage({ tone: "info", text: "hello" });
+    expect(controller.getPresentationState().ui.bottomMessage).toEqual({ tone: "info", text: "hello" });
+
+    controller.clearBottomMessage();
+    expect(controller.getPresentationState().ui.bottomMessage).toBeNull();
+  });
+
+  it("ignores stale hover responses after document edits", async () => {
+    let resolveHover: ((value: { source: string; content: string }) => void) | null = null;
+    const controller = createEditorController({ value: "alpha" });
+
+    controller.setLanguageServices([
+      {
+        hover: {
+          hover() {
+            return new Promise((resolve) => {
+              resolveHover = resolve;
+            });
+          }
+        }
+      }
+    ]);
+
+    const pending = controller.requestHoverAt(0, { pinned: true });
+    controller.execute(enterInsertMode);
+    controller.execute(insertText("x"));
+    resolveHover?.({ source: "fake-lsp", content: "stale hover" });
+
+    expect(await pending).toBe(false);
+    expect(controller.getPresentationState().ui.hover.active).toBe(false);
+  });
+
   it("assigns distinct first-pass labels to visible flash targets", () => {
     const controller = createEditorController({ value: "ta ta ta ta\nta ta ta ta" });
     controller.setViewportMetrics({ visibleRowCapacity: 6, wrapColumns: 80, softWrap: false });
