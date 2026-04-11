@@ -39,25 +39,33 @@ function visibleRows(container: HTMLElement): number[] {
 
 describe("createEditor", () => {
   it("routes runtime keyboard input through controller key APIs, not compatibility helpers", () => {
-    const source = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/index.ts"), "utf8");
+    const indexSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/index.ts"), "utf8");
+    const eventSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/dom-events.ts"), "utf8");
 
-    expect(source).toContain("controller.handleKeyInput");
-    expect(source).toContain("controller.handleTextInput");
-    expect(source).not.toContain("controller.openCommandLine(");
-    expect(source).not.toContain("controller.handleCommandLineKey(");
-    expect(source).not.toContain("controller.updatePresentationState(");
+    expect(indexSource).toContain("createDomEventRuntime");
+    expect(eventSource).toContain("controller.handleKeyInput");
+    expect(eventSource).toContain("controller.handleTextInput");
+    expect(eventSource).not.toContain("controller.openCommandLine(");
+    expect(eventSource).not.toContain("controller.handleCommandLineKey(");
+    expect(eventSource).not.toContain("controller.updatePresentationState(");
   });
 
   it("keeps DOM render modules free of controller-internal imports", () => {
     const renderSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/dom-render.ts"), "utf8");
     const chromeSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/dom-chrome.ts"), "utf8");
+    const runtimeSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/dom-runtime.ts"), "utf8");
+    const eventSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/dom-events.ts"), "utf8");
 
     expect(renderSource).not.toContain("editor-controller/src/compat");
     expect(chromeSource).not.toContain("editor-controller/src/compat");
+    expect(runtimeSource).not.toContain("editor-controller/src/compat");
+    expect(eventSource).not.toContain("editor-controller/src/compat");
     expect(renderSource).not.toContain("editor-controller/src/session");
     expect(renderSource).not.toContain("editor-controller/src/viewport");
     expect(chromeSource).not.toContain("editor-controller/src/session");
     expect(chromeSource).not.toContain("editor-controller/src/viewport");
+    expect(runtimeSource).not.toContain("editor-controller/src/session");
+    expect(runtimeSource).not.toContain("editor-controller/src/viewport");
   });
 
   it("chooses simple-cursor work for plain movement without bottom-bar or tooltip churn", () => {

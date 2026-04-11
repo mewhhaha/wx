@@ -14,6 +14,9 @@ describe("editor controller", () => {
     expect(source).not.toContain("const applyRegisterValue = (");
     expect(source).not.toContain("const pushJumpEntry = (");
     expect(source).not.toContain("const rebuildViewportModel = (");
+    expect(source).not.toContain("const refreshSearchMatchCache = (");
+    expect(source).not.toContain("const applySearchState = (");
+    expect(source).toContain("createControllerSurface(");
   });
 
   it("emits deterministic updates for command execution", () => {

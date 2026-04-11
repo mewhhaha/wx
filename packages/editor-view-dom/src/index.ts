@@ -1,9 +1,6 @@
 import {
   createEditorState,
   createSelection,
-  getActiveCharacterOffset,
-  getCursorOffset,
-  getSelectionOffsets,
   type EditorState
 } from "@wx/editor-core";
 import {
@@ -11,52 +8,16 @@ import {
   type EditorController,
   type EditorUpdate
 } from "@wx/editor-controller";
-import {
-  buildEditorLayout,
-  buildEditorLayoutRow,
-  getVisualRowForOffset as getLayoutVisualRowForOffset,
-  type EditorLayoutModel,
-  type EditorLayoutPanel,
-  type EditorLayoutRow,
-  type EditorLayoutRun,
-  type EditorLayoutToken
-} from "../../editor-layout/src/index";
-import { computeRenderWork } from "./render-work";
-import {
-  getEffectiveThemeName,
-  getEffectiveThemeSpec,
-  readBottomBarSignature,
-  readStatusSignature,
-  readTooltipSignature
-} from "./render-signatures";
 import { createDomChromeRuntime } from "./dom-chrome";
-import {
-  getTooltipAnchorForRect,
-  resolveOffsetWithinRun,
-  selectDiagnostic,
-  toneForSeverity
-} from "./dom-hover";
-import {
-  isBrowserPasteShortcut,
-  keyboardInputForEvent,
-  shouldRouteKeydown
-} from "./dom-input";
+import { createDomEventRuntime } from "./dom-events";
+import { createDomHandleRuntime } from "./dom-handle";
 import { createDomRenderRuntime } from "./dom-render";
-import {
-  expandViewport,
-  measureMetrics,
-  refreshGutterWidth as refreshMeasuredGutterWidth,
-  syncMeasuredViewportMetrics as syncMeasuredViewportMetricsWithController,
-  VERTICAL_SCROLLOFF_ROWS,
-  viewportEquals
-} from "./dom-viewport";
+import { createDomEditorRuntime, type DomEditorContext } from "./dom-runtime";
+import { measureMetrics } from "./dom-viewport";
 import type {
-  DiagnosticSeverity,
   EditorCodeAction,
-  EditorDiagnostic,
   EditorLanguageServiceInput,
   EditorLanguageServices,
-  HighlightRole,
   LanguageProvider
 } from "@wx/editor-language";
 import { languageProviderToServices } from "@wx/editor-language";
@@ -116,20 +77,10 @@ interface LineChangeState {
 
 type LineChangesByLine = Map<number, LineChangeState>;
 
-const DIAGNOSTIC_SEVERITY_ORDER: Record<DiagnosticSeverity, number> = {
-  error: 0,
-  warning: 1,
-  info: 2,
-  hint: 3
-};
-
 const EMPTY_CELL_TEXT = "\u00a0";
 const INSERT_TAB_TEXT = "  ";
 
 const DEFAULT_INDENT_GUIDE_CHARACTER = "│";
-const END_OF_LINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "hint";
-const CURSOR_LINE_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "warning";
-const OTHER_LINES_INLINE_DIAGNOSTIC_MIN: DiagnosticSeverity = "error";
 
 interface RowView {
   visualRowIndex: number;
@@ -818,133 +769,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   controller.setHostServices(host);
   controller.setLanguageServices(languageServices);
   const presentation = controller.getPresentationState();
-  const viewportState = presentation.viewport;
-  const languageState = presentation.language;
-  const uiState = presentation.ui;
-  let rowViews: RowView[] = [];
-  let renderedViewport: LineViewport = { fromLine: 0, toLine: -1 };
-  let visualRows = [...viewportState.visualRows] as VisualRow[];
-  let lineVisualRanges = [...viewportState.lineVisualRanges] as Array<{ from: number; to: number }>;
-  let wrapColumns = viewportState.wrapColumns;
-  let wrapRevision = viewportState.wrapRevision;
-  let diagnostics = languageState.diagnostics;
-  let diagnosticsByLine = languageState.diagnosticsByLine;
-  let lineChangesByLine: LineChangesByLine = languageState.lineChangesByLine as LineChangesByLine;
-  let hoverAnchor = { left: 16, top: 16 };
-  let hoverAnchorFollowsCursor = false;
-  let appliedThemeName: string | null = null;
-  let renderedStatusSignature = "";
-  let renderedBottomBarSignature = "";
-  let renderedTooltipSignature = "";
-  let gutterWidth = 0;
-  let anchoredTopVisualRow = viewportState.topVisualRow;
-  let visibleLineCapacity = viewportState.visibleRowCapacity;
-  let destroyed = false;
-  let mountedContainer: HTMLElement | null = container;
-  let unsubscribeController = () => {};
-  let currentLayoutModel: EditorLayoutModel | null = null;
-  let pendingMountFrame = 0;
-  let resizeObserver: ResizeObserver | null = null;
-  let availableCommandThemes = normalizeCommandThemes(options.commandThemes, options.theme ?? defaultTheme);
-  let renderRuntime!: ReturnType<typeof createDomRenderRuntime>;
-  let chromeRuntime!: ReturnType<typeof createDomChromeRuntime>;
-
-  function syncViewportMirrors(): void {
-    anchoredTopVisualRow = viewportState.topVisualRow;
-    visibleLineCapacity = viewportState.visibleRowCapacity;
-    wrapColumns = viewportState.wrapColumns;
-    wrapRevision = viewportState.wrapRevision;
-    visualRows = viewportState.visualRows as VisualRow[];
-    lineVisualRanges = viewportState.lineVisualRanges as Array<{ from: number; to: number }>;
-  }
-
-  function syncLanguageMirrors(): void {
-    diagnostics = languageState.diagnostics;
-    diagnosticsByLine = languageState.diagnosticsByLine;
-    lineChangesByLine = languageState.lineChangesByLine as LineChangesByLine;
-  }
-
-  function syncPresentationMirrors(): void {
-    filePath = presentation.filePath;
-    syncViewportMirrors();
-    syncLanguageMirrors();
-    currentLayoutModel = null;
-  }
-
-  syncPresentationMirrors();
-
-  function getCurrentEffectiveThemeSpec(): ThemeSpec {
-    return getEffectiveThemeSpec(presentation, theme, availableCommandThemes);
-  }
-
-  function getCurrentEffectiveThemeName(): string {
-    return getEffectiveThemeName(presentation, theme);
-  }
-
-  function getCurrentStatusSignature(): string {
-    return readStatusSignature({
-      state,
-      presentation,
-      filePath,
-      diagnosticsSummary: getDiagnosticsSummary()
-    });
-  }
-
-  function getCurrentBottomBarSignature(): string {
-    return readBottomBarSignature(presentation);
-  }
-
-  function getCurrentTooltipSignature(): string {
-    return readTooltipSignature({ presentation, hoverAnchor });
-  }
-
-  function setHoverAnchor(next: { left: number; top: number }, followsCursor = false): void {
-    if (hoverAnchor.left === next.left && hoverAnchor.top === next.top && hoverAnchorFollowsCursor === followsCursor) {
-      return;
-    }
-
-    hoverAnchor = next;
-    hoverAnchorFollowsCursor = followsCursor;
-    currentLayoutModel = null;
-  }
-
-  function buildLayoutModelForViewport(_viewport: LineViewport): EditorLayoutModel {
-    if (currentLayoutModel) {
-      return currentLayoutModel;
-    }
-
-    const model = buildEditorLayout({
-      state,
-      presentation,
-      hoverAnchor: {
-        col: Math.max(0, Math.floor(hoverAnchor.left / Math.max(metrics.charWidth, 1))),
-        row: Math.max(0, Math.floor(hoverAnchor.top / Math.max(metrics.lineHeight, 1)))
-      },
-      indentGuides
-    });
-
-    currentLayoutModel = model;
-    return model;
-  }
-
-  function schedulePostMountReveal(): void {
-    if (pendingMountFrame) {
-      cancelAnimationFrame(pendingMountFrame);
-      pendingMountFrame = 0;
-    }
-
-    pendingMountFrame = requestAnimationFrame(() => {
-      pendingMountFrame = 0;
-      if (destroyed || !mountedContainer?.isConnected) {
-        return;
-      }
-      refreshGutterWidth(true);
-      refreshViewportMetricsIfNeeded(true);
-      revealCursor();
-      renderVisibleRows(true);
-    });
-  }
-
   const root = document.createElement("div");
   const surface = document.createElement("div");
   const rows = document.createElement("div");
@@ -961,7 +785,6 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
 
   mountStyles(root);
   applyThemeVariables(root, theme);
-  appliedThemeName = theme.name;
 
   root.className = "wx-editor";
   root.dataset.wxEditor = "root";
@@ -1010,621 +833,149 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   rows.append(viewportRows);
   surface.append(rows, tooltip, textarea);
   root.append(surface, commandPopover, status, bottomRow);
-  mountedContainer.replaceChildren(root);
+  container.replaceChildren(root);
 
-  function getSelectionLines(targetState: EditorState): Set<number> {
-    const lines = new Set<number>();
+  const context: DomEditorContext = {
+    controller,
+    root,
+    surface,
+    viewportRows,
+    tooltip,
+    commandPopover,
+    statusMode,
+    statusFile,
+    statusMeta,
+    bottomRow,
+    metrics,
+    commandThemes: options.commandThemes,
+    normalizeCommandThemes,
+    state,
+    presentation,
+    filePath,
+    theme,
+    languageServices,
+    availableCommandThemes: normalizeCommandThemes(options.commandThemes, options.theme ?? defaultTheme),
+    softWrap,
+    indentGuides,
+    rowViews: [] as RowView[],
+    renderedViewport: { fromLine: 0, toLine: -1 } as LineViewport,
+    visualRows: [...presentation.viewport.visualRows] as VisualRow[],
+    lineVisualRanges: [...presentation.viewport.lineVisualRanges] as Array<{ from: number; to: number }>,
+    wrapColumns: presentation.viewport.wrapColumns,
+    wrapRevision: presentation.viewport.wrapRevision,
+    diagnostics: presentation.language.diagnostics,
+    diagnosticsByLine: presentation.language.diagnosticsByLine,
+    lineChangesByLine: presentation.language.lineChangesByLine as LineChangesByLine,
+    hoverAnchor: { left: 16, top: 16 },
+    hoverAnchorFollowsCursor: false,
+    appliedThemeName: theme.name,
+    renderedStatusSignature: "",
+    renderedBottomBarSignature: "",
+    renderedTooltipSignature: "",
+    gutterWidth: 0,
+    anchoredTopVisualRow: presentation.viewport.topVisualRow,
+    visibleLineCapacity: presentation.viewport.visibleRowCapacity,
+    destroyed: false,
+    mountedContainer: container as HTMLElement | null,
+    currentLayoutModel: null,
+    pendingMountFrame: 0,
+    renderRuntime: null,
+    chromeRuntime: null
+  };
 
-    if (targetState.mode === "insert") {
-      lines.add(targetState.doc.positionAt(getCursorOffset(targetState.selection)).line);
-      return lines;
-    }
+  const runtime = createDomEditorRuntime(context);
+  runtime.syncPresentationMirrors();
 
-    const selection = getSelectionOffsets(targetState);
-    const fromLine = targetState.doc.positionAt(selection.from).line;
-    const endOffset = Math.max(selection.from, selection.to - 1);
-    const toLine = targetState.doc.positionAt(endOffset).line;
-
-    for (let line = fromLine; line <= toLine; line += 1) {
-      lines.add(line);
-    }
-
-    return lines;
-  }
-
-  function getActiveLine(targetState: EditorState): number {
-    const activeOffset =
-      targetState.mode === "insert" ? getCursorOffset(targetState.selection) : getActiveCharacterOffset(targetState);
-    return targetState.doc.positionAt(activeOffset).line;
-  }
-
-  function getVisualDirtyLines(previousState: EditorState, nextState: EditorState): Set<number> {
-    const lines = new Set<number>();
-
-    lines.add(getActiveLine(previousState));
-    lines.add(getActiveLine(nextState));
-
-    for (const line of getSelectionLines(previousState)) {
-      lines.add(line);
-    }
-
-    for (const line of getSelectionLines(nextState)) {
-      lines.add(line);
-    }
-
-    return lines;
-  }
-
-  function syncMeasuredViewportMetrics(force = false): boolean {
-    return syncMeasuredViewportMetricsWithController({
-      force,
-      controller,
-      softWrap,
-      metrics,
-      surface,
-      root,
-      container,
-      gutterWidth,
-      visibleLineCapacity,
-      wrapColumns,
-      viewportSoftWrap: viewportState.softWrap
-    });
-  }
-
-  function refreshViewportMetricsIfNeeded(force = false): boolean {
-    const changed = syncMeasuredViewportMetrics(force);
-    if (changed) {
-      syncPresentationMirrors();
-    }
-    return changed;
-  }
-
-  function getVisualRow(visualRowIndex: number): VisualRow {
-    return visualRows[Math.max(0, Math.min(visualRows.length - 1, visualRowIndex))] ?? {
-      docLine: 0,
-      visualRowIndex: 0,
-      segmentStart: 0,
-      segmentEnd: 0,
-      startColumn: 0,
-      isContinuation: false,
-      isLastSegment: true
-    };
-  }
-
-  function getVisualRowForOffset(offset: number): { rowIndex: number; column: number; row: VisualRow } {
-    const position = state.doc.positionAt(offset);
-    const line = state.doc.lineAt(position.line);
-    const range = lineVisualRanges[position.line] ?? { from: 0, to: 0 };
-    const rowOffset = softWrap && wrapColumns !== Number.MAX_SAFE_INTEGER ? Math.floor(position.column / wrapColumns) : 0;
-    const rowIndex = Math.max(range.from, Math.min(range.to, range.from + rowOffset));
-    const row = getVisualRow(rowIndex);
-    const maxColumn = Math.max(0, line.text.length - row.startColumn);
-    return {
-      rowIndex,
-      column: Math.max(0, Math.min(maxColumn, position.column - row.startColumn)),
-      row
-    };
-  }
-
-  function isDocLineVisible(lineIndex: number): boolean {
-    const range = lineVisualRanges[lineIndex];
-    return !!range && range.to >= renderedViewport.fromLine && range.from <= renderedViewport.toLine;
-  }
-
-  function refreshGutterWidth(force = false): void {
-    refreshMeasuredGutterWidth({
-      force,
-      gutterWidth,
-      metrics,
-      root,
-      lineCount: state.doc.lineCount,
-      setGutterWidth(width) {
-        gutterWidth = width;
-      }
-    });
-  }
-
-  function getLineDiagnostics(lineIndex: number): readonly EditorDiagnostic[] {
-    return diagnosticsByLine.get(lineIndex) ?? [];
-  }
-
-  function getLineDiagnosticSeverity(lineIndex: number): DiagnosticSeverity | null {
-    const entries = getLineDiagnostics(lineIndex);
-    let best: DiagnosticSeverity | null = null;
-
-    for (const entry of entries) {
-      if (!best || DIAGNOSTIC_SEVERITY_ORDER[entry.severity] < DIAGNOSTIC_SEVERITY_ORDER[best]) {
-        best = entry.severity;
-      }
-    }
-
-    return best;
-  }
-
-  function getLineChangeState(lineIndex: number): LineChangeState {
-    return lineChangesByLine.get(lineIndex) ?? { kind: null, deleted: false };
-  }
-
-  function getInlineDiagnosticForLine(lineIndex: number): EditorDiagnostic | null {
-    const entries = getLineDiagnostics(lineIndex);
-    const activeLine = getActiveLine(state);
-    return selectDiagnostic(
-      entries,
-      lineIndex === activeLine ? CURSOR_LINE_INLINE_DIAGNOSTIC_MIN : OTHER_LINES_INLINE_DIAGNOSTIC_MIN
-    );
-  }
-
-  function getEndOfLineDiagnosticForLine(lineIndex: number): EditorDiagnostic | null {
-    const entries = getLineDiagnostics(lineIndex);
-    return selectDiagnostic(entries, END_OF_LINE_DIAGNOSTIC_MIN, getInlineDiagnosticForLine(lineIndex));
-  }
-
-  function getDiagnosticsSummary(): { errors: number; warnings: number } {
-    let errors = 0;
-    let warnings = 0;
-
-    for (const entry of diagnostics) {
-      if (entry.severity === "error") {
-        errors += 1;
-      } else if (entry.severity === "warning") {
-        warnings += 1;
-      }
-    }
-
-    return { errors, warnings };
-  }
-
-  function getCurrentDiagnostic(): EditorDiagnostic | null {
-    const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-    const activeLine = state.doc.positionAt(activeOffset).line;
-    const activeLineDiagnostics = getLineDiagnostics(activeLine);
-
-    for (const entry of activeLineDiagnostics) {
-      if (activeOffset >= entry.from && activeOffset < entry.to) {
-        return entry;
-      }
-    }
-
-    return activeLineDiagnostics[0] ?? null;
-  }
-
-  function getRenderedLayout(): EditorLayoutModel {
-    return buildLayoutModelForViewport(
-      renderedViewport.toLine >= renderedViewport.fromLine
-        ? renderedViewport
-        : expandViewport(getVisibleViewport(), Math.max(1, visualRows.length))
-    );
-  }
-
-  renderRuntime = createDomRenderRuntime({
+  const renderRuntime = createDomRenderRuntime({
     root,
     viewportRows,
-    getState: () => state,
+    getState: () => context.state,
     getPresentation: () => presentation,
-    getUiState: () => uiState,
-    getMetrics: () => metrics,
-    getHoverAnchor: () => hoverAnchor,
-    getVisualRows: () => visualRows,
-    getLineVisualRanges: () => lineVisualRanges,
-    getWrapColumns: () => wrapColumns,
+    getUiState: () => presentation.ui,
+    getMetrics: () => context.metrics,
+    getHoverAnchor: () => context.hoverAnchor,
+    getVisualRows: () => context.visualRows,
+    getLineVisualRanges: () => context.lineVisualRanges,
+    getWrapColumns: () => context.wrapColumns,
     getSoftWrap: () => softWrap,
-    getVisibleViewport,
-    getRenderedViewport: () => renderedViewport,
+    getVisibleViewport: runtime.getVisibleViewport,
+    getRenderedViewport: () => context.renderedViewport,
     setRenderedViewport(viewport) {
-      renderedViewport = viewport;
+      context.renderedViewport = viewport;
     },
-    getVisibleLineCapacity,
-    getRowViews: () => rowViews,
+    getVisibleLineCapacity: runtime.getVisibleLineCapacity,
+    getRowViews: () => context.rowViews,
     setRowViews(next) {
-      rowViews = next;
+      context.rowViews = next;
     },
-    getCurrentLayoutModel: () => currentLayoutModel,
-    buildLayoutModelForViewport,
-    getVisualRow,
-    getRowViewByVisualRowIndex,
-    getLineDiagnostics,
-    getRenderedLayout,
+    getCurrentLayoutModel: () => context.currentLayoutModel,
+    buildLayoutModelForViewport: runtime.buildLayoutModelForViewport,
+    getVisualRow: runtime.getVisualRow,
+    getRowViewByVisualRowIndex: runtime.getRowViewByVisualRowIndex,
+    getLineDiagnostics: runtime.getLineDiagnostics,
+    getRenderedLayout: runtime.getRenderedLayout,
     EMPTY_CELL_TEXT,
     indentGuides
   });
+  context.renderRuntime = renderRuntime;
 
-  chromeRuntime = createDomChromeRuntime({
+  const chromeRuntime = createDomChromeRuntime({
     bottomRow,
     commandPopover,
     statusMode,
     statusFile,
     statusMeta,
     tooltip,
-    getState: () => state,
+    getState: () => context.state,
     getPresentation: () => presentation,
-    getUiState: () => uiState,
-    getFilePath: () => filePath,
-    getMetrics: () => metrics,
-    getRenderedLayout,
-    getDiagnosticsSummary,
-    getCurrentStatusSignature,
+    getUiState: () => presentation.ui,
+    getFilePath: () => context.filePath,
+    getMetrics: () => context.metrics,
+    getRenderedLayout: runtime.getRenderedLayout,
+    getDiagnosticsSummary() {
+      let errors = 0;
+      let warnings = 0;
+      for (const entry of context.diagnostics) {
+        if (entry.severity === "error") {
+          errors += 1;
+        } else if (entry.severity === "warning") {
+          warnings += 1;
+        }
+      }
+      return { errors, warnings };
+    },
+    getCurrentStatusSignature: runtime.getCurrentStatusSignature,
     setRenderedStatusSignature(signature) {
-      renderedStatusSignature = signature;
+      context.renderedStatusSignature = signature;
     },
-    getCurrentBottomBarSignature,
+    getCurrentBottomBarSignature: runtime.getCurrentBottomBarSignature,
     setRenderedBottomBarSignature(signature) {
-      renderedBottomBarSignature = signature;
+      context.renderedBottomBarSignature = signature;
     },
-    getCurrentTooltipSignature,
+    getCurrentTooltipSignature: runtime.getCurrentTooltipSignature,
     setRenderedTooltipSignature(signature) {
-      renderedTooltipSignature = signature;
+      context.renderedTooltipSignature = signature;
+    }
+  });
+  context.chromeRuntime = chromeRuntime;
+
+  const events = createDomEventRuntime(context, runtime);
+  let unsubscribeController = controller.subscribe(runtime.handleControllerUpdate);
+  const handle = createDomHandleRuntime({
+    controller,
+    context,
+    runtime,
+    normalizeLanguageServices,
+    unsubscribeController() {
+      unsubscribeController();
+    },
+    disconnectResizeObserver() {
+      resizeObserver?.disconnect();
+      resizeObserver = null;
     }
   });
 
-  function getRowViewByVisualRowIndex(visualRowIndex: number): RowView | null {
-    return rowViews.find((view) => view.visualRowIndex === visualRowIndex) ?? null;
-  }
-
-  function tryPatchSimpleCursorMove(previousState: EditorState, nextState: EditorState): boolean {
-    return renderRuntime.tryPatchSimpleCursorMove(previousState, nextState);
-  }
-
-  function patchRowView(view: RowView, layoutRow: EditorLayoutModel["document"]["rows"][number]): void {
-    renderRuntime.patchRowView(view, layoutRow);
-  }
-
-  function getVisibleViewport(): LineViewport {
-    const lineCount = Math.max(1, visualRows.length);
-    const fromLine = Math.max(0, Math.min(lineCount - 1, anchoredTopVisualRow));
-    const toLine = Math.min(lineCount - 1, fromLine + visibleLineCapacity - 1);
-
-    return { fromLine, toLine };
-  }
-
-  function getVisibleLineCapacity(): number {
-    return visibleLineCapacity;
-  }
-
-  function getVerticalScrolloffRows(): number {
-    const capacity = getVisibleLineCapacity();
-    return Math.max(0, Math.min(VERTICAL_SCROLLOFF_ROWS, Math.floor((capacity - 1) / 2)));
-  }
-
-  function renderVisibleRows(force = false): void {
-    renderRuntime.renderVisibleRows(force);
-  }
-
-  function renderDirtyRows(dirtyLines: ReadonlySet<number>): boolean {
-    return renderRuntime.renderDirtyRows(dirtyLines);
-  }
-
-  function patchStatus(): void {
-    chromeRuntime.patchStatus();
-  }
-
-  function patchBottomRow(): void {
-    chromeRuntime.patchBottomRow();
-  }
-
-  function renderSurfaceSnapshot(options: {
-    forceRows?: boolean;
-    syncTheme?: boolean;
-    patchTooltip?: boolean;
-  } = {}): void {
-    if (options.syncTheme) {
-      syncRenderedThemeFromPresentation(true);
-    }
-
-    if (options.forceRows) {
-      renderVisibleRows(true);
-    }
-
-    patchStatus();
-    patchBottomRow();
-
-    if (options.patchTooltip) {
-      patchTooltip();
-    }
-  }
-
-  function handleControllerUpdate(update: EditorUpdate): void {
-    const previousState = update.prevState;
-    const nextState = update.nextState;
-    const previousVisibleViewport = getVisibleViewport();
-    const effectTypes = (update.transaction.effects ?? []).map((effect) => effect.type);
-    const changes = update.transaction.changes ?? [];
-    const hasDocumentChanges = update.docChanged || changes.length > 0;
-    const isPresentationOnlyUpdate = !hasDocumentChanges && !update.selectionChanged && !update.modeChanged;
-    const insertModeTransition =
-      update.modeChanged && (previousState.mode === "insert" || nextState.mode === "insert");
-    const previousDigits = String(Math.max(1, previousState.doc.lineCount)).length;
-    const nextDigits = String(Math.max(1, nextState.doc.lineCount)).length;
-    const dirtyLines =
-      !hasDocumentChanges && (update.selectionChanged || update.modeChanged) && !insertModeTransition
-        ? getVisualDirtyLines(previousState, nextState)
-        : null;
-
-    state = nextState;
-    syncPresentationMirrors();
-    const viewportChanged = !viewportEquals(previousVisibleViewport, getVisibleViewport());
-    const work = computeRenderWork({
-      hasDocumentChanges,
-      selectionChanged: update.selectionChanged,
-      modeChanged: update.modeChanged,
-      insertModeTransition,
-      viewportChanged,
-      digitsChanged: previousDigits !== nextDigits,
-      isPresentationOnlyUpdate,
-      hasDirtyLines: !!dirtyLines && dirtyLines.size > 0,
-      effectTypes,
-      themeChanged: appliedThemeName !== getCurrentEffectiveThemeName(),
-      statusChanged: renderedStatusSignature !== getCurrentStatusSignature(),
-      bottomBarChanged: renderedBottomBarSignature !== getCurrentBottomBarSignature(),
-      tooltipChanged: renderedTooltipSignature !== getCurrentTooltipSignature()
-    });
-
-    if (work.syncTheme) {
-      syncRenderedThemeFromPresentation();
-    }
-
-    if (work.refreshGutterMetrics) {
-      refreshGutterWidth(true);
-      if (refreshViewportMetricsIfNeeded(true)) {
-        return;
-      }
-    }
-
-    if (work.renderVisibleRows) {
-      renderVisibleRows(true);
-    } else if (work.trySimpleCursorPatch && dirtyLines && tryPatchSimpleCursorMove(previousState, nextState)) {
-      // Fast path applied.
-    } else if (work.tryDirtyRowPatch && dirtyLines && renderDirtyRows(dirtyLines)) {
-      // Dirty row patch applied.
-    } else if (work.trySimpleCursorPatch || work.tryDirtyRowPatch) {
-      renderVisibleRows(true);
-    }
-
-    if (work.patchStatus) {
-      patchStatus();
-    }
-
-    if (work.patchBottomRow) {
-      patchBottomRow();
-    }
-
-    if (work.patchTooltip) {
-      patchTooltip();
-    }
-  }
-
-  function syncRenderedThemeFromPresentation(force = false): boolean {
-    const nextTheme = getCurrentEffectiveThemeSpec();
-    const nextThemeName = getCurrentEffectiveThemeName();
-
-    if (!presentation.ui.previewTheme && presentation.themeName && nextTheme.name === presentation.themeName) {
-      theme = nextTheme;
-      availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
-    }
-
-    if (!force && appliedThemeName === nextThemeName) {
-      return false;
-    }
-
-    applyThemeVariables(root, nextTheme);
-    appliedThemeName = nextThemeName;
-    return true;
-  }
-
-  function patchCommandPopover(): void {
-    chromeRuntime.patchCommandPopover();
-  }
-
-  function patchTooltip(): void {
-    chromeRuntime.patchTooltip();
-  }
-
-  function clearHover(preservePinned = false): void {
-    if (controller.clearHover({ preservePinned })) {
-      hoverAnchorFollowsCursor = false;
-      syncPresentationMirrors();
-      patchTooltip();
-    }
-  }
-
-  function showDiagnosticTooltip(diagnostic: EditorDiagnostic, anchor: DOMRect, pinned = false): void {
-    setHoverAnchor(getTooltipAnchorForRect(root, anchor), false);
-    controller.showDiagnosticHover(diagnostic, { pinned });
-  }
-
-  async function requestHover(offset: number, anchor: DOMRect, pinned = false): Promise<boolean> {
-    if (uiState.hover.active && uiState.hover.offset === offset && uiState.hover.pinned === pinned) {
-      setHoverAnchor(getTooltipAnchorForRect(root, anchor), pinned);
-      patchTooltip();
-      return true;
-    }
-
-    setHoverAnchor(getTooltipAnchorForRect(root, anchor), pinned);
-    const shown = await controller.requestHoverAt(offset, { pinned });
-    if (!destroyed) {
-      syncPresentationMirrors();
-      patchTooltip();
-    }
-    return shown;
-  }
-
-  async function applyCodeActionInternal(action: EditorCodeAction): Promise<boolean> {
-    return controller.applyCodeAction(action);
-  }
-
-  async function readSystemClipboard(): Promise<string | null> {
-    const clipboard = navigator.clipboard;
-
-    if (!clipboard?.readText) {
-      controller.setBottomMessage({ tone: "warning", text: "System clipboard is unavailable" });
-      return null;
-    }
-
-    try {
-      return await clipboard.readText();
-    } catch {
-      controller.setBottomMessage({ tone: "error", text: "Could not read the system clipboard" });
-      return null;
-    }
-  }
-
-  function revealCursor(): void {
-    controller.revealSelection();
-    syncViewportMirrors();
-  }
-
-  function syncKeyboardHoverAnchor(): void {
-    if (!uiState.hover.active || !uiState.hover.pinned || !hoverAnchorFollowsCursor) {
-      return;
-    }
-
-    const anchorElement = root.querySelector<HTMLElement>("[data-wx-editor-cursor='true']");
-    const anchorRect = anchorElement?.getBoundingClientRect() ?? root.getBoundingClientRect();
-    setHoverAnchor(getTooltipAnchorForRect(root, anchorRect), true);
-    patchTooltip();
-  }
-
-  async function forwardKeydownToController(event: KeyboardEvent): Promise<void> {
-    const result = await controller.handleKeyInput(keyboardInputForEvent(event), {
-      themeNames: availableCommandThemes.map((entry) => entry.name),
-      readClipboardText: readSystemClipboard
-    });
-
-    if (destroyed) {
-      return;
-    }
-
-    syncPresentationMirrors();
-    syncRenderedThemeFromPresentation();
-    if (uiState.hover.active && uiState.hover.pinned) {
-      hoverAnchorFollowsCursor = true;
-    }
-    syncKeyboardHoverAnchor();
-
-    if (result.themeName !== undefined) {
-      syncRenderedThemeFromPresentation();
-      patchBottomRow();
-    }
-  }
-
-  function handleKeydown(event: KeyboardEvent): void {
-    if (
-      isBrowserPasteShortcut(event, {
-        state,
-        commandLineActive: uiState.commandLine.active,
-        pickerActive: uiState.picker.active
-      })
-    ) {
-      return;
-    }
-
-    if (
-      !shouldRouteKeydown(event, {
-        state,
-        commandLineActive: uiState.commandLine.active,
-        pickerActive: uiState.picker.active,
-        flashActive: uiState.flash.active,
-        pendingAction: uiState.pendingAction,
-        stickyViewMode: uiState.stickyViewMode,
-        hoverActive: uiState.hover.active
-      })
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    textarea.value = "";
-    void forwardKeydownToController(event);
-  }
-
-  function handleWheel(event: WheelEvent): void {
-    if (event.metaKey || event.ctrlKey || uiState.commandLine.active) {
-      return;
-    }
-
-    if (event.deltaY === 0) {
-      return;
-    }
-
-    event.preventDefault();
-    textarea.focus();
-    textarea.value = "";
-    controller.scrollViewportBy(event.deltaY > 0 ? 1 : -1);
-  }
-
-  function handlePaste(event: ClipboardEvent): void {
-    if (state.mode !== "insert" || uiState.commandLine.active || uiState.picker.active) {
-      return;
-    }
-
-    const pastedText = event.clipboardData?.getData("text/plain") ?? "";
-
-    if (!pastedText) {
-      return;
-    }
-
-    event.preventDefault();
-    textarea.value = "";
-    void controller.handleTextInput(pastedText, {
-      themeNames: availableCommandThemes.map((entry) => entry.name),
-      readClipboardText: readSystemClipboard
-    });
-  }
-
-  function handleMouseMove(event: MouseEvent): void {
-    if (uiState.commandLine.active || uiState.picker.active) {
-      return;
-    }
-
-    const sourceElement = event.target instanceof Element ? event.target : null;
-    const marker = sourceElement?.closest<HTMLElement>("[data-wx-editor-diagnostic-marker]");
-
-    if (marker?.dataset.wxEditorDiagnosticMarker) {
-      const row = marker.closest<HTMLElement>("[data-wx-editor-row]");
-      const lineIndex = row?.dataset.wxEditorRow ? Number(row.dataset.wxEditorRow) - 1 : null;
-      const diagnostic = lineIndex === null || Number.isNaN(lineIndex) ? null : getLineDiagnostics(lineIndex)[0] ?? null;
-
-      if (diagnostic) {
-        showDiagnosticTooltip(diagnostic, marker.getBoundingClientRect(), false);
-        return;
-      }
-    }
-
-    const target = sourceElement?.closest<HTMLElement>("[data-wx-editor-offset]") ?? null;
-
-    if (!target?.dataset.wxEditorOffset) {
-      clearHover(true);
-      return;
-    }
-
-    const offset = resolveOffsetWithinRun(
-      target,
-      Number(target.dataset.wxEditorOffset),
-      target.dataset.wxEditorOffsetEnd ? Number(target.dataset.wxEditorOffsetEnd) : null,
-      event.clientX
-    );
-
-    if (offset === null || Number.isNaN(offset)) {
-      clearHover(true);
-      return;
-    }
-
-    if (uiState.hover.active && uiState.hover.offset === offset && !uiState.hover.pinned) {
-      return;
-    }
-
-    const activeDiagnostic = diagnostics.find((entry) => offset >= entry.from && offset < entry.to) ?? null;
-
-    if (activeDiagnostic) {
-      showDiagnosticTooltip(activeDiagnostic, target.getBoundingClientRect(), false);
-      return;
-    }
-
-    void requestHover(offset, target.getBoundingClientRect(), false);
-  }
-
-  function handleMouseLeave(): void {
-    clearHover(true);
-  }
+  let resizeObserver: ResizeObserver | null = null;
 
   root.addEventListener("focus", () => {
     if (document.activeElement !== textarea) {
@@ -1634,101 +985,31 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   root.addEventListener("mousedown", () => {
     textarea.focus();
   });
-  textarea.addEventListener("keydown", handleKeydown);
-  textarea.addEventListener("paste", handlePaste);
-  surface.addEventListener("wheel", handleWheel, { passive: false });
-  viewportRows.addEventListener("mousemove", handleMouseMove);
-  viewportRows.addEventListener("mouseleave", handleMouseLeave);
-  unsubscribeController = controller.subscribe(handleControllerUpdate);
+  textarea.addEventListener("keydown", events.handleKeydown);
+  textarea.addEventListener("paste", events.handlePaste);
+  surface.addEventListener("wheel", events.handleWheel, { passive: false });
+  viewportRows.addEventListener("mousemove", events.handleMouseMove);
+  viewportRows.addEventListener("mouseleave", events.handleMouseLeave);
 
-  refreshGutterWidth(true);
-  refreshViewportMetricsIfNeeded(true);
-  revealCursor();
-  renderSurfaceSnapshot({ forceRows: true });
-  schedulePostMountReveal();
+  runtime.refreshGutterWidth(true);
+  runtime.refreshViewportMetricsIfNeeded(true);
+  runtime.revealCursor();
+  runtime.renderSurfaceSnapshot({ forceRows: true });
+  runtime.schedulePostMountReveal();
 
   if (typeof ResizeObserver !== "undefined") {
     resizeObserver = new ResizeObserver(() => {
-      refreshGutterWidth(true);
-      if (refreshViewportMetricsIfNeeded()) {
+      runtime.refreshGutterWidth(true);
+      if (runtime.refreshViewportMetricsIfNeeded()) {
         return;
       }
-      renderVisibleRows(true);
+      runtime.renderVisibleRows(true);
     });
     resizeObserver.observe(surface);
   }
 
   return {
     controller,
-    mount(nextContainer: HTMLElement) {
-      mountedContainer = nextContainer;
-      mountedContainer.replaceChildren(root);
-      refreshGutterWidth(true);
-      refreshViewportMetricsIfNeeded(true);
-      revealCursor();
-      renderSurfaceSnapshot({ forceRows: true });
-      schedulePostMountReveal();
-    },
-    destroy() {
-      destroyed = true;
-      resizeObserver?.disconnect();
-      resizeObserver = null;
-      if (pendingMountFrame) {
-        cancelAnimationFrame(pendingMountFrame);
-        pendingMountFrame = 0;
-      }
-      unsubscribeController();
-      for (const services of languageServices) {
-        services.highlighter?.destroy?.();
-      }
-      root.remove();
-    },
-    focus() {
-      textarea.focus();
-    },
-    format() {
-      return controller.formatDocument();
-    },
-    getCodeActions() {
-      return controller.requestCodeActions();
-    },
-    applyCodeAction(action: EditorCodeAction) {
-      return applyCodeActionInternal(action);
-    },
-    subscribe(listener) {
-      return controller.subscribe(listener);
-    },
-    getState() {
-      return controller.getState();
-    },
-    setFilePath(nextFilePath: string) {
-      filePath = nextFilePath;
-      controller.setFilePath(nextFilePath);
-      patchStatus();
-    },
-    async setLanguageServices(nextLanguageServices: EditorLanguageServiceInput | null) {
-      for (const services of languageServices) {
-        services.highlighter?.destroy?.();
-      }
-      languageServices = normalizeLanguageServices(nextLanguageServices);
-      controller.setLanguageServices(languageServices);
-      syncLanguageMirrors();
-      renderSurfaceSnapshot({ forceRows: true });
-    },
-    async setLanguage(nextLanguage: LanguageProvider | null) {
-      await this.setLanguageServices(languageProviderToServices(nextLanguage));
-    },
-    setTheme(nextTheme: ThemeSpec) {
-      theme = nextTheme;
-      controller.setThemeName(nextTheme.name);
-      availableCommandThemes = normalizeCommandThemes(options.commandThemes, theme);
-      appliedThemeName = null;
-      renderSurfaceSnapshot({ syncTheme: true });
-    },
-    async setValue(value: string) {
-      controller.replaceState(createEditorState({ value, selection: createSelection(0, 0) }));
-      controller.alignViewportToSelection("top");
-      syncLanguageMirrors();
-    }
+    ...handle
   };
 }
