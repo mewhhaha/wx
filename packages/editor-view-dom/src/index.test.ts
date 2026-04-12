@@ -139,6 +139,8 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-cursor='true']")?.textContent).toBe("o");
     expect(container.querySelector("[data-wx-editor-cursor='true']")?.getAttribute("data-wx-editor-cursor-kind")).toBe("block");
     expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" NOR ");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.getAttribute("data-mode")).toBe("NOR");
+    expect(container.querySelector('[data-wx-editor-gutter="1"] .wx-editor__gutter-number')?.getAttribute("data-active")).toBe("true");
   });
 
   it("moves the cursor with hjkl and arrow keys", () => {
@@ -341,7 +343,7 @@ describe("createEditor", () => {
     expect(container.querySelector('[data-wx-editor-content="2"] .wx-indent-guide')?.textContent).toBe("╎");
   });
 
-  it("scrolls the viewport with mouse wheel input without moving the cursor", () => {
+  it("moves the cursor with mouse wheel input and reveals viewport normally", async () => {
     const container = document.createElement("div");
     document.body.append(container);
 
@@ -354,13 +356,15 @@ describe("createEditor", () => {
     editor.mount(container);
 
     surface.dispatchEvent(new WheelEvent("wheel", { deltaY: 50, bubbles: true, cancelable: true }));
-    expect(visibleRows(container)[0]).toBe(2);
+    await flushAsyncWork();
+    expect(visibleRows(container)[0]).toBe(1);
     expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0)).toEqual({
-      line: 0,
+      line: 1,
       column: 0
     });
 
     surface.dispatchEvent(new WheelEvent("wheel", { deltaY: -50, bubbles: true, cancelable: true }));
+    await flushAsyncWork();
     expect(visibleRows(container)[0]).toBe(1);
     expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0)).toEqual({
       line: 0,
@@ -498,6 +502,7 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
     expect(container.querySelector("[data-wx-editor-cursor='true']")?.getAttribute("data-wx-editor-cursor-kind")).toBe("line");
     expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" INS ");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.getAttribute("data-mode")).toBe("INS");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 
@@ -505,6 +510,7 @@ describe("createEditor", () => {
     expect(editor.getState().mode).toBe("normal");
     expect(container.querySelector("[data-wx-editor-cursor='true']")?.getAttribute("data-wx-editor-cursor-kind")).toBe("block");
     expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" NOR ");
+    expect(container.querySelector("[data-wx-editor-status-mode='true']")?.getAttribute("data-mode")).toBe("NOR");
   });
 
   it("shows the line cursor when append enters insert mode at the end of a line", () => {

@@ -321,6 +321,11 @@ export function createDomRenderRuntime(options: CreateDomRenderRuntimeOptions): 
 
       previousView.row.classList.toggle("wx-row-active", previousVisual.rowIndex === nextVisual.rowIndex);
       nextView.row.classList.add("wx-row-active");
+      previousView.gutter.querySelector<HTMLElement>(".wx-editor__gutter-number")?.setAttribute(
+        "data-active",
+        String(previousVisual.rowIndex === nextVisual.rowIndex)
+      );
+      nextView.gutter.querySelector<HTMLElement>(".wx-editor__gutter-number")?.setAttribute("data-active", "true");
 
       if (nextState.mode === "insert") {
         options.root
@@ -368,6 +373,7 @@ export function createDomRenderRuntime(options: CreateDomRenderRuntimeOptions): 
       gutterMarker.dataset.severity = markerRun?.severity ?? "";
       gutterMarker.dataset.wxEditorDiagnosticMarker = markerRun?.severity ?? "";
       gutterNumber.className = "wx-editor__gutter-number";
+      gutterNumber.dataset.active = String(layoutRow.isActive);
       gutterNumber.textContent = numberRun?.text ?? String(lineIndex + 1);
       gutterChange.className = "wx-editor__gutter-change";
       gutterChange.dataset.change = changeRun?.lineChangeKind ?? "";

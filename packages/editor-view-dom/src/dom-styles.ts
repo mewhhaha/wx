@@ -103,6 +103,11 @@ const EDITOR_STYLE_TEXT = `
     grid-column: 2;
   }
 
+  .wx-editor__gutter-number[data-active="true"] {
+    color: var(--wx-color-text);
+    font-weight: 700;
+  }
+
   .wx-editor__gutter-change {
     position: relative;
     width: 0.45ch;
@@ -391,10 +396,25 @@ const EDITOR_STYLE_TEXT = `
     min-width: 0;
     height: 100%;
     padding: 0 1ch;
-    background: #f4f4f5;
-    color: #0b0d12;
+    background: var(--wx-color-cursor);
+    color: var(--wx-color-cursor-text);
     font-weight: 700;
     letter-spacing: 0.06em;
+  }
+
+  .wx-editor__status-mode[data-mode="INS"] {
+    background: var(--wx-color-string);
+    color: var(--wx-color-background);
+  }
+
+  .wx-editor__status-mode[data-mode="VIS"] {
+    background: var(--wx-color-keyword);
+    color: var(--wx-color-background);
+  }
+
+  .wx-editor__status-mode[data-mode="JMP"] {
+    background: var(--wx-color-type);
+    color: var(--wx-color-background);
   }
 
   .wx-editor__status-file {

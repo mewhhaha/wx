@@ -37,7 +37,10 @@ export function createDomEventRuntime(context: DomEditorContext, runtime: DomEdi
       themeNames: context.availableCommandThemes.map((entry) => entry.name),
       readClipboardText: readSystemClipboard
     });
+    syncAfterControllerInput(result.themeName);
+  };
 
+  const syncAfterControllerInput = (themeName: string | null | undefined): void => {
     if (context.destroyed) {
       return;
     }
@@ -49,7 +52,7 @@ export function createDomEventRuntime(context: DomEditorContext, runtime: DomEdi
     }
     runtime.syncKeyboardHoverAnchor();
 
-    if (result.themeName !== undefined) {
+    if (themeName !== undefined) {
       runtime.syncRenderedThemeFromPresentation();
       runtime.patchBottomRow();
     }
@@ -106,7 +109,19 @@ export function createDomEventRuntime(context: DomEditorContext, runtime: DomEdi
       if (textarea) {
         textarea.value = "";
       }
-      context.controller.scrollViewportBy(event.deltaY > 0 ? 1 : -1);
+      const key = event.deltaY > 0 ? "ArrowDown" : "ArrowUp";
+      const steps = Math.max(1, Math.round(Math.abs(event.deltaY) / 48));
+      void (async () => {
+        let themeName: string | null | undefined;
+        for (let index = 0; index < steps; index += 1) {
+          const result = await context.controller.handleKeyInput({ key, source: "dom" }, {
+            themeNames: context.availableCommandThemes.map((entry) => entry.name),
+            readClipboardText: readSystemClipboard
+          });
+          themeName = result.themeName;
+        }
+        syncAfterControllerInput(themeName);
+      })();
     },
     handlePaste(event) {
       const uiState = context.presentation.ui;

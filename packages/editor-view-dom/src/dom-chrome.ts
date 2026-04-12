@@ -24,23 +24,23 @@ interface CreateDomChromeRuntimeOptions {
   setRenderedTooltipSignature(signature: string): void;
 }
 
-function getStatusModeText(
+function getStatusModeName(
   mode: EditorState["mode"],
   ui: { flash: { active: boolean }; pendingAction: { kind: string } | null }
-): string {
+): "JMP" | "INS" | "VIS" | "NOR" {
   if (ui.flash.active || ui.pendingAction?.kind === "flash-target") {
-    return " JMP ";
+    return "JMP";
   }
 
   if (mode === "insert") {
-    return " INS ";
+    return "INS";
   }
 
   if (mode === "visual") {
-    return " VIS ";
+    return "VIS";
   }
 
-  return " NOR ";
+  return "NOR";
 }
 
 export interface DomChromeRuntime {
@@ -94,11 +94,13 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
       const cursorOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
       const cursorPosition = state.doc.positionAt(cursorOffset);
       const { errors, warnings } = options.getDiagnosticsSummary();
-
-      options.statusMode.textContent = getStatusModeText(state.mode, {
+      const statusModeName = getStatusModeName(state.mode, {
         flash: uiState.flash,
         pendingAction: uiState.pendingAction
       });
+
+      options.statusMode.textContent = ` ${statusModeName} `;
+      options.statusMode.dataset.mode = statusModeName;
       options.statusFile.textContent = ` ${options.getFilePath()}`;
       options.statusMeta.textContent = [
         "1 sel",
