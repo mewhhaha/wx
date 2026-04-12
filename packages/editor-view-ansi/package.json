@@ -25,5 +25,8 @@
     "@wx/editor-tree-sitter": "workspace:*",
     "tree-sitter-typescript": "^0.23.2",
     "web-tree-sitter": "^0.26.8"
+  },
+  "devDependencies": {
+    "@wx/editor-view-dom": "workspace:*"
   }
 }

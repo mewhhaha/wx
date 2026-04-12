@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import {
   appendInsertMode,
@@ -11,9 +10,10 @@ import {
   createSelection,
   enterInsertMode,
   moveRight
-} from "../../editor-core/src/index";
-import { createEditorController } from "../../editor-controller/src/index";
-import { createEditor } from "../../editor-view-dom/src/index";
+} from "@wx/editor-core";
+import { createEditorController } from "@wx/editor-controller";
+import { createEditor } from "@wx/editor-view-dom";
+import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
 import { createAnsiEditorMirror, renderEditorAnsiFrame } from "./index";
 import { createAnsiEditorTerminal } from "./index";
@@ -111,8 +111,12 @@ class FakeOutput {
 describe("@wx/editor-view-ansi", () => {
   it("keeps tree-sitter runtime ownership in the shared tree-sitter package", () => {
     const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/demo-runtime.ts"), "utf8");
+    const configSource = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/tsup.config.ts"), "utf8");
 
-    expect(source).toContain("../../editor-tree-sitter/src/node");
+    expect(source).toContain('@wx/editor-tree-sitter/node');
+    expect(source).toContain('@wx/editor-theme');
+    expect(source).not.toContain("apps/playground/src/phTheme");
+    expect(configSource).not.toContain("../editor-tree-sitter/src/nodeWorker.ts");
     expect(source).not.toContain("treeSitter.worker");
     expect(source).not.toContain("worker_threads");
     expect(source).not.toContain("createNodeWorkerBridge");
@@ -120,11 +124,19 @@ describe("@wx/editor-view-ansi", () => {
 
   it("routes ANSI runtime keyboard input through controller key APIs only", () => {
     const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/terminal.ts"), "utf8");
+    const indexSource = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/index.ts"), "utf8");
 
+    expect(indexSource).toContain('from "@wx/editor-controller"');
     expect(source).toContain("controller.handleKeyInput");
+    expect(source).toContain("normalizeLanguageServices");
     expect(source).not.toContain("controller.openCommandLine(");
     expect(source).not.toContain("controller.handleCommandLineKey(");
     expect(source).not.toContain("controller.updatePresentationState(");
+    expect(source).not.toContain("function normalizeLanguageServices(");
+  });
+
+  it("keeps ANSI runtime modules on public package surfaces only", () => {
+    expect(collectCrossPackageSrcLeaks("packages/editor-view-ansi/src")).toEqual([]);
   });
 
   it("renders plain text rows with gutters, status, and bottom rows", () => {

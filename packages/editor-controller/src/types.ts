@@ -16,7 +16,7 @@ import type {
   EditorLineRange,
   HighlightSpan
 } from "@wx/editor-language";
-import type { EditorLineVisualRange, EditorVisualRow } from "../../editor-layout/src/index";
+import type { EditorLineVisualRange, EditorVisualRow } from "@wx/editor-layout";
 
 export interface HistoryEntry {
   doc: EditorState["doc"];

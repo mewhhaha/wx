@@ -1,10 +1,9 @@
-import { createEditorController } from "../../editor-controller/src/index";
+import { createEditorController, normalizeLanguageServices } from "@wx/editor-controller";
 import {
   languageProviderToServices,
-  type EditorLanguageServiceInput,
-  type EditorLanguageServices
-} from "../../editor-language/src/index";
-import { defaultTheme, type ThemeSpec } from "../../editor-theme/src/index";
+  type EditorLanguageServiceInput
+} from "@wx/editor-language";
+import { defaultTheme, normalizeCommandThemes, type ThemeSpec } from "@wx/editor-theme";
 
 import { renderEditorAnsiFrame } from "./frame";
 import type {
@@ -24,31 +23,6 @@ function normalizeIndentGuides(input: CreateAnsiEditorMirrorOptions["indentGuide
     skipLevels: input?.skipLevels ?? 0,
     indentWidth: input?.indentWidth ?? 2
   };
-}
-
-function normalizeLanguageServices(input: EditorLanguageServiceInput | null | undefined): EditorLanguageServices[] {
-  if (!input) {
-    return [];
-  }
-
-  return Array.isArray(input) ? [...input] : [input];
-}
-
-function normalizeCommandThemes(themes: readonly ThemeSpec[] | undefined, activeTheme: ThemeSpec): ThemeSpec[] {
-  const seen = new Set<string>();
-  const nextThemes: ThemeSpec[] = [];
-
-  for (const theme of [activeTheme, defaultTheme, ...(themes ?? [])]) {
-    const key = theme.name.trim().toLowerCase();
-    if (!key || seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    nextThemes.push(theme);
-  }
-
-  return nextThemes;
 }
 
 function removeListener<T extends (...args: never[]) => void>(

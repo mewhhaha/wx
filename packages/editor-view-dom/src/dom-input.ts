@@ -1,5 +1,5 @@
 import type { EditorState } from "@wx/editor-core";
-import type { EditorPendingAction } from "../../editor-controller/src/index";
+import type { EditorPendingAction } from "@wx/editor-controller";
 
 export function keyboardInputForEvent(event: KeyboardEvent) {
   return {

@@ -1,5 +1,5 @@
-import type { EditorController } from "../../editor-controller/src/index";
-import type { ThemeSpec } from "../../editor-theme/src/index";
+import type { EditorController } from "@wx/editor-controller";
+import type { ThemeSpec } from "@wx/editor-theme";
 
 const SURFACE_VERTICAL_PADDING = 16;
 const VIEWPORT_OVERSCAN_LINES = 6;

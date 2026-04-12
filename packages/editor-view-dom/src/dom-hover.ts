@@ -1,4 +1,4 @@
-import type { DiagnosticSeverity, EditorDiagnostic } from "../../editor-language/src/index";
+import type { DiagnosticSeverity, EditorDiagnostic } from "@wx/editor-language";
 
 const DIAGNOSTIC_SEVERITY_ORDER: Record<DiagnosticSeverity, number> = {
   error: 0,

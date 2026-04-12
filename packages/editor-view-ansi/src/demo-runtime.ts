@@ -2,10 +2,10 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createEditorController } from "../../editor-controller/src/index";
-import { typescriptHighlightQuery } from "../../editor-tree-sitter/src/highlightQuery";
-import { createNodeTreeSitterLanguageServices } from "../../editor-tree-sitter/src/node";
-import { graphiteTheme, mintTheme, phTheme } from "../../../apps/playground/src/phTheme";
+import { createEditorController } from "@wx/editor-controller";
+import { typescriptHighlightQuery } from "@wx/editor-tree-sitter";
+import { createNodeTreeSitterLanguageServices } from "@wx/editor-tree-sitter/node";
+import { graphiteTheme, mintTheme, phTheme } from "@wx/editor-theme";
 
 import { createAnsiEditorTerminal } from "./terminal";
 

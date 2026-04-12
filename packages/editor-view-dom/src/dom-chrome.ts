@@ -1,6 +1,6 @@
 import { getActiveCharacterOffset, getCursorOffset, type EditorState } from "@wx/editor-core";
-import type { EditorPresentationState } from "../../editor-controller/src/index";
-import type { EditorLayoutModel } from "../../editor-layout/src/index";
+import type { EditorPresentationState } from "@wx/editor-controller";
+import type { EditorLayoutModel } from "@wx/editor-layout";
 
 interface CreateDomChromeRuntimeOptions {
   bottomRow: HTMLDivElement;

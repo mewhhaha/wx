@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { createThemeVariables, defaultTheme, resolveThemeColor } from "./index";
+import { defaultTheme, graphiteTheme, mintTheme, normalizeCommandThemes, phTheme, playgroundThemes } from "./index";
 
-describe("theme utilities", () => {
-  it("falls back to default role colors", () => {
-    expect(resolveThemeColor({ name: "x", colors: {} }, "keyword")).toBe(defaultTheme.colors.keyword);
+describe("@wx/editor-theme", () => {
+  it("dedupes command themes and keeps active theme first", () => {
+    expect(normalizeCommandThemes([defaultTheme, phTheme, mintTheme, phTheme], phTheme)).toEqual([
+      phTheme,
+      defaultTheme,
+      mintTheme
+    ]);
   });
 
-  it("creates css variables", () => {
-    const variables = createThemeVariables(defaultTheme);
-    expect(variables["--wx-color-text"]).toBe(defaultTheme.colors.text);
-    expect(variables["--wx-color-comment"]).toBe(defaultTheme.colors.comment);
-    expect(variables["--wx-color-cursor-text"]).toBe(defaultTheme.colors.cursorText);
-    expect(variables["--wx-color-diagnostic-error"]).toBe(defaultTheme.colors.diagnosticError);
+  it("falls back to active and default themes when no extra themes passed", () => {
+    expect(normalizeCommandThemes(undefined, mintTheme)).toEqual([mintTheme, defaultTheme]);
+  });
+
+  it("re-exports demo theme presets from the root barrel", () => {
+    expect(phTheme.name).toBe("ph");
+    expect(graphiteTheme.name).toBe("graphite");
+    expect(playgroundThemes).toEqual([phTheme, graphiteTheme, mintTheme]);
   });
 });

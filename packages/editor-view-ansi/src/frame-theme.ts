@@ -1,5 +1,5 @@
-import { resolveThemeColor, type ThemeRole, type ThemeSpec } from "../../editor-theme/src/index";
-import type { EditorLayoutRow, EditorLayoutRun } from "../../editor-layout/src/index";
+import { resolveThemeColor, type ThemeRole, type ThemeSpec } from "@wx/editor-theme";
+import type { EditorLayoutRow, EditorLayoutRun } from "@wx/editor-layout";
 
 export interface CellStyle {
   fg: string;

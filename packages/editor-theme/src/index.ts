@@ -69,3 +69,23 @@ export function createThemeVariables(theme: ThemeSpec): Record<string, string> {
     "--wx-color-type": resolveThemeColor(theme, "type")
   };
 }
+
+export function normalizeCommandThemes(themes: readonly ThemeSpec[] | undefined, activeTheme: ThemeSpec): ThemeSpec[] {
+  const seen = new Set<string>();
+  const nextThemes: ThemeSpec[] = [];
+
+  for (const theme of [activeTheme, defaultTheme, ...(themes ?? [])]) {
+    const key = theme.name.trim().toLowerCase();
+
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    nextThemes.push(theme);
+  }
+
+  return nextThemes;
+}
+
+export { graphiteTheme, mintTheme, phTheme, playgroundThemes } from "./presets";

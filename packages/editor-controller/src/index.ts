@@ -14,6 +14,7 @@ import { createLanguageRuntime, type LanguageRuntime } from "./language";
 import { createPickerRuntime, type PickerRuntime } from "./picker";
 import { createPresentationState } from "./presentation";
 import { createRegistersJumpsRuntime } from "./registers-jumps";
+import { normalizeLanguageServices } from "./normalize";
 import { createSessionRuntime, createJumpEntry, normalizeRegisterName } from "./session";
 import { syncVisibleViewportRows as syncVisibleViewportRowsInPresentation } from "./viewport";
 import { createViewportModelRuntime } from "./viewport-model";
@@ -76,6 +77,7 @@ export type {
 } from "./types";
 
 export { createSnapshotHistory };
+export { normalizeLanguageServices };
 
 export function createEditorController(options: CreateEditorControllerOptions = {}): EditorController {
   let state =

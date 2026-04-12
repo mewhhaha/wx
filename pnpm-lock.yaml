@@ -151,6 +151,10 @@ importers:
       web-tree-sitter:
         specifier: ^0.26.8
         version: 0.26.8
+    devDependencies:
+      '@wx/editor-view-dom':
+        specifier: workspace:*
+        version: link:../editor-view-dom
 
   packages/editor-view-dom:
     dependencies:

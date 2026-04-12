@@ -1,7 +1,7 @@
 import treeSitterWasmUrl from "./assets/web-tree-sitter.wasm?url";
 import typescriptWasmUrl from "./assets/tree-sitter-typescript.wasm?url";
-import { phTheme } from "./phTheme";
 
+import { phTheme } from "@wx/editor-theme";
 import { createTreeSitterLanguageServices, typescriptHighlightQuery } from "@wx/editor-tree-sitter";
 import { createEditor, type EditorHandle } from "@wx/editor-view-dom";
 

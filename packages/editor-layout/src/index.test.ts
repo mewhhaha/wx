@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { createEditorState, createSelection } from "../../editor-core/src/index";
+import { createEditorState, createSelection } from "@wx/editor-core";
+import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
 import { buildEditorLayout, buildFlashLabels, buildVisualRows } from "./index";
 
@@ -29,6 +31,17 @@ function collectSearchMatches(text: string, query: string): Array<{ from: number
 
   return matches;
 }
+
+describe("@wx/editor-layout boundaries", () => {
+  it("keeps layout runtime modules on public package surfaces only", () => {
+    expect(collectCrossPackageSrcLeaks("packages/editor-layout/src")).toEqual([]);
+  });
+
+  it("keeps layout renderer-agnostic and free of controller imports", () => {
+    const source = readFileSync(resolve(process.cwd(), "packages/editor-layout/src/index.ts"), "utf8");
+    expect(source).not.toContain("@wx/editor-controller");
+  });
+});
 
 function buildVisibleSearchMatchesByLine(
   state: ReturnType<typeof createEditorState>,

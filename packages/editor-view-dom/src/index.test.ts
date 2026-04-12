@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { createCharacterSelection, createTextDocument, getSelectionOffsets } from "@wx/editor-core";
 import { createEditorController } from "@wx/editor-controller";
 import type { HighlightSpan, LanguageProvider } from "@wx/editor-language";
+import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
 import { createEditor } from "./index";
 import { computeRenderWork } from "./render-work";
@@ -41,15 +42,22 @@ describe("createEditor", () => {
   it("routes runtime keyboard input through controller key APIs, not compatibility helpers", () => {
     const indexSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/index.ts"), "utf8");
     const eventSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/dom-events.ts"), "utf8");
+    const typeSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/types.ts"), "utf8");
 
     expect(indexSource).toContain("createDomEventRuntime");
     expect(indexSource).toContain('from "./dom-bootstrap"');
     expect(indexSource).toContain('from "./dom-styles"');
+    expect(indexSource).not.toContain("interface EditorHostServices");
+    expect(typeSource).toContain('from "@wx/editor-controller"');
     expect(eventSource).toContain("controller.handleKeyInput");
     expect(eventSource).toContain("controller.handleTextInput");
     expect(eventSource).not.toContain("controller.openCommandLine(");
     expect(eventSource).not.toContain("controller.handleCommandLineKey(");
     expect(eventSource).not.toContain("controller.updatePresentationState(");
+  });
+
+  it("keeps DOM runtime modules on public package surfaces only", () => {
+    expect(collectCrossPackageSrcLeaks("packages/editor-view-dom/src")).toEqual([]);
   });
 
   it("keeps DOM render modules free of controller-internal imports", () => {

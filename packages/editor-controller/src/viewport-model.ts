@@ -1,5 +1,5 @@
 import { getCursorOffset, type EditorState } from "@wx/editor-core";
-import { getVisualRowForOffset, type EditorVisualRow } from "../../editor-layout/src/index";
+import { getVisualRowForOffset, type EditorVisualRow } from "@wx/editor-layout";
 
 import {
   getVisibleHighlightViewport as getVisibleHighlightViewportFromPresentation,

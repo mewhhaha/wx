@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { enterInsertMode, enterNormalMode, insertText, moveRight } from "@wx/editor-core";
+import type { EditorLanguageServices } from "@wx/editor-language";
 
-import { createEditorController } from "./index";
+import { createEditorController, normalizeLanguageServices } from "./index";
 
 async function flushAsyncWork(times = 4): Promise<void> {
   for (let index = 0; index < times; index += 1) {
@@ -59,6 +60,16 @@ describe("editor controller", () => {
 
     controller.execute((_state, _dispatch, context) => context.history?.redo() ?? false);
     expect(controller.getState().doc.text).toBe("dabc");
+  });
+
+  it("normalizes language service input through one canonical helper", () => {
+    const first: EditorLanguageServices = {};
+    const second: EditorLanguageServices = {};
+
+    expect(normalizeLanguageServices(null)).toEqual([]);
+    expect(normalizeLanguageServices(undefined)).toEqual([]);
+    expect(normalizeLanguageServices(first)).toEqual([first]);
+    expect(normalizeLanguageServices([first, second])).toEqual([first, second]);
   });
 
   it("groups insert mode edits into one undo step after leaving insert mode", () => {

@@ -1,6 +1,6 @@
-import type { ThemeSpec } from "@wx/editor-theme";
+import type { ThemeSpec } from "./index";
 
-// Mapped from ~/.config/helix/themes/pornhub_hc.toml for the playground demo.
+// Mapped from ~/.config/helix/themes/pornhub_hc.toml for wx demos.
 export const phTheme: ThemeSpec = {
   name: "ph",
   colors: {

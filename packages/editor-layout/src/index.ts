@@ -1,5 +1,5 @@
-import { getActiveCharacterOffset, getCursorOffset, getSelectionOffsets, type EditorState } from "../../editor-core/src/index";
-import type { DiagnosticSeverity, EditorDiagnostic, HighlightRole, HighlightSpan } from "../../editor-language/src/index";
+import { getActiveCharacterOffset, getCursorOffset, getSelectionOffsets, type EditorState } from "@wx/editor-core";
+import type { DiagnosticSeverity, EditorDiagnostic, HighlightRole, HighlightSpan } from "@wx/editor-language";
 
 export type EditorLayoutToken =
   | "text"

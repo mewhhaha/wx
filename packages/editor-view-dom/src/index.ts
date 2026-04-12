@@ -1,12 +1,6 @@
 import {
-  createEditorState,
-  createSelection,
-  type EditorState
-} from "@wx/editor-core";
-import {
   createEditorController,
-  type EditorController,
-  type EditorUpdate
+  normalizeLanguageServices
 } from "@wx/editor-controller";
 import { createEditorDom } from "./dom-bootstrap";
 import { createDomChromeRuntime } from "./dom-chrome";
@@ -16,68 +10,19 @@ import type { LineChangeState, LineViewport, RowView, VisualRow } from "./dom-mo
 import { createDomRenderRuntime } from "./dom-render";
 import { createDomEditorRuntime, type DomEditorContext } from "./dom-runtime";
 import { applyThemeVariables, mountStyles } from "./dom-styles";
+import type { CreateEditorOptions, EditorHandle } from "./types";
 import { measureMetrics } from "./dom-viewport";
-import type {
-  EditorCodeAction,
-  EditorLanguageServiceInput,
-  EditorLanguageServices,
-  LanguageProvider
-} from "@wx/editor-language";
+import type { EditorLanguageServices } from "@wx/editor-language";
 import { languageProviderToServices } from "@wx/editor-language";
-import { defaultTheme, type ThemeSpec } from "@wx/editor-theme";
+import { defaultTheme, normalizeCommandThemes } from "@wx/editor-theme";
 
-export interface CreateEditorOptions {
-  controller?: EditorController;
-  filePath?: string;
-  host?: EditorHostServices;
-  value?: string;
-  language?: LanguageProvider | null;
-  languageServices?: EditorLanguageServiceInput | null;
-  theme?: ThemeSpec;
-  commandThemes?: readonly ThemeSpec[];
-  softWrap?: boolean;
-  indentGuides?: {
-    render?: boolean;
-    character?: string;
-    skipLevels?: number;
-  };
-}
-
-export type EditorLineChangeKind = "added" | "modified" | "deleted";
-
-export interface EditorLineChange {
-  line: number;
-  kind: EditorLineChangeKind;
-}
-
-export interface EditorHostServices {
-  writeFile?(context: { filePath: string; text: string }): Promise<void>;
-  readFile?(context: { filePath: string }): Promise<{ text: string } | string>;
-  searchFiles?(context: {
-    scope: "repo" | "folder";
-    filePath: string;
-    query: string;
-  }): Promise<readonly { filePath: string; detail?: string }[]>;
-  getLineChanges?(context: { filePath: string; text: string }): Promise<readonly EditorLineChange[]>;
-  didWriteFile?(context: { filePath: string; text: string }): Promise<void> | void;
-}
-
-export interface EditorHandle {
-  controller: EditorController;
-  mount(container: HTMLElement): void;
-  destroy(): void;
-  focus(): void;
-  format(): Promise<boolean>;
-  getCodeActions(): Promise<readonly EditorCodeAction[]>;
-  applyCodeAction(action: EditorCodeAction): Promise<boolean>;
-  subscribe(listener: (update: EditorUpdate) => void): () => void;
-  getState(): EditorState;
-  setFilePath(filePath: string): void;
-  setLanguageServices(languageServices: EditorLanguageServiceInput | null): Promise<void>;
-  setLanguage(language: LanguageProvider | null): Promise<void>;
-  setTheme(theme: ThemeSpec): void;
-  setValue(value: string): Promise<void>;
-}
+export type {
+  CreateEditorOptions,
+  EditorHandle,
+  EditorHostServices,
+  EditorLineChange,
+  EditorLineChangeKind
+} from "./types";
 
 type LineChangesByLine = Map<number, LineChangeState>;
 
@@ -85,32 +30,6 @@ const EMPTY_CELL_TEXT = "\u00a0";
 const INSERT_TAB_TEXT = "  ";
 
 const DEFAULT_INDENT_GUIDE_CHARACTER = "│";
-
-function normalizeLanguageServices(input: EditorLanguageServiceInput | null | undefined): EditorLanguageServices[] {
-  if (!input) {
-    return [];
-  }
-
-  return Array.isArray(input) ? [...(input as readonly EditorLanguageServices[])] : [input as EditorLanguageServices];
-}
-
-function normalizeCommandThemes(themes: readonly ThemeSpec[] | undefined, activeTheme: ThemeSpec): ThemeSpec[] {
-  const seen = new Set<string>();
-  const nextThemes: ThemeSpec[] = [];
-
-  for (const theme of [activeTheme, defaultTheme, ...(themes ?? [])]) {
-    const key = theme.name.trim().toLowerCase();
-
-    if (!key || seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    nextThemes.push(theme);
-  }
-
-  return nextThemes;
-}
 
 export function createEditor(container: HTMLElement, options: CreateEditorOptions = {}): EditorHandle {
   const softWrap = options.softWrap ?? false;

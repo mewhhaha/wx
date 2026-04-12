@@ -4,7 +4,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     demo: "src/demo.ts",
-    nodeWorker: "../editor-tree-sitter/src/nodeWorker.ts"
+    nodeWorker: "src/treeSitterNodeWorker.ts"
   },
   format: ["esm"],
   outDir: "dist",

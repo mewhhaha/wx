@@ -1,5 +1,5 @@
 import type { EditorState, SelectionSet, Transaction } from "@wx/editor-core";
-import type { EditorDiagnostic, EditorLanguageServiceInput, EditorLanguageServices } from "@wx/editor-language";
+import type { EditorDiagnostic } from "@wx/editor-language";
 
 import type {
   EditorBottomMessageState,
@@ -43,16 +43,6 @@ export function normalizeRegisterName(name: string | null | undefined): string |
   }
 
   return name.toLowerCase();
-}
-
-export function normalizeLanguageServices(
-  input: EditorLanguageServiceInput | readonly EditorLanguageServices[] | null | undefined
-): EditorLanguageServices[] {
-  if (!input) {
-    return [];
-  }
-
-  return Array.isArray(input) ? [...(input as readonly EditorLanguageServices[])] : [input as EditorLanguageServices];
 }
 
 export function transactionRequiresFullDocumentLanguageSync(transaction: Transaction): boolean {

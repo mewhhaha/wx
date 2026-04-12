@@ -4,7 +4,7 @@ import {
   buildVisualRows,
   getVisualRowForOffset,
   type EditorVisualRow
-} from "../../editor-layout/src/index";
+} from "@wx/editor-layout";
 import type { EditorLineChange, EditorPendingAction, EditorPresentationState } from "./types";
 
 function getLayoutPendingAction(pendingAction: EditorPendingAction): EditorPendingAction {

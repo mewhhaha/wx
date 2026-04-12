@@ -3,15 +3,15 @@ import {
   getVisualRowForOffset as getLayoutVisualRowForOffset,
   type EditorLayoutModel,
   type EditorLayoutToken
-} from "../../editor-layout/src/index";
+} from "@wx/editor-layout";
 import {
   getActiveCharacterOffset,
   getCursorOffset,
   getSelectionOffsets,
   type EditorState
 } from "@wx/editor-core";
-import type { DiagnosticSeverity, EditorDiagnostic, HighlightRole } from "../../editor-language/src/index";
-import type { EditorPresentationState } from "../../editor-controller/src/index";
+import type { DiagnosticSeverity, EditorDiagnostic, HighlightRole } from "@wx/editor-language";
+import type { EditorPresentationState } from "@wx/editor-controller";
 
 import type { LineViewport, RowView, VisualRow } from "./dom-model";
 

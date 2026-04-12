@@ -1,15 +1,15 @@
 import {
   buildEditorLayout,
   type EditorLayoutModel
-} from "../../editor-layout/src/index";
+} from "@wx/editor-layout";
 import type { EditorState } from "@wx/editor-core";
 import type {
   EditorController,
   EditorPresentationState,
   EditorUpdate
-} from "../../editor-controller/src/index";
-import type { EditorCodeAction, EditorDiagnostic, EditorLanguageServices } from "../../editor-language/src/index";
-import { createThemeVariables, type ThemeSpec } from "../../editor-theme/src/index";
+} from "@wx/editor-controller";
+import type { EditorCodeAction, EditorDiagnostic, EditorLanguageServices } from "@wx/editor-language";
+import { createThemeVariables, type ThemeSpec } from "@wx/editor-theme";
 
 import type { DomChromeRuntime } from "./dom-chrome";
 import { getTooltipAnchorForRect } from "./dom-hover";

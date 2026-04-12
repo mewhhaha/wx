@@ -1,9 +1,9 @@
 import sceneLangWasmUrl from "./assets/scene-lang.wasm?url";
 import { installBenchmarkHarness } from "./benchmarkHarness";
-import { phTheme, playgroundThemes } from "./phTheme";
 
 import { createCharacterSelection, createTextDocument } from "@wx/editor-core";
 import { createEditorController } from "@wx/editor-controller";
+import { phTheme, playgroundThemes } from "@wx/editor-theme";
 import {
   createSceneLangWasm,
   type SceneLangWasm,

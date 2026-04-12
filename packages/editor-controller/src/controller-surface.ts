@@ -1,8 +1,8 @@
 import { type CommandContext, type EditorState, type Transaction } from "@wx/editor-core";
 import type { EditorCodeAction, EditorDiagnostic, EditorHover, EditorLanguageServiceInput } from "@wx/editor-language";
 
+import { normalizeLanguageServices } from "./normalize";
 import { alignSelectionTopVisualRow } from "./viewport";
-import { normalizeLanguageServices } from "./session";
 import type {
   EditorBufferState,
   EditorController,

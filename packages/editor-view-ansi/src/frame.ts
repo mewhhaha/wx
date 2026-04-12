@@ -1,12 +1,12 @@
-import type { EditorState } from "../../editor-core/src/index";
+import type { EditorState } from "@wx/editor-core";
 import {
   buildEditorLayout,
   type EditorLayoutModel,
   type EditorLayoutPanel,
   type EditorLayoutRow,
   type EditorLayoutRun
-} from "../../editor-layout/src/index";
-import { defaultTheme, resolveThemeColor, type ThemeSpec } from "../../editor-theme/src/index";
+} from "@wx/editor-layout";
+import { defaultTheme, resolveThemeColor, type ThemeSpec } from "@wx/editor-theme";
 
 import type { RenderEditorAnsiFrameInput } from "./index";
 import {

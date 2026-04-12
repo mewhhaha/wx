@@ -1,4 +1,4 @@
-import { createThemeVariables, type ThemeSpec } from "../../editor-theme/src/index";
+import { createThemeVariables, type ThemeSpec } from "@wx/editor-theme";
 
 const EDITOR_STYLE_TEXT = `
   .wx-editor {
