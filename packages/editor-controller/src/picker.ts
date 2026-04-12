@@ -14,6 +14,7 @@ export interface PickerActionItem {
   label: string;
   detail?: string;
   run: () => Promise<void> | void;
+  preview?: () => Promise<{ title: string; content: string } | null> | { title: string; content: string } | null;
 }
 
 interface PickerRuntimeContext {
@@ -45,11 +46,13 @@ export interface PickerRuntime {
 
 export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntime {
   let pickerActions: readonly PickerActionItem[] = [];
+  let previewRequestId = 0;
   let searchSource:
     | null
     | {
         title: string;
         query: string;
+        variant: "bar" | "modal";
         load(query: string): Promise<readonly PickerActionItem[]>;
       } = null;
 
@@ -72,7 +75,11 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       previous.title === next.title &&
       previous.selectedIndex === next.selectedIndex &&
       previous.error === next.error &&
-      previous.query === next.query
+      previous.query === next.query &&
+      previous.variant === next.variant &&
+      previous.previewTitle === next.previewTitle &&
+      previous.previewContent === next.previewContent &&
+      previous.previewLoading === next.previewLoading
     ) {
       return;
     }
@@ -89,12 +96,92 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       })),
       selectedIndex: next.selectedIndex,
       error: next.error,
-      query: next.query
+      query: next.query,
+      variant: next.variant,
+      previewTitle: next.previewTitle,
+      previewContent: next.previewContent,
+      previewLoading: next.previewLoading
     };
     context.emitPresentationUpdate(effectType);
   };
 
+  const syncSelectedPreview = async () => {
+    const presentation = context.getPresentation();
+    const item = pickerActions[presentation.ui.picker.selectedIndex];
+
+    if (!presentation.ui.picker.active || presentation.ui.picker.variant !== "modal") {
+      return;
+    }
+
+    if (!item?.preview) {
+      setPickerState(
+        {
+          active: true,
+          loading: presentation.ui.picker.loading,
+          title: presentation.ui.picker.title,
+          items: pickerActions,
+          selectedIndex: presentation.ui.picker.selectedIndex,
+          error: presentation.ui.picker.error,
+          query: presentation.ui.picker.query,
+          variant: presentation.ui.picker.variant,
+          previewTitle: "",
+          previewContent: "",
+          previewLoading: false
+        },
+        "ui.picker.preview"
+      );
+      return;
+    }
+
+    const requestId = ++previewRequestId;
+    setPickerState(
+      {
+        active: true,
+        loading: presentation.ui.picker.loading,
+        title: presentation.ui.picker.title,
+        items: pickerActions,
+        selectedIndex: presentation.ui.picker.selectedIndex,
+        error: presentation.ui.picker.error,
+        query: presentation.ui.picker.query,
+        variant: presentation.ui.picker.variant,
+        previewTitle: presentation.ui.picker.previewTitle,
+        previewContent: presentation.ui.picker.previewContent,
+        previewLoading: true
+      },
+      "ui.picker.preview"
+    );
+
+    let preview: { title: string; content: string } | null;
+    try {
+      preview = await item.preview();
+    } catch {
+      preview = { title: item.label, content: "Preview failed" };
+    }
+
+    if (requestId !== previewRequestId) {
+      return;
+    }
+
+    setPickerState(
+      {
+        active: true,
+        loading: presentation.ui.picker.loading,
+        title: presentation.ui.picker.title,
+        items: pickerActions,
+        selectedIndex: presentation.ui.picker.selectedIndex,
+        error: presentation.ui.picker.error,
+        query: presentation.ui.picker.query,
+        variant: presentation.ui.picker.variant,
+        previewTitle: preview?.title ?? "",
+        previewContent: preview?.content ?? "",
+        previewLoading: false
+      },
+      "ui.picker.preview"
+    );
+  };
+
   const closePicker: PickerRuntime["closePicker"] = (effectType = "ui.picker.close") => {
+    previewRequestId += 1;
     setPickerState(
       {
         active: false,
@@ -103,7 +190,11 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         items: [],
         selectedIndex: 0,
         error: null,
-        query: ""
+        query: "",
+        variant: "bar",
+        previewTitle: "",
+        previewContent: "",
+        previewLoading: false
       },
       effectType
     );
@@ -130,10 +221,15 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         items: pickerActions,
         selectedIndex: nextIndex,
         error: presentation.ui.picker.error,
-        query: presentation.ui.picker.query
+        query: presentation.ui.picker.query,
+        variant: presentation.ui.picker.variant,
+        previewTitle: presentation.ui.picker.previewTitle,
+        previewContent: presentation.ui.picker.previewContent,
+        previewLoading: presentation.ui.picker.previewLoading
       },
       "ui.picker"
     );
+    void syncSelectedPreview();
     return true;
   };
 
@@ -177,7 +273,11 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         items,
         selectedIndex: 0,
         error: null,
-        query: ""
+        query: "",
+        variant: "bar",
+        previewTitle: "",
+        previewContent: "",
+        previewLoading: false
       },
       "ui.picker"
     );
@@ -214,7 +314,11 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         items,
         selectedIndex: Math.max(0, items.length - 1),
         error: null,
-        query: ""
+        query: "",
+        variant: "bar",
+        previewTitle: "",
+        previewContent: "",
+        previewLoading: false
       },
       "ui.picker"
     );
@@ -240,6 +344,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     searchSource = {
       title: "buffers",
       query: "",
+      variant: "modal",
       load: buildItems
     };
 
@@ -251,11 +356,25 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     searchSource = {
       title: scope === "repo" ? "repo" : "folder",
       query: "",
+      variant: "modal",
       load: async (query) => {
         const files = await context.getController().searchFiles(scope, query);
         return files.map((entry) => ({
           label: entry.filePath,
           detail: entry.detail,
+          preview: async () => {
+            const readFile = context.getPresentation().language.host?.readFile;
+            if (!readFile) {
+              return null;
+            }
+
+            const payload = await readFile({ filePath: entry.filePath });
+            const text = typeof payload === "string" ? payload : payload.text;
+            return {
+              title: entry.filePath,
+              content: text
+            };
+          },
           run: async () => {
             const opened = await context.getController().openBuffer(entry.filePath);
             if (opened) {
@@ -283,7 +402,11 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         items: [],
         selectedIndex: 0,
         error: null,
-        query
+        query,
+        variant: searchSource.variant,
+        previewTitle: "",
+        previewContent: "",
+        previewLoading: false
       },
       "ui.picker"
     );
@@ -305,10 +428,15 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         items,
         selectedIndex: 0,
         error: items.length === 0 ? "No matches" : null,
-        query
+        query,
+        variant: searchSource.variant,
+        previewTitle: "",
+        previewContent: "",
+        previewLoading: false
       },
       "ui.picker"
     );
+    void syncSelectedPreview();
     return true;
   };
 
@@ -322,7 +450,11 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         items: [],
         selectedIndex: 0,
         error: null,
-        query: ""
+        query: "",
+        variant: "bar",
+        previewTitle: "",
+        previewContent: "",
+        previewLoading: false
       },
       "ui.picker"
     );
@@ -358,7 +490,11 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         items,
         selectedIndex: 0,
         error: items.length === 0 ? "No code actions" : null,
-        query: ""
+        query: "",
+        variant: "bar",
+        previewTitle: "",
+        previewContent: "",
+        previewLoading: false
       },
       "ui.picker"
     );

@@ -108,6 +108,10 @@ export interface EditorPickerState {
   selectedIndex: number;
   error: string | null;
   query: string;
+  variant: "bar" | "modal";
+  previewTitle: string;
+  previewContent: string;
+  previewLoading: boolean;
 }
 
 export interface EditorHoverState {

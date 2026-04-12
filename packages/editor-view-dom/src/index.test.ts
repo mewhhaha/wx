@@ -2204,9 +2204,10 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true }));
     await flushAsyncWork();
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
-    await flushAsyncWork();
+    await flushAsyncWork(6);
 
-    expect(container.querySelector("[data-wx-editor-picker='true']")?.textContent).toContain("src/beta.ts");
+    expect(container.querySelector("[data-wx-editor-picker-modal='true']")?.textContent).toContain("src/beta.ts");
+    expect(container.querySelector(".wx-editor__picker-modal-preview-body")?.textContent).toContain("opened:src/beta.ts");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await flushAsyncWork();

@@ -49,7 +49,11 @@ export function createPresentationState(
         items: [],
         selectedIndex: 0,
         error: null,
-        query: ""
+        query: "",
+        variant: "bar",
+        previewTitle: "",
+        previewContent: "",
+        previewLoading: false
       },
       bottomMessage: null,
       hover: {

@@ -56,13 +56,91 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
       const uiState = options.getUiState();
       const items = uiState.commandCompletionItems;
 
+      if (uiState.picker.active && uiState.picker.variant === "modal") {
+        options.commandPopover.hidden = false;
+        options.commandPopover.dataset.kind = "picker-modal";
+
+        const panel = document.createElement("div");
+        const queryRow = document.createElement("div");
+        const queryLabel = document.createElement("span");
+        const queryValue = document.createElement("span");
+        const queryCount = document.createElement("span");
+        const body = document.createElement("div");
+        const list = document.createElement("div");
+        const preview = document.createElement("div");
+        const previewTitle = document.createElement("div");
+        const previewBody = document.createElement("pre");
+
+        panel.className = "wx-editor__picker-modal";
+        panel.dataset.wxEditorPickerModal = "true";
+
+        queryRow.className = "wx-editor__picker-modal-query";
+        queryLabel.className = "wx-editor__picker-modal-query-label";
+        queryLabel.textContent = uiState.picker.title;
+        queryValue.className = "wx-editor__picker-modal-query-value";
+        queryValue.textContent = uiState.picker.query || " ";
+        queryCount.className = "wx-editor__picker-modal-query-count";
+        queryCount.textContent =
+          uiState.picker.items.length > 0 ? `${uiState.picker.selectedIndex + 1}/${uiState.picker.items.length}` : "0/0";
+        queryRow.append(queryLabel, queryValue, queryCount);
+
+        body.className = "wx-editor__picker-modal-body";
+        list.className = "wx-editor__picker-modal-list";
+        preview.className = "wx-editor__picker-modal-preview";
+        previewTitle.className = "wx-editor__picker-modal-preview-title";
+        previewTitle.textContent = uiState.picker.previewTitle || "preview";
+        previewBody.className = "wx-editor__picker-modal-preview-body";
+        previewBody.textContent = uiState.picker.previewLoading
+          ? "Loading preview..."
+          : uiState.picker.previewContent || "No preview";
+
+        if (uiState.picker.loading) {
+          const loading = document.createElement("div");
+          loading.className = "wx-editor__picker-modal-item";
+          loading.textContent = `Loading ${uiState.picker.title}...`;
+          list.append(loading);
+        } else if (uiState.picker.error && uiState.picker.items.length === 0) {
+          const error = document.createElement("div");
+          error.className = "wx-editor__picker-modal-item";
+          error.dataset.selected = "false";
+          error.textContent = uiState.picker.error;
+          list.append(error);
+        } else {
+          uiState.picker.items.forEach((item, index) => {
+            const row = document.createElement("div");
+            const label = document.createElement("span");
+            const detail = document.createElement("span");
+
+            row.className = "wx-editor__picker-modal-item";
+            row.dataset.selected = String(index === uiState.picker.selectedIndex);
+            row.dataset.wxEditorPickerItem = item.label;
+
+            label.className = "wx-editor__picker-modal-item-label";
+            label.textContent = item.label;
+            detail.className = "wx-editor__picker-modal-item-detail";
+            detail.textContent = item.detail ?? "";
+
+            row.append(label, detail);
+            list.append(row);
+          });
+        }
+
+        preview.append(previewTitle, previewBody);
+        body.append(list, preview);
+        panel.append(queryRow, body);
+        options.commandPopover.replaceChildren(panel);
+        return;
+      }
+
       if (items.length === 0 || !uiState.commandLine.active || uiState.commandLine.prompt !== ":") {
         options.commandPopover.hidden = true;
+        delete options.commandPopover.dataset.kind;
         options.commandPopover.replaceChildren();
         return;
       }
 
       options.commandPopover.hidden = false;
+      options.commandPopover.dataset.kind = "command";
       const selectedIndex = Math.max(0, Math.min(items.length - 1, uiState.commandCompletionIndex));
       const panel = document.createElement("div");
       panel.className = "wx-editor__command-popover-panel";
@@ -138,6 +216,12 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
         value.textContent = commandTextRun?.text ?? "";
 
         options.bottomRow.append(prompt, value);
+        options.setRenderedBottomBarSignature(options.getCurrentBottomBarSignature());
+        return;
+      }
+
+      if (uiState.picker.active && uiState.picker.variant === "modal") {
+        options.bottomRow.textContent = " ";
         options.setRenderedBottomBarSignature(options.getCurrentBottomBarSignature());
         return;
       }

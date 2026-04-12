@@ -155,7 +155,12 @@ function createInput(value: string) {
           title: "",
           items: [],
           selectedIndex: 0,
-          error: null
+          error: null,
+          query: "",
+          variant: "bar",
+          previewTitle: "",
+          previewContent: "",
+          previewLoading: false
         },
         bottomMessage: null,
         hover: {
