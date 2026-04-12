@@ -2,6 +2,7 @@ import { createEditorState, type EditorState } from "@wx/editor-core";
 
 import { createCommandRuntime, type CommandRuntime } from "./command-runtime";
 import { createCommandsRuntime, type CommandsRuntime } from "./commands";
+import { createBuffersRuntime } from "./buffers";
 import { createCompatibilityApi } from "./compat";
 import { createControllerContextRuntime } from "./controller-context";
 import { createControllerLifecycleRuntime } from "./controller-lifecycle";
@@ -20,7 +21,9 @@ import { createViewportRuntime, type ViewportRuntime } from "./viewport-runtime"
 import type {
   CreateEditorControllerOptions,
   EditorBottomMessageState,
+  EditorBufferState,
   EditorController,
+  EditorFileSearchResult,
   EditorHostServices,
   EditorJumpEntry,
   EditorLineChange,
@@ -66,6 +69,8 @@ export type {
   EditorUpdate,
   EditorUpdateListener,
   EditorViewportPresentationState,
+  EditorBufferState,
+  EditorFileSearchResult,
   HistoryEntry,
   HistoryPlugin
 } from "./types";
@@ -96,6 +101,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let pickerRuntime!: PickerRuntime;
   let sessionRuntime!: ReturnType<typeof createSessionRuntime>;
   let registersJumpsRuntime!: ReturnType<typeof createRegistersJumpsRuntime>;
+  const buffersRuntime = createBuffersRuntime({
+    initialState: state,
+    initialFilePath: presentation.filePath
+  });
   let viewportModelRuntime!: ReturnType<typeof createViewportModelRuntime>;
   let viewportRuntime!: ViewportRuntime;
   let lifecycleRuntime!: ReturnType<typeof createControllerLifecycleRuntime>;
@@ -183,6 +192,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
           }
         }
       }
+      buffersRuntime.syncActiveState(nextState, { docChanged: nextState.doc.text !== prevState.doc.text });
     }
   });
 
@@ -238,6 +248,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getState: () => state,
     getPresentation: () => presentation,
     getController: () => controller,
+    getBuffers: () => buffersRuntime.getBuffers(),
     setBottomMessage: sessionRuntime.setBottomMessage,
     emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
     jumpToSelection(from, to) {
@@ -328,6 +339,9 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     restoreJump: registersJumpsRuntime.restoreJump,
     openDiagnosticsPicker: pickerRuntime.openDiagnosticsPicker,
     openJumpListPicker: pickerRuntime.openJumpListPicker,
+    openBuffersPicker: pickerRuntime.openBuffersPicker,
+    openFileSearchPicker: pickerRuntime.openFileSearchPicker,
+    updatePickerQuery: pickerRuntime.updatePickerQuery,
     loadCodeActions: pickerRuntime.loadCodeActions,
     collectVisibleFlashHints: commandsRuntime.collectVisibleFlashHints,
     applyFlashJump: commandsRuntime.applyFlashJump,
@@ -354,6 +368,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     languageRuntime,
     sessionRuntime,
     registersJumpsRuntime,
+    buffersRuntime,
     keyRuntime,
     getActiveOffset: contextRuntime.getActiveOffset,
     createJumpEntry: () => createJumpEntry(state)

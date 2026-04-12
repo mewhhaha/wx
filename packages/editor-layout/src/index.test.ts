@@ -326,7 +326,7 @@ describe("buildEditorLayout", () => {
       }
     });
 
-    expect(layout.bottomBar.runs[0]?.text).toBe(",a a");
+    expect(layout.bottomBar.runs[0]?.text).toBe(" a a");
     expect(layout.document.rows[0]?.overlays.filter((overlay) => overlay.kind === "flash-hint")).toHaveLength(2);
   });
 

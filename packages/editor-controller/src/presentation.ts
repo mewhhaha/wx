@@ -48,7 +48,8 @@ export function createPresentationState(
         title: "",
         items: [],
         selectedIndex: 0,
-        error: null
+        error: null,
+        query: ""
       },
       bottomMessage: null,
       hover: {

@@ -595,6 +595,15 @@ async function main(): Promise<void> {
       languageServices: sceneLanguageServices,
       host: devBridgeEnabled
         ? {
+            async readFile(context) {
+              return requestJson<{ text: string }>(`/__wx__/read?file=${encodeURIComponent(context.filePath)}`);
+            },
+            async searchFiles(context) {
+              const payload = await requestJson<{ files: Array<{ filePath: string; detail?: string }> }>(
+                `/__wx__/search?file=${encodeURIComponent(context.filePath)}&scope=${encodeURIComponent(context.scope)}&q=${encodeURIComponent(context.query)}`
+              );
+              return payload.files;
+            },
             async writeFile(context) {
               await requestJson("/__wx__/write", context);
             },
@@ -611,6 +620,18 @@ async function main(): Promise<void> {
             }
           }
         : {
+            async readFile(context) {
+              return { text: memoryFiles.get(context.filePath) ?? "" };
+            },
+            async searchFiles(context) {
+              const normalizedQuery = context.query.trim().toLowerCase();
+              const folderPrefix = context.filePath.includes("/") ? `${context.filePath.slice(0, context.filePath.lastIndexOf("/") + 1)}` : "";
+              return [...memoryFiles.keys()]
+                .filter((entry) => context.scope === "repo" || entry.startsWith(folderPrefix))
+                .filter((entry) => !normalizedQuery || entry.toLowerCase().includes(normalizedQuery))
+                .slice(0, 50)
+                .map((filePath) => ({ filePath }));
+            },
             async writeFile(context) {
               memoryFiles.set(context.filePath, context.text);
             },

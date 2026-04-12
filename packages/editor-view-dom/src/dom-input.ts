@@ -33,12 +33,13 @@ export function isControllerHandledModifierKey(
         event.key === "ArrowDown" ||
         event.key === "." ||
         event.key === "*" ||
-        (options.pendingAction?.kind === "space" && event.key.toLowerCase() === "c"))
+        event.key === "/" ||
+        event.key.toLowerCase() === "k")
     );
   }
 
   if (event.ctrlKey && !event.metaKey && !event.altKey) {
-    return ["s", "r", "o", "i", "b", "d", "f", "u"].includes(event.key);
+    return ["s", "r", "o", "i", "b", "d", "f", "u", "."].includes(event.key);
   }
 
   return false;

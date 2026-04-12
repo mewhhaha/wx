@@ -6,6 +6,12 @@ import { enterInsertMode, enterNormalMode, insertText, moveRight } from "@wx/edi
 
 import { createEditorController } from "./index";
 
+async function flushAsyncWork(times = 4): Promise<void> {
+  for (let index = 0; index < times; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("editor controller", () => {
   it("keeps controller lifecycle and register/jump plumbing out of the root composition file", () => {
     const source = readFileSync(resolve(process.cwd(), "packages/editor-controller/src/index.ts"), "utf8");
@@ -16,6 +22,8 @@ describe("editor controller", () => {
     expect(source).not.toContain("const rebuildViewportModel = (");
     expect(source).not.toContain("const refreshSearchMatchCache = (");
     expect(source).not.toContain("const applySearchState = (");
+    expect(source).not.toContain("remapHighlights");
+    expect(source).not.toContain('pendingAction?.kind === "flash"');
     expect(source).toContain("createControllerSurface(");
   });
 
@@ -341,7 +349,7 @@ describe("editor controller", () => {
     expect(wrapped.getState().selection).toEqual(keyed.getState().selection);
   });
 
-  it("uses space+c for smart comment toggling", async () => {
+  it("uses alt+/ for smart comment toggling", async () => {
     const toggleComments = vi.fn(async () => [{ from: 0, to: 0, insert: "/* " }]);
     const toggleLineComments = vi.fn(async () => [{ from: 0, to: 0, insert: "// " }]);
     const controller = createEditorController({ value: "value" });
@@ -355,12 +363,73 @@ describe("editor controller", () => {
       }
     ]);
 
-    await controller.handleKeyInput({ key: " ", text: " " });
-    await controller.handleKeyInput({ key: "c", text: "c" });
+    await controller.handleKeyInput({ key: "/", text: "/", alt: true });
 
     expect(toggleComments).toHaveBeenCalledTimes(1);
     expect(toggleLineComments).not.toHaveBeenCalled();
     expect(controller.getState().doc.text).toBe("/* value");
+  });
+
+  it("searches repo files through the engine and opens them as buffers", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    controller.setHostServices({
+      async searchFiles(context) {
+        return [
+          { filePath: "src/current.ts" },
+          { filePath: "src/beta.ts" },
+          { filePath: "pkg/beta.ts" }
+        ].filter((entry) => entry.filePath.toLowerCase().includes(context.query.toLowerCase()));
+      },
+      async readFile(context) {
+        return { text: `opened:${context.filePath}` };
+      }
+    });
+
+    await controller.handleKeyInput({ key: "?" });
+    await controller.handleKeyInput({ key: "f", text: "f" });
+    await flushAsyncWork();
+    await controller.handleKeyInput({ key: "b", text: "b" });
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.title).toBe("repo");
+    expect(controller.getPresentationState().ui.picker.query).toBe("b");
+    expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual([
+      "src/beta.ts",
+      "pkg/beta.ts"
+    ]);
+
+    await controller.handleKeyInput({ key: "Enter" });
+    await flushAsyncWork();
+
+    expect(controller.getState().doc.text).toBe("opened:src/beta.ts");
+    expect(controller.getPresentationState().filePath).toBe("src/beta.ts");
+    expect(controller.getBuffers().map((entry) => entry.filePath)).toEqual(["src/current.ts", "src/beta.ts"]);
+  });
+
+  it("opens existing buffers through ?b without rereading host text", async () => {
+    const readFile = vi.fn(async (context: { filePath: string }) => ({ text: `opened:${context.filePath}` }));
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    controller.setHostServices({
+      async searchFiles() {
+        return [{ filePath: "src/beta.ts" }];
+      },
+      readFile
+    });
+
+    await controller.openBuffer("src/beta.ts");
+    expect(readFile).toHaveBeenCalledTimes(1);
+
+    await controller.handleKeyInput({ key: "?" });
+    await controller.handleKeyInput({ key: "b", text: "b" });
+    await flushAsyncWork();
+    await controller.handleKeyInput({ key: "c", text: "c" });
+    await flushAsyncWork();
+    await controller.handleKeyInput({ key: "Enter" });
+
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(controller.getPresentationState().filePath).toBe("src/current.ts");
   });
 
   it("does not sync the language document during rapid engine-backed movement keys", async () => {

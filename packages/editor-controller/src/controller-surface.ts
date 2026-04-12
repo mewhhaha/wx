@@ -4,7 +4,9 @@ import type { EditorCodeAction, EditorDiagnostic, EditorHover, EditorLanguageSer
 import { alignSelectionTopVisualRow } from "./viewport";
 import { normalizeLanguageServices } from "./session";
 import type {
+  EditorBufferState,
   EditorController,
+  EditorFileSearchResult,
   EditorJumpEntry,
   EditorPresentationState,
   EditorSearchState,
@@ -83,6 +85,21 @@ interface CreateControllerSurfaceOptions {
     selectRegister(name: string | null): void;
     getSelectedRegister(): string | null;
   };
+  buffersRuntime: {
+    syncActiveFilePath(filePath: string): void;
+    markActiveSaved(filePath?: string): void;
+    getBuffers(): readonly EditorBufferState[];
+    getBufferEntry(bufferId: string): { id: string; filePath: string; state: EditorState; dirty: boolean } | null;
+    findBufferByFilePath(filePath: string): { id: string; filePath: string; state: EditorState; dirty: boolean } | null;
+    addBuffer(filePath: string, state: EditorState, dirty?: boolean): {
+      id: string;
+      filePath: string;
+      state: EditorState;
+      dirty: boolean;
+    };
+    activateBuffer(bufferId: string): boolean;
+    createStateForText(text: string, template: EditorState): EditorState;
+  };
   keyRuntime: {
     handleKeyInput: EditorController["handleKeyInput"];
     handleTextInput: EditorController["handleTextInput"];
@@ -96,6 +113,41 @@ interface CreateControllerSurfaceOptions {
 
 export function createControllerSurface(options: CreateControllerSurfaceOptions): EditorController {
   const presentation = options.getPresentation();
+  const loadBufferState = (nextState: EditorState, filePath: string, effectType: string) => {
+    const prevState = options.getState();
+    options.setState({
+      ...nextState,
+      revision: prevState.revision + 1
+    });
+    presentation.filePath = filePath;
+    options.buffersRuntime.syncActiveFilePath(filePath);
+    options.history?.clear?.();
+    options.refreshSearchMatchCache(options.getState());
+    options.languageRuntime.resetRequestTracking();
+    options.languageRuntime.clearLanguageState();
+    options.viewportModelRuntime.rebuildViewportModel();
+    options.languageRuntime.syncVisibleLanguageDecorations();
+    options.lifecycleRuntime.notify(prevState, options.getState(), { effects: [{ type: effectType }] }, { recordHistory: false });
+    void options.languageRuntime.syncLanguage({
+      forceDocumentSync: true,
+      refreshHighlights: true,
+      refreshDiagnostics: true,
+      refreshLineChanges: true
+    });
+  };
+  const switchBuffer = (bufferId: string) => {
+    const entry = options.buffersRuntime.getBufferEntry(bufferId);
+    if (!entry) {
+      return false;
+    }
+
+    if (!options.buffersRuntime.activateBuffer(bufferId)) {
+      return false;
+    }
+
+    loadBufferState(entry.state, entry.filePath, "buffer.switch");
+    return true;
+  };
 
   return {
     getState() {
@@ -167,6 +219,55 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     getSelectedRegister() {
       return options.registersJumpsRuntime.getSelectedRegister();
     },
+    getBuffers() {
+      return options.buffersRuntime.getBuffers();
+    },
+    switchBuffer(bufferId) {
+      return switchBuffer(bufferId);
+    },
+    async openBuffer(filePath) {
+      const existing = options.buffersRuntime.findBufferByFilePath(filePath);
+      if (existing) {
+        return switchBuffer(existing.id);
+      }
+
+      const readFile = presentation.language.host?.readFile;
+      if (!readFile) {
+        options.sessionRuntime.setBottomMessage({ tone: "warning", text: "No file reader available" });
+        return false;
+      }
+
+      let payload: { text: string } | string;
+      try {
+        payload = await readFile({ filePath });
+      } catch {
+        options.sessionRuntime.setBottomMessage({ tone: "error", text: `Could not open ${filePath}` });
+        return false;
+      }
+
+      const text = typeof payload === "string" ? payload : payload.text;
+      const entry = options.buffersRuntime.addBuffer(
+        filePath,
+        options.buffersRuntime.createStateForText(text, options.getState())
+      );
+      return switchBuffer(entry.id);
+    },
+    async searchFiles(scope, query = "") {
+      const searchFiles = presentation.language.host?.searchFiles;
+      if (!searchFiles) {
+        return [];
+      }
+
+      try {
+        return await searchFiles({
+          scope,
+          filePath: presentation.filePath,
+          query
+        });
+      } catch {
+        return [] as EditorFileSearchResult[];
+      }
+    },
     setBottomMessage(message) {
       options.sessionRuntime.setBottomMessage(message);
     },
@@ -221,6 +322,7 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       }
 
       presentation.filePath = filePath;
+      options.buffersRuntime.syncActiveFilePath(filePath);
       options.lifecycleRuntime.emitPresentationUpdate("presentation.file-path");
       void options.languageRuntime.syncLanguage({
         refreshHighlights: false,
@@ -318,7 +420,12 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       return options.languageRuntime.formatDocument();
     },
     saveDocument(targetPath = presentation.filePath) {
-      return options.languageRuntime.saveDocument(targetPath);
+      return options.languageRuntime.saveDocument(targetPath).then((saved) => {
+        if (saved) {
+          options.buffersRuntime.markActiveSaved(targetPath);
+        }
+        return saved;
+      });
     }
   };
 }

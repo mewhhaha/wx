@@ -43,6 +43,8 @@ describe("createEditor", () => {
     const eventSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/dom-events.ts"), "utf8");
 
     expect(indexSource).toContain("createDomEventRuntime");
+    expect(indexSource).toContain('from "./dom-bootstrap"');
+    expect(indexSource).toContain('from "./dom-styles"');
     expect(eventSource).toContain("controller.handleKeyInput");
     expect(eventSource).toContain("controller.handleTextInput");
     expect(eventSource).not.toContain("controller.openCommandLine(");
@@ -184,24 +186,24 @@ describe("createEditor", () => {
     });
   });
 
-  it("opens jump target mode on comma and labels matching visible cells after a target character", () => {
+  it("opens jump target mode on space and labels matching visible cells after a target character", () => {
     const container = document.createElement("div");
     document.body.append(container);
 
     const editor = createEditor(container, { value: "alpha beta\ngamma delta" });
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
 
     expect(container.querySelector("[data-wx-editor-flash-hint]")).toBeNull();
     expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" JMP ");
-    expect(container.querySelector("[data-wx-editor-prefix-hint='flash-target']")?.textContent).toBe(",");
+    expect(container.querySelector("[data-wx-editor-prefix-hint='flash-target']")?.textContent).toBe("<space>");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
 
     expect(container.querySelectorAll("[data-wx-editor-flash-hint]")).toHaveLength(1);
     expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" JMP ");
-    expect(container.querySelector("[data-wx-editor-prefix-hint='flash']")?.textContent).toBe(",b");
+    expect(container.querySelector("[data-wx-editor-prefix-hint='flash']")?.textContent).toBe(" b");
     expect(container.querySelector("[data-wx-editor-cursor='true']")).not.toBeNull();
     expect(container.querySelector(".wx-flash-target")).not.toBeNull();
 
@@ -221,7 +223,7 @@ describe("createEditor", () => {
     createEditor(container, { value: "ta ta ta ta\nta ta ta ta" });
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
 
     const labels = [...container.querySelectorAll<HTMLElement>("[data-wx-editor-flash-hint]")]
@@ -238,7 +240,7 @@ describe("createEditor", () => {
     createEditor(container, { value: "alpha beta\ngamma delta" });
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     expect(container.querySelector("[data-wx-editor-flash-hint]")).not.toBeNull();
 
@@ -256,11 +258,11 @@ describe("createEditor", () => {
     );
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
 
-    expect(container.querySelector("[data-wx-editor-prefix-hint='flash']")?.textContent).toBe(",a a");
+    expect(container.querySelector("[data-wx-editor-prefix-hint='flash']")?.textContent).toBe(" a a");
     expect(container.querySelectorAll("[data-wx-editor-flash-hint]")).toHaveLength(2);
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
@@ -1886,7 +1888,7 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-bottom-message='true']")?.textContent).toContain("Applied Rename to good");
   });
 
-  it("opens code actions from space+a", async () => {
+  it("opens code actions from ctrl+.", async () => {
     const container = document.createElement("div");
     document.body.append(container);
 
@@ -1902,15 +1904,13 @@ describe("createEditor", () => {
     });
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ".", ctrlKey: true, bubbles: true }));
     await flushAsyncWork();
 
-    expect(container.querySelector("[data-wx-editor-prefix-hint='space']")).toBeNull();
     expect(container.querySelector("[data-wx-editor-code-actions='true']")?.textContent).toContain("Replace bad");
   });
 
-  it("shows hover info on mousemove and space+k", async () => {
+  it("shows hover info on mousemove and alt+k", async () => {
     const container = document.createElement("div");
     document.body.append(container);
 
@@ -1931,9 +1931,7 @@ describe("createEditor", () => {
     await flushAsyncWork();
     expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent).toContain("hover:0");
 
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
-    expect(container.querySelector("[data-wx-editor-prefix-hint='space']")?.textContent).toContain("<space>");
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "k", altKey: true, bubbles: true }));
     await flushAsyncWork();
     expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent).toContain("hover:0");
 
@@ -2169,9 +2167,46 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
     expect(getSelectionOffsets(editor.getState())).toEqual({ from: 11, to: 16 });
 
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
     expect(container.querySelector("[data-wx-editor-picker='true']")?.textContent).toContain("second");
+  });
+
+  it("searches repo files and opens them as buffers through engine-backed host IO", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, {
+      value: "current",
+      filePath: "src/current.ts",
+      host: {
+        async searchFiles(context) {
+          return [
+            { filePath: "src/current.ts" },
+            { filePath: "src/beta.ts" },
+            { filePath: "pkg/gamma.ts" }
+          ].filter((entry) => entry.filePath.toLowerCase().includes(context.query.toLowerCase()));
+        },
+        async readFile(context) {
+          return { text: `opened:${context.filePath}` };
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true }));
+    await flushAsyncWork();
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
+    await flushAsyncWork();
+
+    expect(container.querySelector("[data-wx-editor-picker='true']")?.textContent).toContain("src/beta.ts");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushAsyncWork();
+
+    expect(editor.getState().doc.text).toBe("opened:src/beta.ts");
+    expect(editor.controller.getBuffers().map((entry) => entry.filePath)).toEqual(["src/current.ts", "src/beta.ts"]);
   });
 
   it("stores jumps and navigates them with Ctrl-o/Ctrl-i", () => {

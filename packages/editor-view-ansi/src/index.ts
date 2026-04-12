@@ -1,5 +1,5 @@
 import type { EditorState } from "../../editor-core/src/index";
-import type { EditorController, EditorPresentationState } from "../../editor-controller/src/index";
+import type { EditorController, EditorHostServices, EditorPresentationState } from "../../editor-controller/src/index";
 import type { EditorLanguageServiceInput, LanguageProvider } from "../../editor-language/src/index";
 import type { ThemeSpec } from "../../editor-theme/src/index";
 
@@ -20,6 +20,7 @@ export interface RenderEditorAnsiFrameInput {
 export interface CreateAnsiEditorMirrorOptions {
   controller?: EditorController;
   filePath?: string;
+  host?: EditorHostServices | null;
   value?: string;
   language?: LanguageProvider | null;
   languageServices?: EditorLanguageServiceInput | null;

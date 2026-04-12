@@ -190,6 +190,10 @@ export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): 
     controller.setFilePath(options.filePath);
   }
 
+  if (options.host !== undefined) {
+    controller.setHostServices(options.host);
+  }
+
   if (options.theme) {
     controller.setThemeName(options.theme.name);
   }

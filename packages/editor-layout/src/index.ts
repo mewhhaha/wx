@@ -199,6 +199,7 @@ export interface EditorLayoutPickerState {
   items: readonly EditorLayoutPickerItemState[];
   selectedIndex: number;
   error: string | null;
+  query: string;
 }
 
 export interface EditorLayoutBottomMessageState {
@@ -227,7 +228,7 @@ export interface EditorLayoutFlashState {
 
 export type EditorLayoutPendingAction =
   | null
-  | { kind: "g" | "[" | "]" | "m" | "space" | "flash-target" }
+  | { kind: "g" | "[" | "]" | "m" | "?" | "space" | "flash-target" }
   | { kind: "z"; sticky: boolean }
   | { kind: "find"; variant: "f" | "F" | "t" | "T" }
   | { kind: "textobject"; mode: "around" | "inside" }
@@ -1145,6 +1146,19 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
       });
     } else {
       let col = 0;
+      const pickerQuery = input.presentation.ui.picker.query.trim();
+
+      if (pickerQuery) {
+        const queryText = `${input.presentation.ui.picker.title}>${pickerQuery} `;
+        bottomRuns.push({
+          col,
+          text: queryText,
+          token: "picker",
+          part: "picker-query"
+        });
+        col += queryText.length;
+      }
+
       input.presentation.ui.picker.items.slice(0, 9).forEach((entry, index) => {
         const text = `${index + 1}:${entry.label}`;
         bottomRuns.push({
@@ -1169,15 +1183,22 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
     bottomRuns.push({
       col: 0,
       text: input.presentation.ui.flash.input
-        ? `,${input.presentation.ui.flash.target} ${input.presentation.ui.flash.input}`
-        : `,${input.presentation.ui.flash.target}`,
+        ? ` ${input.presentation.ui.flash.target} ${input.presentation.ui.flash.input}`
+        : ` ${input.presentation.ui.flash.target}`,
       token: "bottom-prompt",
       part: "prefix-hint"
     });
   } else if (input.presentation.ui.pendingAction?.kind === "flash-target") {
     bottomRuns.push({
       col: 0,
-      text: ",",
+      text: "<space>",
+      token: "bottom-prompt",
+      part: "prefix-hint"
+    });
+  } else if (input.presentation.ui.pendingAction?.kind === "?") {
+    bottomRuns.push({
+      col: 0,
+      text: "?",
       token: "bottom-prompt",
       part: "prefix-hint"
     });

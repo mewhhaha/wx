@@ -91,6 +91,7 @@ export function readBottomBarSignature(presentation: EditorPresentationState): s
     ui.picker.active ? 1 : 0,
     ui.picker.loading ? 1 : 0,
     ui.picker.title,
+    ui.picker.query,
     ui.picker.selectedIndex,
     ui.picker.error ?? "",
     ui.picker.items.map((item) => `${item.label}:${item.detail ?? ""}:${item.selected ? 1 : 0}`).join(";"),

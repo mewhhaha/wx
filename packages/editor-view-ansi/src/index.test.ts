@@ -562,7 +562,7 @@ describe("@wx/editor-view-ansi", () => {
     });
 
     terminal.mount();
-    input.emit(",");
+    input.emit(" ");
     input.emit("a");
     return flushAsyncWork().then(() => {
       expect(controller.getPresentationState().ui.flash.active).toBe(true);

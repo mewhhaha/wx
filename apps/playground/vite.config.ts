@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defineConfig, type Plugin } from "vite";
@@ -120,6 +120,25 @@ function createWxDevBridge(repoRoot: string): Plugin {
     }
   }
 
+  function searchWorkspaceFiles(filePath: string, scope: "repo" | "folder", query: string) {
+    const cwd = scope === "repo" ? repoRoot : dirname(resolveWorkspacePath(filePath));
+    const normalizedQuery = query.trim().toLowerCase();
+    const files = execFileSync("rg", ["--files"], {
+      cwd,
+      encoding: "utf8"
+    })
+      .split("\n")
+      .filter(Boolean)
+      .map((entry) => relative(repoRoot, resolve(cwd, entry)).replaceAll("\\", "/"))
+      .filter((entry) => !normalizedQuery || entry.toLowerCase().includes(normalizedQuery))
+      .slice(0, 50);
+
+    return files.map((entry) => ({
+      filePath: entry,
+      detail: scope === "folder" ? "folder" : "repo"
+    }));
+  }
+
   return {
     name: "wx-dev-bridge",
     configureServer(server) {
@@ -142,6 +161,28 @@ function createWxDevBridge(repoRoot: string): Plugin {
                   text: readFileSync(resolveWorkspacePath(filePath), "utf8")
                 })
               );
+            } catch (error) {
+              response.statusCode = 500;
+              response.end(error instanceof Error ? error.message : String(error));
+            }
+            return;
+          }
+
+          if (request.method === "GET" && request.url.startsWith("/__wx__/search")) {
+            try {
+              const url = new URL(request.url, "http://127.0.0.1");
+              const filePath = url.searchParams.get("file");
+              const scope = url.searchParams.get("scope");
+              const query = url.searchParams.get("q") ?? "";
+
+              if (!filePath || (scope !== "repo" && scope !== "folder")) {
+                response.statusCode = 400;
+                response.end("Expected file and scope query parameters.");
+                return;
+              }
+
+              response.setHeader("content-type", "application/json");
+              response.end(JSON.stringify({ files: searchWorkspaceFiles(filePath, scope, query) }));
             } catch (error) {
               response.statusCode = 500;
               response.end(error instanceof Error ? error.message : String(error));

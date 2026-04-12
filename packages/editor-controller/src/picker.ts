@@ -1,8 +1,10 @@
 import { getCursorOffset, type EditorState } from "@wx/editor-core";
 import type { EditorCodeAction } from "@wx/editor-language";
 import type {
+  EditorBufferState,
   EditorBottomMessageState,
   EditorController,
+  EditorFileSearchResult,
   EditorJumpEntry,
   EditorPickerState,
   EditorPresentationState
@@ -18,6 +20,7 @@ interface PickerRuntimeContext {
   getState(): EditorState;
   getPresentation(): EditorPresentationState;
   getController(): EditorController;
+  getBuffers(): readonly EditorBufferState[];
   setBottomMessage(message: EditorBottomMessageState | null): void;
   emitPresentationUpdate(effectType?: string): void;
   jumpToSelection(from: number, to: number): void;
@@ -34,11 +37,21 @@ export interface PickerRuntime {
   acceptPicker(index?: number): Promise<boolean>;
   openDiagnosticsPicker(): boolean;
   openJumpListPicker(): boolean;
+  openBuffersPicker(): boolean;
+  openFileSearchPicker(scope: "repo" | "folder"): Promise<boolean>;
+  updatePickerQuery(query: string): Promise<boolean>;
   loadCodeActions(): Promise<boolean>;
 }
 
 export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntime {
   let pickerActions: readonly PickerActionItem[] = [];
+  let searchSource:
+    | null
+    | {
+        title: string;
+        query: string;
+        load(query: string): Promise<readonly PickerActionItem[]>;
+      } = null;
 
   const setPickerState: PickerRuntime["setPickerState"] = (
     next,
@@ -58,7 +71,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       previous.loading === next.loading &&
       previous.title === next.title &&
       previous.selectedIndex === next.selectedIndex &&
-      previous.error === next.error
+      previous.error === next.error &&
+      previous.query === next.query
     ) {
       return;
     }
@@ -74,7 +88,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         selected: index === next.selectedIndex
       })),
       selectedIndex: next.selectedIndex,
-      error: next.error
+      error: next.error,
+      query: next.query
     };
     context.emitPresentationUpdate(effectType);
   };
@@ -87,10 +102,12 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         title: "",
         items: [],
         selectedIndex: 0,
-        error: null
+        error: null,
+        query: ""
       },
       effectType
     );
+    searchSource = null;
   };
 
   const movePicker: PickerRuntime["movePicker"] = (delta) => {
@@ -112,7 +129,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         title: presentation.ui.picker.title,
         items: pickerActions,
         selectedIndex: nextIndex,
-        error: presentation.ui.picker.error
+        error: presentation.ui.picker.error,
+        query: presentation.ui.picker.query
       },
       "ui.picker"
     );
@@ -158,7 +176,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         title: "diagnostics",
         items,
         selectedIndex: 0,
-        error: null
+        error: null,
+        query: ""
       },
       "ui.picker"
     );
@@ -194,7 +213,99 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         title: "jumps",
         items,
         selectedIndex: Math.max(0, items.length - 1),
-        error: null
+        error: null,
+        query: ""
+      },
+      "ui.picker"
+    );
+    return true;
+  };
+
+  const openBuffersPicker = () => {
+    const buildItems = async (query: string) => {
+      const normalizedQuery = query.trim().toLowerCase();
+      return context
+        .getBuffers()
+        .filter((entry) => !normalizedQuery || entry.filePath.toLowerCase().includes(normalizedQuery))
+        .map((entry) => ({
+          label: entry.filePath,
+          detail: entry.dirty ? "modified" : "saved",
+          run: () => {
+            context.getController().switchBuffer(entry.id);
+            closePicker("ui.picker.close");
+          }
+        }));
+    };
+
+    searchSource = {
+      title: "buffers",
+      query: "",
+      load: buildItems
+    };
+
+    void updatePickerQuery("");
+    return true;
+  };
+
+  const openFileSearchPicker = async (scope: "repo" | "folder") => {
+    searchSource = {
+      title: scope === "repo" ? "repo" : "folder",
+      query: "",
+      load: async (query) => {
+        const files = await context.getController().searchFiles(scope, query);
+        return files.map((entry) => ({
+          label: entry.filePath,
+          detail: entry.detail,
+          run: async () => {
+            const opened = await context.getController().openBuffer(entry.filePath);
+            if (opened) {
+              closePicker("ui.picker.close");
+            }
+          }
+        }));
+      }
+    };
+
+    return updatePickerQuery("");
+  };
+
+  const updatePickerQuery = async (query: string) => {
+    if (!searchSource) {
+      return false;
+    }
+
+    searchSource.query = query;
+    setPickerState(
+      {
+        active: true,
+        loading: true,
+        title: searchSource.title,
+        items: [],
+        selectedIndex: 0,
+        error: null,
+        query
+      },
+      "ui.picker"
+    );
+
+    let items: readonly PickerActionItem[];
+    try {
+      items = await searchSource.load(query);
+    } catch {
+      closePicker("ui.picker.close");
+      context.setBottomMessage({ tone: "error", text: "Search failed" });
+      return false;
+    }
+
+    setPickerState(
+      {
+        active: true,
+        loading: false,
+        title: searchSource.title,
+        items,
+        selectedIndex: 0,
+        error: items.length === 0 ? "No matches" : null,
+        query
       },
       "ui.picker"
     );
@@ -210,7 +321,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         title: "code actions",
         items: [],
         selectedIndex: 0,
-        error: null
+        error: null,
+        query: ""
       },
       "ui.picker"
     );
@@ -245,7 +357,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         title: "code actions",
         items,
         selectedIndex: 0,
-        error: items.length === 0 ? "No code actions" : null
+        error: items.length === 0 ? "No code actions" : null,
+        query: ""
       },
       "ui.picker"
     );
@@ -265,6 +378,9 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     acceptPicker,
     openDiagnosticsPicker,
     openJumpListPicker,
+    openBuffersPicker,
+    openFileSearchPicker,
+    updatePickerQuery,
     loadCodeActions
   };
 }

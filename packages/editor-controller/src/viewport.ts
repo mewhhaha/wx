@@ -12,6 +12,7 @@ function getLayoutPendingAction(pendingAction: EditorPendingAction): EditorPendi
     pendingAction?.kind === "[" ||
     pendingAction?.kind === "]" ||
     pendingAction?.kind === "m" ||
+    pendingAction?.kind === "?" ||
     pendingAction?.kind === "space" ||
     pendingAction?.kind === "flash-target" ||
     pendingAction?.kind === "z"

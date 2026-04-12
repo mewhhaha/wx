@@ -68,6 +68,12 @@ export interface EditorLineChange {
 
 export interface EditorHostServices {
   writeFile?(context: { filePath: string; text: string }): Promise<void>;
+  readFile?(context: { filePath: string }): Promise<{ text: string } | string>;
+  searchFiles?(context: {
+    scope: "repo" | "folder";
+    filePath: string;
+    query: string;
+  }): Promise<readonly EditorFileSearchResult[]>;
   getLineChanges?(context: { filePath: string; text: string }): Promise<readonly EditorLineChange[]>;
   didWriteFile?(context: { filePath: string; text: string }): Promise<void> | void;
 }
@@ -101,6 +107,7 @@ export interface EditorPickerState {
   items: readonly EditorPickerItemState[];
   selectedIndex: number;
   error: string | null;
+  query: string;
 }
 
 export interface EditorHoverState {
@@ -129,6 +136,7 @@ export type EditorPendingAction =
   | { kind: "g" }
   | { kind: "[" | "]" }
   | { kind: "m" }
+  | { kind: "?" }
   | { kind: "space" }
   | { kind: "flash-target" }
   | { kind: "z"; sticky: boolean }
@@ -213,6 +221,17 @@ export interface EditorPresentationState {
   registers: EditorRegisterState;
 }
 
+export interface EditorFileSearchResult {
+  filePath: string;
+  detail?: string;
+}
+
+export interface EditorBufferState {
+  id: string;
+  filePath: string;
+  dirty: boolean;
+}
+
 export interface EditorCommandLineKeyOptions {
   themeNames?: readonly string[];
 }
@@ -269,6 +288,10 @@ export interface EditorController {
   setRegister(name: string | null, value: string | null): void;
   selectRegister(name: string | null): void;
   getSelectedRegister(): string | null;
+  getBuffers(): readonly EditorBufferState[];
+  switchBuffer(bufferId: string): boolean;
+  openBuffer(filePath: string): Promise<boolean>;
+  searchFiles(scope: "repo" | "folder", query?: string): Promise<readonly EditorFileSearchResult[]>;
   updatePresentationState(
     updater: (state: EditorPresentationState) => void,
     effectType?: string,
