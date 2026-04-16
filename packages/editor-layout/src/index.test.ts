@@ -4,33 +4,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { createEditorState, createSelection } from "@wx/editor-core";
+import { collectSearchMatches, createEditorState, createSelection } from "@wx/editor-core";
 import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
 import { buildEditorLayout, buildFlashLabels, buildVisualRows } from "./index";
-
-function collectSearchMatches(text: string, query: string): Array<{ from: number; to: number }> {
-  if (!query) {
-    return [];
-  }
-
-  const pattern = new RegExp(query, "gu");
-  const matches: Array<{ from: number; to: number }> = [];
-  let result = pattern.exec(text);
-
-  while (result) {
-    const matchedText = result[0] ?? "";
-    matches.push({ from: result.index, to: result.index + Math.max(1, matchedText.length) });
-
-    if (matchedText.length === 0) {
-      pattern.lastIndex = result.index + 1;
-    }
-
-    result = pattern.exec(text);
-  }
-
-  return matches;
-}
 
 describe("@wx/editor-layout boundaries", () => {
   it("keeps layout runtime modules on public package surfaces only", () => {
