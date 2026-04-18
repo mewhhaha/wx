@@ -107,6 +107,10 @@ interface CreateControllerSurfaceOptions {
     beginFlashTarget(): void;
     handleFlashKey(key: string): boolean;
   };
+  multiSelectionRuntime: Pick<
+    EditorController,
+    "selectNextOccurrence" | "selectAllOccurrences" | "splitSelectionsByLine" | "collapseSelections" | "removePrimarySelection"
+  >;
   getActiveOffset(): number;
   createJumpEntry(): EditorJumpEntry;
 }
@@ -267,6 +271,21 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       } catch {
         return [] as EditorFileSearchResult[];
       }
+    },
+    selectNextOccurrence(reverse = false) {
+      return options.multiSelectionRuntime.selectNextOccurrence(reverse);
+    },
+    selectAllOccurrences() {
+      return options.multiSelectionRuntime.selectAllOccurrences();
+    },
+    splitSelectionsByLine() {
+      return options.multiSelectionRuntime.splitSelectionsByLine();
+    },
+    collapseSelections() {
+      return options.multiSelectionRuntime.collapseSelections();
+    },
+    removePrimarySelection() {
+      return options.multiSelectionRuntime.removePrimarySelection();
     },
     setBottomMessage(message) {
       options.sessionRuntime.setBottomMessage(message);

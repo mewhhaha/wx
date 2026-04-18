@@ -7,7 +7,13 @@ const ROOT_COMMANDS: EditorCommandCompletionItem[] = [
   { label: "theme", detail: "switch theme" },
   { label: "write", detail: "save document" },
   { label: "format", detail: "format document" },
-  { label: "code-actions", detail: "show code actions" }
+  { label: "code-actions", detail: "show code actions" },
+  { label: "select-next", detail: "add next occurrence" },
+  { label: "select-prev", detail: "add previous occurrence" },
+  { label: "select-all", detail: "select all occurrences" },
+  { label: "split-lines", detail: "split selections by line" },
+  { label: "collapse-selections", detail: "keep only primary selection" },
+  { label: "remove-selection", detail: "drop primary selection" }
 ];
 
 const QUESTION_ACTIONS: EditorCommandCompletionItem[] = [
@@ -66,7 +72,25 @@ export function hasRunnableCommandLineValue(rawValue: string, themeNames: readon
   const value = commandName.toLowerCase();
   const commandArgument = argumentParts.join(" ").trim();
 
-  if (["format", "fmt", "w", "write", "code-actions", "codeaction", "ca", "q", "quit"].includes(value)) {
+  if (
+    [
+      "format",
+      "fmt",
+      "w",
+      "write",
+      "code-actions",
+      "codeaction",
+      "ca",
+      "q",
+      "quit",
+      "select-next",
+      "select-prev",
+      "select-all",
+      "split-lines",
+      "collapse-selections",
+      "remove-selection"
+    ].includes(value)
+  ) {
     return true;
   }
 

@@ -11,6 +11,7 @@ import { createControllerSurface } from "./controller-surface";
 import { createSnapshotHistory } from "./history";
 import { createKeyRuntime } from "./key-input";
 import { createLanguageRuntime, type LanguageRuntime } from "./language";
+import { createMultiSelectionRuntime } from "./multi-selection";
 import { createPickerRuntime, type PickerRuntime } from "./picker";
 import { createPresentationState } from "./presentation";
 import { createRegistersJumpsRuntime } from "./registers-jumps";
@@ -101,6 +102,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let keyRuntime!: ReturnType<typeof createKeyRuntime>;
   let languageRuntime!: LanguageRuntime;
   let pickerRuntime!: PickerRuntime;
+  let searchRuntime!: ReturnType<typeof createControllerSearchRuntime>;
   let sessionRuntime!: ReturnType<typeof createSessionRuntime>;
   let registersJumpsRuntime!: ReturnType<typeof createRegistersJumpsRuntime>;
   const buffersRuntime = createBuffersRuntime({
@@ -110,6 +112,13 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let viewportModelRuntime!: ReturnType<typeof createViewportModelRuntime>;
   let viewportRuntime!: ViewportRuntime;
   let lifecycleRuntime!: ReturnType<typeof createControllerLifecycleRuntime>;
+  const multiSelectionRuntime = createMultiSelectionRuntime({
+    getState: () => state,
+    getSearchState: () => searchRuntime.searchState,
+    dispatch(transaction) {
+      lifecycleRuntime.dispatch(transaction);
+    }
+  });
 
   const syncVisibleViewportRows = () => syncVisibleViewportRowsInPresentation(presentation);
 
@@ -135,7 +144,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
 
   const syncVisibleLanguageDecorations = () => languageRuntime.syncVisibleLanguageDecorations();
 
-  const searchRuntime = createControllerSearchRuntime({
+  searchRuntime = createControllerSearchRuntime({
     getState: () => state,
     getPresentation: () => presentation,
     syncVisibleLanguageDecorations,
@@ -373,6 +382,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     registersJumpsRuntime,
     buffersRuntime,
     keyRuntime,
+    multiSelectionRuntime,
     getActiveOffset: contextRuntime.getActiveOffset,
     createJumpEntry: () => createJumpEntry(state)
   });

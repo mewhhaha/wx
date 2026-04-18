@@ -238,6 +238,7 @@ export interface EditorBufferState {
 
 export interface EditorCommandLineKeyOptions {
   themeNames?: readonly string[];
+  shift?: boolean;
 }
 
 export interface EditorCommandLineKeyResult {
@@ -296,6 +297,11 @@ export interface EditorController {
   switchBuffer(bufferId: string): boolean;
   openBuffer(filePath: string): Promise<boolean>;
   searchFiles(scope: "repo" | "folder", query?: string): Promise<readonly EditorFileSearchResult[]>;
+  selectNextOccurrence(reverse?: boolean): boolean;
+  selectAllOccurrences(): boolean;
+  splitSelectionsByLine(): boolean;
+  collapseSelections(): boolean;
+  removePrimarySelection(): boolean;
   updatePresentationState(
     updater: (state: EditorPresentationState) => void,
     effectType?: string,

@@ -3,6 +3,7 @@ import {
   getActiveCharacterOffset,
   getCursorOffset,
   getSelectionOffsets,
+  getSelectionRanges,
   type EditorState
 } from "@wx/editor-core";
 import type { DiagnosticSeverity, EditorDiagnostic, HighlightRole, HighlightSpan } from "@wx/editor-language";
@@ -706,11 +707,12 @@ function renderLineRuns(args: {
   const line = state.doc.lineAt(state.doc.positionAt(args.segmentStart).line);
   const fragments: EditorLayoutRun[] = [];
   const activeOffset = getActiveCharacterOffset(state);
-  const selection = getSelectionOffsets(state);
+  const selections = getSelectionRanges(state);
   const lineEnd = line.start + line.text.length;
   const segmentStartIndex = Math.max(0, args.segmentStart - line.start);
   const segmentEndIndex = Math.max(segmentStartIndex, args.segmentEnd - line.start);
   const indentGuideOffsets = getIndentGuideOffsets(line.text, line.start, args.indentGuideOptions);
+  const isSelectedOffset = (offset: number) => selections.some((selection) => offset >= selection.from && offset < selection.to);
   const pushRun = (run: EditorLayoutRun) => {
     const previous = fragments[fragments.length - 1];
 
@@ -747,7 +749,7 @@ function renderLineRuns(args: {
         {
           col: 0,
           text: EMPTY_CELL_TEXT,
-          token: "text",
+          token: "text" as const,
           sourceRange: { from: line.start, to: line.start + 1 }
         }
       ];
@@ -774,12 +776,12 @@ function renderLineRuns(args: {
   }
 
   if (line.text.length === 0) {
-    const selected = selection.from <= line.start && line.start < selection.to;
+    const selected = isSelectedOffset(line.start);
     return [
       {
         col: 0,
         text: EMPTY_CELL_TEXT,
-        token: "text",
+        token: "text" as const,
         sourceRange: { from: line.start, to: line.start + 1 },
         selected,
         cursorBlock: activeOffset === line.start
@@ -797,7 +799,7 @@ function renderLineRuns(args: {
       token,
       sourceRange: { from: offset, to: offset + 1 },
       isIndentGuide: indentGuideOffsets.has(offset),
-      selected: offset >= selection.from && offset < selection.to,
+      selected: isSelectedOffset(offset),
       cursorBlock: offset === activeOffset,
       severity: diagnosticSeverityAtOffset(args.lineDiagnostics, offset) ?? undefined,
       searchMatch: searchFlags.isSearchMatch,
@@ -807,7 +809,7 @@ function renderLineRuns(args: {
   }
 
   const hasLineEnding = lineEnd < state.doc.length && state.doc.text[lineEnd] === "\n";
-  const lineEndingSelected = hasLineEnding && lineEnd >= selection.from && lineEnd < selection.to;
+  const lineEndingSelected = hasLineEnding && isSelectedOffset(lineEnd);
   const lineEndingCursor = hasLineEnding && activeOffset === lineEnd;
 
   if (args.includeLineEndingCell && (lineEndingSelected || lineEndingCursor)) {
@@ -1185,7 +1187,7 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
     {
       col: statusModeText.length + input.presentation.filePath.length + 4,
       text: [
-        "1 sel",
+        input.state.selection.ranges.length === 1 ? "1 sel" : `${input.state.selection.ranges.length} sels`,
         errors > 0 ? `E${errors}` : "",
         warnings > 0 ? `W${warnings}` : "",
         `${cursorPosition.line + 1}:${cursorPosition.column + 1}`

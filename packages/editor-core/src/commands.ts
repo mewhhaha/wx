@@ -1,15 +1,20 @@
-import { type TextChange } from "./document";
+import { mapOffsetThroughChanges, type TextChange } from "./document";
 import {
   applyTransaction,
   clampCharacterOffset,
   clampInsertionOffset,
   createCharacterSelection,
   createSelection,
+  createSelectionSet,
   getActiveCharacterOffset,
+  getActiveCharacterOffsetForRange,
   getCursorOffset,
   getPrimaryRange,
   getSelectionOffsets,
+  getSelectionOffsetsForRange,
+  getSelectionRanges,
   type EditorState,
+  type SelectionRange,
   type SelectionSet,
   type Transaction
 } from "./state";
@@ -115,63 +120,121 @@ function isRunEnd(text: string, offset: number): boolean {
   return isRunEndWithClassifier(text, offset, classifyCharacter);
 }
 
-function withInsertMovement(state: EditorState, cursor: number) {
+function selectionChanged(left: SelectionSet, right: SelectionSet): boolean {
+  if (left.primaryIndex !== right.primaryIndex || left.ranges.length !== right.ranges.length) {
+    return true;
+  }
+
+  return left.ranges.some((range, index) => {
+    const other = right.ranges[index];
+    return (
+      !other ||
+      range.anchor !== other.anchor ||
+      range.head !== other.head ||
+      range.preferredColumn !== other.preferredColumn
+    );
+  });
+}
+
+function withInsertMovement(state: EditorState, nextSelection: SelectionSet) {
   if (state.mode !== "insert" || !state.insertSession) {
     return undefined;
   }
 
   return {
     ...state.insertSession,
-    moved: state.insertSession.moved || cursor !== getCursorOffset(state.selection)
+    moved: state.insertSession.moved || selectionChanged(state.selection, nextSelection)
   };
 }
 
-function moveToOffset(state: EditorState, dispatch: EditorDispatch, cursor: number, preferredColumn: number | null): boolean {
+function createRangeSelectionForOffset(
+  state: EditorState,
+  range: SelectionRange,
+  cursor: number,
+  preferredColumn: number | null
+): SelectionRange {
   if (state.mode === "insert") {
     const nextCursor = clampInsertionOffset(state.doc, cursor);
-    dispatch({
-      selection: createSelection(nextCursor, nextCursor, preferredColumn),
-      insertSession: withInsertMovement(state, nextCursor)
-    });
-    return true;
+    return {
+      anchor: nextCursor,
+      head: nextCursor,
+      preferredColumn
+    };
   }
 
   const target = clampCharacterOffset(state.doc, cursor);
+  return state.mode === "visual"
+    ? {
+        anchor: range.anchor,
+        head: target,
+        preferredColumn
+      }
+    : {
+        anchor: target,
+        head: target,
+        preferredColumn
+      };
+}
+
+function mapSelectionSet(
+  state: EditorState,
+  mapper: (range: SelectionRange, index: number) => SelectionRange
+): SelectionSet {
+  return createSelectionSet(
+    state.selection.ranges.map((range, index) => mapper(range, index)),
+    state.selection.primaryIndex
+  );
+}
+
+function moveSelectionsToOffsets(
+  state: EditorState,
+  dispatch: EditorDispatch,
+  getCursor: (range: SelectionRange, index: number) => { cursor: number; preferredColumn: number | null }
+): boolean {
+  const nextSelection = mapSelectionSet(state, (range, index) => {
+    const next = getCursor(range, index);
+    return createRangeSelectionForOffset(state, range, next.cursor, next.preferredColumn);
+  });
+
   dispatch({
-    selection:
-      state.mode === "visual"
-        ? createSelection(getPrimaryRange(state.selection).anchor, target, preferredColumn)
-        : createCharacterSelection(state.doc, target, preferredColumn)
+    selection: nextSelection,
+    insertSession: withInsertMovement(state, nextSelection)
   });
   return true;
 }
 
+function moveToOffset(state: EditorState, dispatch: EditorDispatch, cursor: number, preferredColumn: number | null): boolean {
+  return moveSelectionsToOffsets(state, dispatch, () => ({ cursor, preferredColumn }));
+}
+
 function moveVerticalByLines(state: EditorState, dispatch: EditorDispatch, delta: number): boolean {
-  const range = getPrimaryRange(state.selection);
-  const activeOffset = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-  const position = state.doc.positionAt(activeOffset);
-  const targetLineIndex = Math.max(0, Math.min(state.doc.lineCount - 1, position.line + delta));
-
-  if (targetLineIndex === position.line) {
-    return true;
-  }
-
-  const goalColumn = range.preferredColumn ?? position.column;
-  const targetLine = state.doc.lineAt(targetLineIndex);
-  const maxColumn = state.mode === "insert" ? targetLine.text.length : Math.max(0, targetLine.text.length - 1);
-  const cursor = targetLine.start + Math.min(goalColumn, maxColumn);
-  return moveToOffset(state, dispatch, cursor, goalColumn);
+  return moveSelectionsToOffsets(state, dispatch, (range) => {
+    const activeOffset = state.mode === "insert" ? range.head : getActiveCharacterOffsetForRange(state, range);
+    const position = state.doc.positionAt(activeOffset);
+    const targetLineIndex = Math.max(0, Math.min(state.doc.lineCount - 1, position.line + delta));
+    const goalColumn = range.preferredColumn ?? position.column;
+    const targetLine = state.doc.lineAt(targetLineIndex);
+    const maxColumn = state.mode === "insert" ? targetLine.text.length : Math.max(0, targetLine.text.length - 1);
+    return {
+      cursor: targetLine.start + Math.min(goalColumn, maxColumn),
+      preferredColumn: goalColumn
+    };
+  });
 }
 
 export const moveLeft: Command = (state, dispatch) => {
-  const cursor = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-  return moveToOffset(state, dispatch, Math.max(0, cursor - 1), null);
+  return moveSelectionsToOffsets(state, dispatch, (range) => {
+    const cursor = state.mode === "insert" ? range.head : getActiveCharacterOffsetForRange(state, range);
+    return { cursor: Math.max(0, cursor - 1), preferredColumn: null };
+  });
 };
 
 export const moveRight: Command = (state, dispatch) => {
-  const cursor = state.mode === "insert" ? getCursorOffset(state.selection) : getActiveCharacterOffset(state);
-  const limit = state.mode === "insert" ? state.doc.length : Math.max(0, state.doc.length - 1);
-  return moveToOffset(state, dispatch, Math.min(limit, cursor + 1), null);
+  return moveSelectionsToOffsets(state, dispatch, (range) => {
+    const cursor = state.mode === "insert" ? range.head : getActiveCharacterOffsetForRange(state, range);
+    const limit = state.mode === "insert" ? state.doc.length : Math.max(0, state.doc.length - 1);
+    return { cursor: Math.min(limit, cursor + 1), preferredColumn: null };
+  });
 };
 
 function moveVertical(state: EditorState, dispatch: EditorDispatch, direction: -1 | 1): boolean {
@@ -186,10 +249,17 @@ export const enterInsertMode: Command = (state, dispatch, context) => {
     return true;
   }
 
-  const selection = getSelectionOffsets(state);
+  const nextSelection = createSelectionSet(
+    getSelectionRanges(state).map((selection) => ({
+      anchor: selection.from,
+      head: selection.from,
+      preferredColumn: null
+    })),
+    state.selection.primaryIndex
+  );
   dispatch({
     mode: "insert",
-    selection: createSelection(selection.from, selection.from),
+    selection: nextSelection,
     insertSession: {
       restoreOffset: getActiveCharacterOffset(state),
       restoreAffinity: "right",
@@ -205,10 +275,17 @@ export const appendInsertMode: Command = (state, dispatch, context) => {
     return true;
   }
 
-  const selection = getSelectionOffsets(state);
+  const nextSelection = createSelectionSet(
+    getSelectionRanges(state).map((selection) => ({
+      anchor: selection.to,
+      head: selection.to,
+      preferredColumn: null
+    })),
+    state.selection.primaryIndex
+  );
   dispatch({
     mode: "insert",
-    selection: createSelection(selection.to, selection.to),
+    selection: nextSelection,
     insertSession: {
       restoreOffset: getActiveCharacterOffset(state),
       restoreAffinity: "left",
@@ -238,26 +315,51 @@ function openLine(state: EditorState, dispatch: EditorDispatch, context: Command
     return true;
   }
 
-  const activeOffset = getActiveCharacterOffset(state);
-  const line = state.doc.lineAt(state.doc.positionAt(activeOffset).line);
-  const insertAt =
-    position === "above"
-      ? line.start
-      : line.end < state.doc.length && state.doc.text[line.end] === "\n"
-        ? line.end + 1
-        : state.doc.length;
-  const change: TextChange = {
-    from: insertAt,
-    to: insertAt,
-    insert: "\n"
-  };
+  const insertOffsets = createSelectionSet(
+    state.selection.ranges.map((range) => {
+      const activeOffset = getActiveCharacterOffsetForRange(state, range);
+      const line = state.doc.lineAt(state.doc.positionAt(activeOffset).line);
+      const insertAt =
+        position === "above"
+          ? line.start
+          : line.end < state.doc.length && state.doc.text[line.end] === "\n"
+            ? line.end + 1
+            : state.doc.length;
+      return {
+        anchor: insertAt,
+        head: insertAt,
+        preferredColumn: null
+      };
+    }),
+    state.selection.primaryIndex
+  );
+  const changes = [...new Set(insertOffsets.ranges.map((range) => range.head))]
+    .sort((left, right) => right - left)
+    .map(
+      (insertAt): TextChange => ({
+        from: insertAt,
+        to: insertAt,
+        insert: "\n"
+      })
+    );
+  const nextSelection = createSelectionSet(
+    insertOffsets.ranges.map((range) => {
+      const cursor = mapOffsetThroughChanges(range.head, changes, "left");
+      return {
+        anchor: cursor,
+        head: cursor,
+        preferredColumn: null
+      };
+    }),
+    insertOffsets.primaryIndex
+  );
 
   dispatch({
-    changes: [change],
+    changes,
     mode: "insert",
-    selection: createSelection(insertAt, insertAt),
+    selection: nextSelection,
     insertSession: {
-      restoreOffset: insertAt,
+      restoreOffset: insertOffsets.ranges[insertOffsets.primaryIndex]?.head ?? 0,
       restoreAffinity: "left",
       moved: false
     }
@@ -275,10 +377,19 @@ export const toggleVisualMode: Command = (state, dispatch) => {
   }
 
   if (state.mode === "visual") {
-    const active = getActiveCharacterOffset(state);
     dispatch({
       mode: "normal",
-      selection: createCharacterSelection(state.doc, active)
+      selection: createSelectionSet(
+        state.selection.ranges.map((range) => {
+          const active = getActiveCharacterOffsetForRange(state, range);
+          return {
+            anchor: active,
+            head: active,
+            preferredColumn: null
+          };
+        }),
+        state.selection.primaryIndex
+      )
     });
     return true;
   }
@@ -289,21 +400,33 @@ export const toggleVisualMode: Command = (state, dispatch) => {
 
 export const enterNormalMode: Command = (state, dispatch) => {
   if (state.mode === "insert") {
-    const cursor = clampInsertionOffset(state.doc, getCursorOffset(state.selection));
-    const position = state.doc.positionAt(cursor);
-    const previousCharacter = cursor > 0 ? state.doc.text[cursor - 1] : undefined;
-    const nextCursor =
-      state.doc.length === 0
-        ? 0
-        : state.insertSession && !state.insertSession.moved
-          ? clampCharacterOffset(state.doc, state.insertSession.restoreOffset)
-          : clampCharacterOffset(
-              state.doc,
-              cursor > 0 && position.column > 0 && previousCharacter !== "\n" ? cursor - 1 : cursor
-            );
+    const insertSession = state.insertSession;
+    const nextSelection = createSelectionSet(
+      state.selection.ranges.map((range, index) => {
+        const cursor = clampInsertionOffset(state.doc, range.head);
+        const position = state.doc.positionAt(cursor);
+        const previousCharacter = cursor > 0 ? state.doc.text[cursor - 1] : undefined;
+        const useRestore = !!insertSession && !insertSession.moved && index === state.selection.primaryIndex;
+        const nextCursor =
+          state.doc.length === 0
+            ? 0
+            : useRestore
+              ? clampCharacterOffset(state.doc, insertSession.restoreOffset)
+              : clampCharacterOffset(
+                  state.doc,
+                  cursor > 0 && position.column > 0 && previousCharacter !== "\n" ? cursor - 1 : cursor
+                );
+        return {
+          anchor: nextCursor,
+          head: nextCursor,
+          preferredColumn: null
+        };
+      }),
+      state.selection.primaryIndex
+    );
     dispatch({
       mode: "normal",
-      selection: createCharacterSelection(state.doc, nextCursor),
+      selection: nextSelection,
       insertSession: null
     });
     return true;
@@ -311,7 +434,17 @@ export const enterNormalMode: Command = (state, dispatch) => {
 
   dispatch({
     mode: "normal",
-    selection: createCharacterSelection(state.doc, getActiveCharacterOffset(state)),
+    selection: createSelectionSet(
+      state.selection.ranges.map((range) => {
+        const active = getActiveCharacterOffsetForRange(state, range);
+        return {
+          anchor: active,
+          head: active,
+          preferredColumn: null
+        };
+      }),
+      state.selection.primaryIndex
+    ),
     insertSession: null
   });
   return true;
@@ -440,75 +573,118 @@ function findNextLongWordEndFromOffset(text: string, offset: number): number | n
 }
 
 function selectNormalWordForward(state: EditorState, dispatch: EditorDispatch): boolean {
-  const selection = getSelectionOffsets(state);
-  let start = selection.to - selection.from === 1 ? selection.from : selection.to;
+  const nextSelection = createSelectionSet(
+    state.selection.ranges.map((range) => {
+      const selection = getSelectionOffsetsForRange(state, range);
+      let start = selection.to - selection.from === 1 ? selection.from : selection.to;
 
-  if (selection.to - selection.from === 1) {
-    const current = Math.max(0, Math.min(start, state.doc.length - 1));
-    if (classifyCharacter(state.doc.text[current]) !== "whitespace" && isRunEnd(state.doc.text, current)) {
-      start = current + 1;
-    }
-  }
+      if (selection.to - selection.from === 1) {
+        const current = Math.max(0, Math.min(start, state.doc.length - 1));
+        if (classifyCharacter(state.doc.text[current]) !== "whitespace" && isRunEnd(state.doc.text, current)) {
+          start = current + 1;
+        }
+      }
 
-  if (start >= state.doc.length) {
-    return true;
-  }
+      if (start >= state.doc.length) {
+        return range;
+      }
 
-  const target = findNextWordEndFromOffset(state.doc.text, start);
-  if (target === null) {
-    return true;
-  }
-
+      const target = findNextWordEndFromOffset(state.doc.text, start);
+      return target === null
+        ? range
+        : {
+            anchor: start,
+            head: target,
+            preferredColumn: null
+          };
+    }),
+    state.selection.primaryIndex
+  );
   dispatch({
-    selection: createSelection(start, target)
+    selection: nextSelection
   });
   return true;
 }
 
 function selectNormalWordBackward(state: EditorState, dispatch: EditorDispatch): boolean {
-  const selection = getSelectionOffsets(state);
-  let end = selection.to - selection.from === 1 ? selection.to : selection.from;
+  const nextSelection = createSelectionSet(
+    state.selection.ranges.map((range) => {
+      const selection = getSelectionOffsetsForRange(state, range);
+      let end = selection.to - selection.from === 1 ? selection.to : selection.from;
 
-  if (selection.to - selection.from === 1) {
-    const current = Math.max(0, Math.min(selection.from, state.doc.length - 1));
-    if (isRunStart(state.doc.text, current)) {
-      end = selection.from;
-    }
-  }
+      if (selection.to - selection.from === 1) {
+        const current = Math.max(0, Math.min(selection.from, state.doc.length - 1));
+        if (isRunStart(state.doc.text, current)) {
+          end = selection.from;
+        }
+      }
 
-  if (end <= 0) {
-    return true;
-  }
+      if (end <= 0) {
+        return range;
+      }
 
-  const target = findPreviousWordStartFromOffset(state.doc.text, end - 1);
-  if (target === null) {
-    return true;
-  }
-
+      const target = findPreviousWordStartFromOffset(state.doc.text, end - 1);
+      return target === null
+        ? range
+        : {
+            anchor: end - 1,
+            head: target,
+            preferredColumn: null
+          };
+    }),
+    state.selection.primaryIndex
+  );
   dispatch({
-    selection: createSelection(end - 1, target)
+    selection: nextSelection
   });
   return true;
 }
 
-function selectToTarget(state: EditorState, dispatch: EditorDispatch, target: number): boolean {
-  const active = getActiveCharacterOffset(state);
+function selectToTargets(
+  state: EditorState,
+  dispatch: EditorDispatch,
+  getTarget: (range: SelectionRange, index: number) => number | null
+): boolean {
+  const nextSelection = createSelectionSet(
+    state.selection.ranges.map((range, index) => {
+      const target = getTarget(range, index);
+      if (target === null) {
+        return range;
+      }
 
-  if (state.mode === "visual") {
-    dispatch({
-      selection: createSelection(getPrimaryRange(state.selection).anchor, target)
-    });
-    return true;
-  }
+      const active = getActiveCharacterOffsetForRange(state, range);
+      if (state.mode === "visual") {
+        return {
+          anchor: range.anchor,
+          head: target,
+          preferredColumn: null
+        };
+      }
+
+      return {
+        anchor: active,
+        head: target,
+        preferredColumn: null
+      };
+    }),
+    state.selection.primaryIndex
+  );
 
   dispatch({
-    selection: createSelection(active, target)
+    selection: nextSelection
   });
   return true;
 }
 
-function gotoTarget(state: EditorState, dispatch: EditorDispatch, target: number): boolean {
-  return moveToOffset(state, dispatch, target, null);
+function gotoTargets(
+  state: EditorState,
+  dispatch: EditorDispatch,
+  getTarget: (range: SelectionRange, index: number) => number | null
+): boolean {
+  return moveSelectionsToOffsets(state, dispatch, (range, index) => ({
+    cursor: getTarget(range, index) ?? getActiveCharacterOffsetForRange(state, range),
+    preferredColumn: null
+  }));
 }
 
 function paragraphStartAtOrBefore(doc: EditorState["doc"], lineIndex: number): number | null {
@@ -621,7 +797,7 @@ export const gotoFileStart: Command = (state, dispatch) => {
     return true;
   }
 
-  return gotoTarget(state, dispatch, 0);
+  return gotoTargets(state, dispatch, () => 0);
 };
 
 export const gotoLastLine: Command = (state, dispatch) => {
@@ -634,7 +810,7 @@ export const gotoLastLine: Command = (state, dispatch) => {
       ? state.doc.lineCount - 2
       : state.doc.lineCount - 1;
 
-  return gotoTarget(state, dispatch, state.doc.lineAt(Math.max(0, lastLineIndex)).start);
+  return gotoTargets(state, dispatch, () => state.doc.lineAt(Math.max(0, lastLineIndex)).start);
 };
 
 export const gotoLineStart: Command = (state, dispatch) => {
@@ -642,8 +818,10 @@ export const gotoLineStart: Command = (state, dispatch) => {
     return true;
   }
 
-  const line = state.doc.lineAt(state.doc.positionAt(getActiveCharacterOffset(state)).line);
-  return gotoTarget(state, dispatch, line.start);
+  return gotoTargets(state, dispatch, (range) => {
+    const line = state.doc.lineAt(state.doc.positionAt(getActiveCharacterOffsetForRange(state, range)).line);
+    return line.start;
+  });
 };
 
 export const gotoLineEnd: Command = (state, dispatch) => {
@@ -651,9 +829,10 @@ export const gotoLineEnd: Command = (state, dispatch) => {
     return true;
   }
 
-  const line = state.doc.lineAt(state.doc.positionAt(getActiveCharacterOffset(state)).line);
-  const target = Math.max(line.start, line.end - 1);
-  return gotoTarget(state, dispatch, target);
+  return gotoTargets(state, dispatch, (range) => {
+    const line = state.doc.lineAt(state.doc.positionAt(getActiveCharacterOffsetForRange(state, range)).line);
+    return Math.max(line.start, line.end - 1);
+  });
 };
 
 export const gotoFirstNonWhitespace: Command = (state, dispatch) => {
@@ -661,13 +840,11 @@ export const gotoFirstNonWhitespace: Command = (state, dispatch) => {
     return true;
   }
 
-  const line = state.doc.lineAt(state.doc.positionAt(getActiveCharacterOffset(state)).line);
-  const column = line.text.search(/\S/);
-  if (column < 0) {
-    return true;
-  }
-
-  return gotoTarget(state, dispatch, line.start + column);
+  return gotoTargets(state, dispatch, (range) => {
+    const line = state.doc.lineAt(state.doc.positionAt(getActiveCharacterOffsetForRange(state, range)).line);
+    const column = line.text.search(/\S/);
+    return column < 0 ? null : line.start + column;
+  });
 };
 
 export const moveWordForward: Command = (state, dispatch) => {
@@ -675,8 +852,9 @@ export const moveWordForward: Command = (state, dispatch) => {
     return selectNormalWordForward(state, dispatch);
   }
 
-  const target = findNextWordEndFromOffset(state.doc.text, getActiveCharacterOffset(state));
-  return target === null ? true : selectToTarget(state, dispatch, target);
+  return selectToTargets(state, dispatch, (range) =>
+    findNextWordEndFromOffset(state.doc.text, getActiveCharacterOffsetForRange(state, range))
+  );
 };
 
 export const moveWordBackward: Command = (state, dispatch) => {
@@ -684,28 +862,33 @@ export const moveWordBackward: Command = (state, dispatch) => {
     return selectNormalWordBackward(state, dispatch);
   }
 
-  const target = findPreviousWordStartFromOffset(state.doc.text, getActiveCharacterOffset(state));
-  return target === null ? true : selectToTarget(state, dispatch, target);
+  return selectToTargets(state, dispatch, (range) =>
+    findPreviousWordStartFromOffset(state.doc.text, getActiveCharacterOffsetForRange(state, range))
+  );
 };
 
 export const moveNextWordStart: Command = (state, dispatch) => {
-  const target = findNextWordStartFromOffset(state.doc.text, getActiveCharacterOffset(state), classifyCharacter);
-  return target === null ? true : gotoTarget(state, dispatch, target);
+  return gotoTargets(state, dispatch, (range) =>
+    findNextWordStartFromOffset(state.doc.text, getActiveCharacterOffsetForRange(state, range), classifyCharacter)
+  );
 };
 
 export const moveNextLongWordStart: Command = (state, dispatch) => {
-  const target = findNextWordStartFromOffset(state.doc.text, getActiveCharacterOffset(state), classifyLongCharacter);
-  return target === null ? true : gotoTarget(state, dispatch, target);
+  return gotoTargets(state, dispatch, (range) =>
+    findNextWordStartFromOffset(state.doc.text, getActiveCharacterOffsetForRange(state, range), classifyLongCharacter)
+  );
 };
 
 export const movePrevLongWordStart: Command = (state, dispatch) => {
-  const target = findPreviousLongWordStartFromOffset(state.doc.text, getActiveCharacterOffset(state));
-  return target === null ? true : gotoTarget(state, dispatch, target);
+  return gotoTargets(state, dispatch, (range) =>
+    findPreviousLongWordStartFromOffset(state.doc.text, getActiveCharacterOffsetForRange(state, range))
+  );
 };
 
 export const moveNextLongWordEnd: Command = (state, dispatch) => {
-  const target = findNextLongWordEndFromOffset(state.doc.text, getActiveCharacterOffset(state));
-  return target === null ? true : gotoTarget(state, dispatch, target);
+  return gotoTargets(state, dispatch, (range) =>
+    findNextLongWordEndFromOffset(state.doc.text, getActiveCharacterOffsetForRange(state, range))
+  );
 };
 
 function findCharacterTarget(
@@ -735,29 +918,33 @@ function findCharacterTarget(
 
 export function findNextChar(targetCharacter: string): Command {
   return (state, dispatch) => {
-    const target = findCharacterTarget(state.doc.text, getActiveCharacterOffset(state), targetCharacter, 1, true);
-    return target === null ? true : gotoTarget(state, dispatch, target);
+    return gotoTargets(state, dispatch, (range) =>
+      findCharacterTarget(state.doc.text, getActiveCharacterOffsetForRange(state, range), targetCharacter, 1, true)
+    );
   };
 }
 
 export function findPrevChar(targetCharacter: string): Command {
   return (state, dispatch) => {
-    const target = findCharacterTarget(state.doc.text, getActiveCharacterOffset(state), targetCharacter, -1, true);
-    return target === null ? true : gotoTarget(state, dispatch, target);
+    return gotoTargets(state, dispatch, (range) =>
+      findCharacterTarget(state.doc.text, getActiveCharacterOffsetForRange(state, range), targetCharacter, -1, true)
+    );
   };
 }
 
 export function findTillNextChar(targetCharacter: string): Command {
   return (state, dispatch) => {
-    const target = findCharacterTarget(state.doc.text, getActiveCharacterOffset(state), targetCharacter, 1, false);
-    return target === null ? true : gotoTarget(state, dispatch, target);
+    return gotoTargets(state, dispatch, (range) =>
+      findCharacterTarget(state.doc.text, getActiveCharacterOffsetForRange(state, range), targetCharacter, 1, false)
+    );
   };
 }
 
 export function findTillPrevChar(targetCharacter: string): Command {
   return (state, dispatch) => {
-    const target = findCharacterTarget(state.doc.text, getActiveCharacterOffset(state), targetCharacter, -1, false);
-    return target === null ? true : gotoTarget(state, dispatch, target);
+    return gotoTargets(state, dispatch, (range) =>
+      findCharacterTarget(state.doc.text, getActiveCharacterOffsetForRange(state, range), targetCharacter, -1, false)
+    );
   };
 }
 
@@ -779,19 +966,23 @@ export const halfPageDown: Command = (state, dispatch, context) =>
 
 export const gotoWindowTop: Command = (state, dispatch, context) => {
   const line = context.viewport?.fromLine ?? 0;
-  return gotoTarget(state, dispatch, state.doc.lineAt(line).start);
+  return gotoTargets(state, dispatch, () => state.doc.lineAt(line).start);
 };
 
 export const gotoWindowCenter: Command = (state, dispatch, context) => {
   const viewport = context.viewport;
-  const line =
-    viewport ? Math.floor((viewport.fromLine + viewport.toLine) / 2) : state.doc.positionAt(getActiveCharacterOffset(state)).line;
-  return gotoTarget(state, dispatch, state.doc.lineAt(line).start);
+  return gotoTargets(state, dispatch, (range) => {
+    const line =
+      viewport
+        ? Math.floor((viewport.fromLine + viewport.toLine) / 2)
+        : state.doc.positionAt(getActiveCharacterOffsetForRange(state, range)).line;
+    return state.doc.lineAt(line).start;
+  });
 };
 
 export const gotoWindowBottom: Command = (state, dispatch, context) => {
   const line = context.viewport?.toLine ?? Math.max(0, state.doc.lineCount - 1);
-  return gotoTarget(state, dispatch, state.doc.lineAt(line).start);
+  return gotoTargets(state, dispatch, () => state.doc.lineAt(line).start);
 };
 
 export const gotoMatchingBracket: Command = (state, dispatch) => {
@@ -799,55 +990,61 @@ export const gotoMatchingBracket: Command = (state, dispatch) => {
     return true;
   }
 
-  const activeOffset = getActiveCharacterOffset(state);
-  const target = findMatchingBracketOffset(state.doc.text, activeOffset);
-  return target === null ? true : gotoTarget(state, dispatch, target);
+  return gotoTargets(state, dispatch, (range) =>
+    findMatchingBracketOffset(state.doc.text, getActiveCharacterOffsetForRange(state, range))
+  );
 };
 
 export const gotoNextParagraph: Command = (state, dispatch) => {
-  const currentLine = state.doc.positionAt(getActiveCharacterOffset(state)).line;
-  let line = currentLine;
+  return gotoTargets(state, dispatch, (range) => {
+    const currentLine = state.doc.positionAt(getActiveCharacterOffsetForRange(state, range)).line;
+    let line = currentLine;
 
-  if (state.doc.lineAt(line).text.trim().length === 0) {
-    while (line < state.doc.lineCount && state.doc.lineAt(line).text.trim().length === 0) {
-      line += 1;
+    if (state.doc.lineAt(line).text.trim().length === 0) {
+      while (line < state.doc.lineCount && state.doc.lineAt(line).text.trim().length === 0) {
+        line += 1;
+      }
+    } else {
+      while (line < state.doc.lineCount && state.doc.lineAt(line).text.trim().length > 0) {
+        line += 1;
+      }
+
+      while (line < state.doc.lineCount && state.doc.lineAt(line).text.trim().length === 0) {
+        line += 1;
+      }
     }
-  } else {
-    while (line < state.doc.lineCount && state.doc.lineAt(line).text.trim().length > 0) {
-      line += 1;
-    }
 
-    while (line < state.doc.lineCount && state.doc.lineAt(line).text.trim().length === 0) {
-      line += 1;
-    }
-  }
-
-  if (line >= state.doc.lineCount) {
-    return true;
-  }
-
-  return gotoTarget(state, dispatch, state.doc.lineAt(line).start);
+    return line >= state.doc.lineCount ? null : state.doc.lineAt(line).start;
+  });
 };
 
 export const gotoPrevParagraph: Command = (state, dispatch) => {
-  const currentLine = state.doc.positionAt(getActiveCharacterOffset(state)).line;
-  const currentLineBlank = state.doc.lineAt(currentLine).text.trim().length === 0;
-  const currentParagraphStart = paragraphStartAtOrBefore(state.doc, currentLine);
+  return gotoTargets(state, dispatch, (range) => {
+    const currentLine = state.doc.positionAt(getActiveCharacterOffsetForRange(state, range)).line;
+    const currentLineBlank = state.doc.lineAt(currentLine).text.trim().length === 0;
+    const currentParagraphStart = paragraphStartAtOrBefore(state.doc, currentLine);
 
-  if (currentParagraphStart === null) {
-    return true;
-  }
+    if (currentParagraphStart === null) {
+      return null;
+    }
 
-  if (!currentLineBlank && currentLine > currentParagraphStart) {
-    return gotoTarget(state, dispatch, state.doc.lineAt(currentParagraphStart).start);
-  }
+    if (!currentLineBlank && currentLine > currentParagraphStart) {
+      return state.doc.lineAt(currentParagraphStart).start;
+    }
 
-  const previousParagraphStart = paragraphStartAtOrBefore(state.doc, Math.max(0, currentParagraphStart - 1));
-  return previousParagraphStart === null ? true : gotoTarget(state, dispatch, state.doc.lineAt(previousParagraphStart).start);
+    const previousParagraphStart = paragraphStartAtOrBefore(state.doc, Math.max(0, currentParagraphStart - 1));
+    return previousParagraphStart === null ? null : state.doc.lineAt(previousParagraphStart).start;
+  });
 };
 
-function changeAtCursor(state: EditorState, insert: string, removeBefore = 0, removeAfter = 0): TextChange {
-  const cursor = clampInsertionOffset(state.doc, getCursorOffset(state.selection));
+function changeAtCursorForRange(
+  state: EditorState,
+  range: SelectionRange,
+  insert: string,
+  removeBefore = 0,
+  removeAfter = 0
+): TextChange {
+  const cursor = clampInsertionOffset(state.doc, range.head);
   return {
     from: Math.max(0, cursor - removeBefore),
     to: Math.min(state.doc.length, cursor + removeAfter),
@@ -855,16 +1052,57 @@ function changeAtCursor(state: EditorState, insert: string, removeBefore = 0, re
   };
 }
 
-function selectionAfterChange(state: EditorState, change: TextChange): SelectionSet {
-  return createSelection(change.from + change.insert.length, change.from + change.insert.length, null);
+function createCollapsedSelectionSet(offsets: readonly number[], primaryIndex: number): SelectionSet {
+  return createSelectionSet(
+    offsets.map((offset) => ({
+      anchor: offset,
+      head: offset,
+      preferredColumn: null
+    })),
+    primaryIndex
+  );
 }
 
-function selectionForInsertedText(doc: EditorState["doc"], from: number, insert: string): SelectionSet {
-  if (insert.length === 0) {
-    return createCharacterSelection(doc, from);
-  }
+function createCollapsedSelectionSetFromMappedOffsets(
+  offsets: readonly number[],
+  changes: readonly TextChange[],
+  affinity: "left" | "right",
+  primaryIndex: number
+): SelectionSet {
+  return createCollapsedSelectionSet(
+    offsets.map((offset) => mapOffsetThroughChanges(offset, changes, affinity)),
+    primaryIndex
+  );
+}
 
-  return createSelection(from, from + insert.length - 1);
+function selectionForInsertedText(
+  doc: EditorState["doc"],
+  changes: readonly TextChange[],
+  insertions: readonly { from: number; insert: string }[],
+  primaryIndex: number
+): SelectionSet {
+  return createSelectionSet(
+    insertions.map(({ from, insert }) => {
+      const start = clampInsertionOffset(doc, mapOffsetThroughChanges(from, changes, "left"));
+
+      if (insert.length === 0) {
+        const cursor = doc.length === 0 ? 0 : clampCharacterOffset(doc, start);
+        return {
+          anchor: cursor,
+          head: cursor,
+          preferredColumn: null
+        };
+      }
+
+      const end = clampCharacterOffset(doc, Math.max(start, start + insert.length - 1));
+      return {
+        anchor: doc.length === 0 ? 0 : clampCharacterOffset(doc, start),
+        head: end,
+        preferredColumn: null
+      };
+    }),
+    primaryIndex
+  );
 }
 
 function linewisePasteOffset(state: EditorState): number {
@@ -928,132 +1166,244 @@ export const redo: Command = (_state, _dispatch, context) => context.history?.re
 function applySingleChange(state: EditorState, dispatch: EditorDispatch, change: TextChange): boolean {
   dispatch({
     changes: [change],
-    selection: selectionAfterChange(state, change)
+    selection: createSelection(change.from + change.insert.length, change.from + change.insert.length, null)
   });
   return true;
 }
 
-function selectionAfterDeletion(doc: EditorState["doc"], from: number): SelectionSet {
+function selectionAfterDeletion(
+  doc: EditorState["doc"],
+  changes: readonly TextChange[],
+  froms: readonly number[],
+  primaryIndex: number
+): SelectionSet {
   if (doc.length === 0) {
-    return createSelection(0, 0);
+    return createCollapsedSelectionSet(froms.map(() => 0), primaryIndex);
   }
 
-  return createCharacterSelection(doc, Math.max(0, Math.min(from, doc.length - 1)));
+  return createSelectionSet(
+    froms.map((from) => {
+      const cursor = Math.max(0, Math.min(mapOffsetThroughChanges(from, changes, "left"), doc.length - 1));
+      return {
+        anchor: cursor,
+        head: cursor,
+        preferredColumn: null
+      };
+    }),
+    primaryIndex
+  );
 }
 
 export function insertText(text: string): Command {
-  return (state, dispatch) => applySingleChange(state, dispatch, changeAtCursor(state, text));
+  return (state, dispatch) => {
+    const changes = state.selection.ranges
+      .map((range) => changeAtCursorForRange(state, range, text))
+      .sort((left, right) => right.from - left.from || right.to - left.to);
+    const baseOffsets = state.selection.ranges.map((range) => range.head);
+    dispatch({
+      changes,
+      selection: createCollapsedSelectionSetFromMappedOffsets(
+        baseOffsets,
+        changes,
+        "right",
+        state.selection.primaryIndex
+      )
+    });
+    return true;
+  };
 }
 
-export const insertNewline: Command = (state, dispatch) => applySingleChange(state, dispatch, changeAtCursor(state, "\n"));
+export const insertNewline: Command = (state, dispatch) => insertText("\n")(state, dispatch, {});
 
 export const deleteBackward: Command = (state, dispatch) => {
-  const cursor = getCursorOffset(state.selection);
-  if (cursor === 0) {
+  const changes = state.selection.ranges
+    .map((range) => changeAtCursorForRange(state, range, "", 1, 0))
+    .filter((change) => change.from < change.to)
+    .sort((left, right) => right.from - left.from || right.to - left.to);
+
+  if (changes.length === 0) {
     return true;
   }
 
-  return applySingleChange(state, dispatch, changeAtCursor(state, "", 1, 0));
+  dispatch({
+    changes,
+    selection: createCollapsedSelectionSet(
+      state.selection.ranges.map((range) => mapOffsetThroughChanges(range.head, changes, "left")),
+      state.selection.primaryIndex
+    )
+  });
+  return true;
 };
 
 export function deleteBackwardIndentAware(indentText: string): Command {
   const indentWidth = Math.max(1, indentText.length);
 
   return (state, dispatch) => {
-    const cursor = getCursorOffset(state.selection);
+    if (state.selection.ranges.every((range) => range.head === 0)) {
+      return true;
+    }
+    const changes = state.selection.ranges
+      .map((range) => {
+        const cursor = range.head;
 
-    if (cursor === 0) {
+        if (cursor === 0) {
+          return null;
+        }
+
+        const position = state.doc.positionAt(cursor);
+        const line = state.doc.lineAt(position.line);
+        const linePrefix = line.text.slice(0, position.column);
+
+        if (linePrefix.length > 0 && /^[ \t]+$/.test(linePrefix)) {
+          const deleteWidth = linePrefix.length % indentWidth || indentWidth;
+          return changeAtCursorForRange(state, range, "", deleteWidth, 0);
+        }
+
+        return changeAtCursorForRange(state, range, "", 1, 0);
+      })
+      .filter((change): change is TextChange => !!change && change.from < change.to)
+      .sort((left, right) => right.from - left.from || right.to - left.to);
+
+    if (changes.length === 0) {
       return true;
     }
 
-    const position = state.doc.positionAt(cursor);
-    const line = state.doc.lineAt(position.line);
-    const linePrefix = line.text.slice(0, position.column);
-
-    if (linePrefix.length > 0 && /^[ \t]+$/.test(linePrefix)) {
-      const deleteWidth = linePrefix.length % indentWidth || indentWidth;
-      return applySingleChange(state, dispatch, changeAtCursor(state, "", deleteWidth, 0));
-    }
-
-    return applySingleChange(state, dispatch, changeAtCursor(state, "", 1, 0));
+    dispatch({
+      changes,
+      selection: createCollapsedSelectionSet(
+        state.selection.ranges.map((range) => mapOffsetThroughChanges(range.head, changes, "left")),
+        state.selection.primaryIndex
+      )
+    });
+    return true;
   };
 }
 
 export const deleteForward: Command = (state, dispatch) => {
-  const cursor = getCursorOffset(state.selection);
-  if (cursor === state.doc.length) {
+  if (state.selection.ranges.every((range) => range.head === state.doc.length)) {
     return true;
   }
 
-  return applySingleChange(state, dispatch, changeAtCursor(state, "", 0, 1));
+  const changes = state.selection.ranges
+    .map((range) => changeAtCursorForRange(state, range, "", 0, 1))
+    .filter((change) => change.from < change.to)
+    .sort((left, right) => right.from - left.from || right.to - left.to);
+
+  if (changes.length === 0) {
+    return true;
+  }
+
+  dispatch({
+    changes,
+    selection: createCollapsedSelectionSet(
+      state.selection.ranges.map((range) => mapOffsetThroughChanges(range.head, changes, "left")),
+      state.selection.primaryIndex
+    )
+  });
+  return true;
 };
 
 export const deleteSelection: Command = (state, dispatch) => {
-  const selection = getSelectionOffsets(state);
-
-  if (selection.to <= selection.from) {
+  const selections = getSelectionRanges(state);
+  if (selections.every((selection) => selection.to <= selection.from)) {
     return true;
   }
 
-  const deletedText = state.doc.slice(selection.from, selection.to);
-  const change: TextChange = {
-    from: selection.from,
-    to: selection.to,
-    insert: ""
-  };
-  const nextDoc = state.doc.applyChanges([change]);
+  const deletedText = selections
+    .filter((selection) => selection.to > selection.from)
+    .map((selection) => state.doc.slice(selection.from, selection.to))
+    .join("\n");
+  const changes = selections
+    .filter((selection) => selection.to > selection.from)
+    .map(
+      (selection): TextChange => ({
+        from: selection.from,
+        to: selection.to,
+        insert: ""
+      })
+    )
+    .sort((left, right) => right.from - left.from || right.to - left.to);
+  const nextDoc = state.doc.applyChanges(changes);
 
   dispatch({
-    changes: [change],
-    selection: selectionAfterDeletion(nextDoc, selection.from),
+    changes,
+    selection: selectionAfterDeletion(
+      nextDoc,
+      changes,
+      selections.map((selection) => selection.from),
+      state.selection.primaryIndex
+    ),
     mode: "normal",
     insertSession: null,
     yankBuffer: deletedText,
-    lastDeletedFrom: selection.from
+    lastDeletedFrom: selections[state.selection.primaryIndex]?.from ?? null
   });
   return true;
 };
 
 export const changeSelection: Command = (state, dispatch, context) => {
-  const selection = getSelectionOffsets(state);
-
-  if (selection.to <= selection.from) {
+  const selections = getSelectionRanges(state);
+  if (selections.every((selection) => selection.to <= selection.from)) {
     return true;
   }
 
-  const deletedText = state.doc.slice(selection.from, selection.to);
-  const change: TextChange = {
-    from: selection.from,
-    to: selection.to,
-    insert: ""
-  };
+  const deletedText = selections
+    .filter((selection) => selection.to > selection.from)
+    .map((selection) => state.doc.slice(selection.from, selection.to))
+    .join("\n");
+  const changes = selections
+    .filter((selection) => selection.to > selection.from)
+    .map(
+      (selection): TextChange => ({
+        from: selection.from,
+        to: selection.to,
+        insert: ""
+      })
+    )
+    .sort((left, right) => right.from - left.from || right.to - left.to);
+  const primaryFrom = selections[state.selection.primaryIndex]?.from ?? 0;
 
   dispatch({
-    changes: [change],
-    selection: createSelection(selection.from, selection.from),
+    changes,
+    selection: createCollapsedSelectionSet(
+      selections.map((selection) => selection.from),
+      state.selection.primaryIndex
+    ),
     mode: "insert",
     insertSession: {
-      restoreOffset: selection.from,
+      restoreOffset: primaryFrom,
       restoreAffinity: "left",
       moved: false
     },
     yankBuffer: deletedText,
-    lastDeletedFrom: selection.from
+    lastDeletedFrom: primaryFrom
   });
   context.requestFocus?.();
   return true;
 };
 
 export const yankSelection: Command = (state, dispatch) => {
-  const selection = getSelectionOffsets(state);
-  const yanked = state.doc.slice(selection.from, selection.to);
+  const selections = getSelectionRanges(state);
+  const yanked = selections.map((selection) => state.doc.slice(selection.from, selection.to)).join("\n");
 
   dispatch({
     yankBuffer: yanked,
     lastDeletedFrom: null,
     mode: state.mode === "visual" ? "normal" : state.mode,
     selection:
-      state.mode === "visual" ? createCharacterSelection(state.doc, getActiveCharacterOffset(state)) : state.selection
+      state.mode === "visual"
+        ? createSelectionSet(
+            state.selection.ranges.map((range) => {
+              const active = getActiveCharacterOffsetForRange(state, range);
+              return {
+                anchor: active,
+                head: active,
+                preferredColumn: null
+              };
+            }),
+            state.selection.primaryIndex
+          )
+        : state.selection
   });
   return true;
 };
@@ -1065,21 +1415,36 @@ export const pasteAfter: Command = (state, dispatch) => {
     return true;
   }
 
-  const insertAt =
-    yanked.endsWith("\n")
-      ? linewisePasteOffset(state)
-      : state.lastDeletedFrom !== null
-        ? state.lastDeletedFrom
-        : getSelectionOffsets(state).to;
-  const change: TextChange = {
-    from: insertAt,
-    to: insertAt,
-    insert: yanked
-  };
+  const insertions = state.selection.ranges.map((range, index) => {
+    const selection = getSelectionOffsetsForRange(state, range);
+    const insertAt =
+      yanked.endsWith("\n")
+        ? linewisePasteOffset({
+            ...state,
+            selection: createSelectionSet([range])
+          })
+        : state.lastDeletedFrom !== null && index === state.selection.primaryIndex
+          ? state.lastDeletedFrom
+          : selection.to;
+    return {
+      from: insertAt,
+      insert: yanked
+    };
+  });
+  const changes = insertions
+    .map(
+      (insertion): TextChange => ({
+        from: insertion.from,
+        to: insertion.from,
+        insert: insertion.insert
+      })
+    )
+    .sort((left, right) => right.from - left.from || right.to - left.to);
+  const nextDoc = state.doc.applyChanges(changes);
 
   dispatch({
-    changes: [change],
-    selection: selectionForInsertedText(state.doc.applyChanges([change]), insertAt, yanked),
+    changes,
+    selection: selectionForInsertedText(nextDoc, changes, insertions, state.selection.primaryIndex),
     mode: "normal",
     lastDeletedFrom: null
   });

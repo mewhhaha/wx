@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { enterInsertMode, enterNormalMode, insertText, moveRight } from "@wx/editor-core";
+import { createSelectionSet, enterInsertMode, enterNormalMode, insertText, moveRight } from "@wx/editor-core";
 import type { EditorLanguageServices } from "@wx/editor-language";
 
 import { createEditorController, normalizeLanguageServices } from "./index";
@@ -70,6 +70,57 @@ describe("editor controller", () => {
     expect(normalizeLanguageServices(undefined)).toEqual([]);
     expect(normalizeLanguageServices(first)).toEqual([first]);
     expect(normalizeLanguageServices([first, second])).toEqual([first, second]);
+  });
+
+  it("adds next occurrences without collapsing prior selections", () => {
+    const controller = createEditorController({
+      value: "alpha beta alpha beta",
+      selection: createSelectionSet([{ anchor: 0, head: 4, preferredColumn: null }])
+    });
+
+    expect(controller.selectNextOccurrence()).toBe(true);
+    expect(controller.getState().selection.ranges.map((range) => [range.anchor, range.head])).toEqual([
+      [0, 4],
+      [11, 15]
+    ]);
+
+    expect(controller.selectAllOccurrences()).toBe(true);
+    expect(controller.getState().selection.ranges.map((range) => [range.anchor, range.head])).toEqual([
+      [0, 4],
+      [11, 15]
+    ]);
+  });
+
+  it("splits multi-line selections and collapses back to primary", () => {
+    const controller = createEditorController({
+      value: "alpha\nbeta\ngamma",
+      selection: createSelectionSet([{ anchor: 0, head: 15, preferredColumn: null }])
+    });
+
+    expect(controller.splitSelectionsByLine()).toBe(true);
+    expect(controller.getState().selection.ranges).toHaveLength(3);
+    expect(controller.removePrimarySelection()).toBe(true);
+    expect(controller.getState().selection.ranges).toHaveLength(2);
+    expect(controller.collapseSelections()).toBe(true);
+    expect(controller.getState().selection.ranges).toHaveLength(1);
+  });
+
+  it("runs multi-selection controller commands from command line", async () => {
+    const controller = createEditorController({
+      value: "alpha beta alpha",
+      selection: createSelectionSet([{ anchor: 0, head: 4, preferredColumn: null }])
+    });
+
+    controller.openCommandLine(":");
+    for (const key of "select-next") {
+      await controller.handleCommandLineKey(key);
+    }
+    await controller.handleCommandLineKey("Enter");
+
+    expect(controller.getState().selection.ranges.map((range) => [range.anchor, range.head])).toEqual([
+      [0, 4],
+      [11, 15]
+    ]);
   });
 
   it("groups insert mode edits into one undo step after leaving insert mode", () => {

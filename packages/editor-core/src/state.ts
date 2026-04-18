@@ -56,11 +56,20 @@ export interface EditorState {
   };
 }
 
-export function createSelection(anchor = 0, head = anchor, preferredColumn: number | null = null): SelectionSet {
+function fallbackSelectionRange(): SelectionRange {
+  return { anchor: 0, head: 0, preferredColumn: null };
+}
+
+export function createSelectionSet(ranges: readonly SelectionRange[], primaryIndex = 0): SelectionSet {
+  const nextRanges = ranges.length > 0 ? ranges.map((range) => ({ ...range })) : [fallbackSelectionRange()];
   return {
-    ranges: [{ anchor, head, preferredColumn }],
-    primaryIndex: 0
+    ranges: nextRanges,
+    primaryIndex: Math.max(0, Math.min(primaryIndex, nextRanges.length - 1))
   };
+}
+
+export function createSelection(anchor = 0, head = anchor, preferredColumn: number | null = null): SelectionSet {
+  return createSelectionSet([{ anchor, head, preferredColumn }]);
 }
 
 export function clampInsertionOffset(doc: TextDocument, offset: number): number {
@@ -89,55 +98,87 @@ export function getCursorOffset(selection: SelectionSet): number {
 }
 
 export function withCursor(selection: SelectionSet, cursor: number, preferredColumn: number | null = null): SelectionSet {
-  const next = createSelection(cursor, cursor, preferredColumn);
-  return {
-    ...next,
-    primaryIndex: selection.primaryIndex
-  };
+  return createSelectionSet(
+    selection.ranges.map((range, index) =>
+      index === selection.primaryIndex ? { anchor: cursor, head: cursor, preferredColumn } : range
+    ),
+    selection.primaryIndex
+  );
 }
 
-export function getSelectionOffsets(state: EditorState): { from: number; to: number } {
-  const range = getPrimaryRange(state.selection);
+export function getSelectionOffsetsForRange(
+  state: Pick<EditorState, "doc" | "mode">,
+  range: SelectionRange
+): { from: number; to: number } {
+  const { doc, mode } = state;
 
-  if (state.mode === "insert" || state.doc.length === 0) {
-    const offset = clampInsertionOffset(state.doc, range.head);
+  if (mode === "insert" || doc.length === 0) {
+    const offset = clampInsertionOffset(doc, range.head);
     return { from: offset, to: offset };
   }
 
-  const from = clampCharacterOffset(state.doc, Math.min(range.anchor, range.head));
-  const to = Math.min(state.doc.length, clampCharacterOffset(state.doc, Math.max(range.anchor, range.head)) + 1);
+  const from = clampCharacterOffset(doc, Math.min(range.anchor, range.head));
+  const to = Math.min(doc.length, clampCharacterOffset(doc, Math.max(range.anchor, range.head)) + 1);
   return { from, to };
 }
 
-export function getActiveCharacterOffset(state: EditorState): number {
+export function getSelectionOffsets(state: EditorState): { from: number; to: number } {
+  return getSelectionOffsetsForRange(state, getPrimaryRange(state.selection));
+}
+
+export function getSelectionRanges(state: EditorState): Array<{ from: number; to: number }> {
+  return state.selection.ranges.map((range) => getSelectionOffsetsForRange(state, range));
+}
+
+export function getActiveCharacterOffsetForRange(
+  state: Pick<EditorState, "doc" | "mode">,
+  range: SelectionRange
+): number {
   if (state.doc.length === 0) {
     return 0;
   }
 
   if (state.mode === "insert") {
-    const offset = clampInsertionOffset(state.doc, getCursorOffset(state.selection));
+    const offset = clampInsertionOffset(state.doc, range.head);
     return clampCharacterOffset(state.doc, offset === state.doc.length ? offset - 1 : offset);
   }
 
-  return clampCharacterOffset(state.doc, getCursorOffset(state.selection));
+  return clampCharacterOffset(state.doc, range.head);
+}
+
+export function getActiveCharacterOffset(state: EditorState): number {
+  return getActiveCharacterOffsetForRange(state, getPrimaryRange(state.selection));
 }
 
 export function createEditorState(options: {
   value?: string;
-  selection?: SelectionSet;
+  selection?: SelectionSet | { anchor: number; head: number; preferredColumn?: number | null };
   mode?: EditorMode;
   language?: string;
   theme?: string;
 } = {}): EditorState {
   const doc = createTextDocument(options.value ?? "");
+  const explicitSelection =
+    options.selection && "ranges" in options.selection
+      ? options.selection
+      : options.selection
+        ? createSelectionSet([
+            {
+              anchor: options.selection.anchor,
+              head: options.selection.head,
+              preferredColumn: options.selection.preferredColumn ?? null
+            }
+          ])
+        : undefined;
   const defaultSelection =
-    options.selection ??
+    explicitSelection ??
     (options.mode === "insert" ? createSelection(0, 0) : createCharacterSelection(doc, 0));
+  const mode = options.mode ?? "normal";
 
   return {
     doc,
-    selection: defaultSelection,
-    mode: options.mode ?? "normal",
+    selection: normalizeSelection(doc, defaultSelection, mode),
+    mode,
     revision: 0,
     yankBuffer: null,
     lastDeletedFrom: null,
@@ -180,33 +221,104 @@ export function mapSelection(selection: SelectionSet, changes: readonly TextChan
     return selection;
   }
 
-  return {
-    primaryIndex: selection.primaryIndex,
-    ranges: selection.ranges.map((range) => ({
+  return createSelectionSet(
+    selection.ranges.map((range) => ({
       anchor: mapOffsetThroughChanges(range.anchor, changes),
       head: mapOffsetThroughChanges(range.head, changes),
       preferredColumn: range.preferredColumn
-    }))
+    })),
+    selection.primaryIndex
+  );
+}
+
+function normalizeSelectionRange(doc: TextDocument, range: SelectionRange, mode: EditorMode): SelectionRange {
+  const preferredColumn = range.preferredColumn ?? null;
+
+  if (mode === "insert") {
+    const offset = clampInsertionOffset(doc, range.head);
+    return {
+      anchor: offset,
+      head: offset,
+      preferredColumn
+    };
+  }
+
+  if (doc.length === 0) {
+    return {
+      anchor: 0,
+      head: 0,
+      preferredColumn
+    };
+  }
+
+  return {
+    anchor: clampCharacterOffset(doc, range.anchor),
+    head: clampCharacterOffset(doc, range.head),
+    preferredColumn
   };
 }
 
 export function normalizeSelection(doc: TextDocument, selection: SelectionSet, mode: EditorMode): SelectionSet {
-  const range = getPrimaryRange(selection);
-  const preferredColumn = range.preferredColumn;
+  const sourceRanges = selection.ranges.length > 0 ? selection.ranges : [fallbackSelectionRange()];
+  const primarySourceIndex = Math.max(0, Math.min(selection.primaryIndex, sourceRanges.length - 1));
+  const entries = sourceRanges
+    .map((range, index) => {
+      const normalizedRange = normalizeSelectionRange(doc, range, mode);
+      const offsets = getSelectionOffsetsForRange({ doc, mode }, normalizedRange);
+      return {
+        range: normalizedRange,
+        from: offsets.from,
+        to: offsets.to,
+        index,
+        primary: index === primarySourceIndex
+      };
+    })
+    .sort((left, right) => {
+      if (left.from !== right.from) {
+        return left.from - right.from;
+      }
 
-  if (mode === "insert") {
-    const offset = clampInsertionOffset(doc, range.head);
-    return createSelection(offset, offset, preferredColumn);
+      if (left.to !== right.to) {
+        return left.to - right.to;
+      }
+
+      if (left.range.anchor !== right.range.anchor) {
+        return left.range.anchor - right.range.anchor;
+      }
+
+      if (left.range.head !== right.range.head) {
+        return left.range.head - right.range.head;
+      }
+
+      return left.index - right.index;
+    });
+  const deduped: typeof entries = [];
+
+  for (const entry of entries) {
+    const previous = deduped[deduped.length - 1];
+    const duplicate =
+      !!previous &&
+      (mode === "insert"
+        ? previous.range.head === entry.range.head
+        : previous.from === entry.from && previous.to === entry.to);
+
+    if (!duplicate) {
+      deduped.push(entry);
+      continue;
+    }
+
+    if (entry.primary) {
+      previous.range = entry.range;
+      previous.primary = true;
+    }
   }
 
-  if (doc.length === 0) {
-    return createSelection(0, 0, preferredColumn);
-  }
-
-  return createSelection(
-    clampCharacterOffset(doc, range.anchor),
-    clampCharacterOffset(doc, range.head),
-    preferredColumn
+  return createSelectionSet(
+    deduped.map((entry) => entry.range),
+    Math.max(
+      0,
+      deduped.findIndex((entry) => entry.primary)
+    )
   );
 }
 

@@ -373,6 +373,36 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
         return { handled: true };
       }
 
+      if (value === "select-next") {
+        controller.selectNextOccurrence(false);
+        return { handled: true };
+      }
+
+      if (value === "select-prev") {
+        controller.selectNextOccurrence(true);
+        return { handled: true };
+      }
+
+      if (value === "select-all") {
+        controller.selectAllOccurrences();
+        return { handled: true };
+      }
+
+      if (value === "split-lines") {
+        controller.splitSelectionsByLine();
+        return { handled: true };
+      }
+
+      if (value === "collapse-selections") {
+        controller.collapseSelections();
+        return { handled: true };
+      }
+
+      if (value === "remove-selection") {
+        controller.removePrimarySelection();
+        return { handled: true };
+      }
+
       context.setBottomMessage({ tone: "warning", text: `Unknown command: ${trimmed}` });
       return { handled: true };
     }
@@ -434,7 +464,23 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
         const isRunnable =
           commandName.toLowerCase() === "theme"
             ? !!commandArgument
-            : ["format", "fmt", "w", "write", "code-actions", "codeaction", "ca", "q", "quit"].includes(commandName.toLowerCase());
+            : [
+                "format",
+                "fmt",
+                "w",
+                "write",
+                "code-actions",
+                "codeaction",
+                "ca",
+                "q",
+                "quit",
+                "select-next",
+                "select-prev",
+                "select-all",
+                "split-lines",
+                "collapse-selections",
+                "remove-selection"
+              ].includes(commandName.toLowerCase());
 
         if (!isRunnable) {
           const result = await applyCommandCompletion(options.themeNames ?? []);

@@ -85,8 +85,72 @@ export interface SyntaxSelector {
   ): Promise<SyntaxSelectionRange | null>;
 }
 
+export interface EditorCompletionItem {
+  label: string;
+  detail?: string;
+  kind?: string;
+  insertText?: string;
+  filterText?: string;
+  sortText?: string;
+  documentation?: string;
+}
+
 export interface CompletionSource {
-  complete(document: LanguageDocumentSnapshot, offset: number): Promise<unknown[]>;
+  complete(document: LanguageDocumentSnapshot, offset: number): Promise<readonly EditorCompletionItem[]>;
+}
+
+export interface EditorLocationTarget {
+  from: number;
+  to: number;
+  filePath?: string;
+  detail?: string;
+}
+
+export interface GotoSource {
+  definition?(document: LanguageDocumentSnapshot, offset: number): Promise<readonly EditorLocationTarget[]>;
+  declaration?(document: LanguageDocumentSnapshot, offset: number): Promise<readonly EditorLocationTarget[]>;
+  typeDefinition?(document: LanguageDocumentSnapshot, offset: number): Promise<readonly EditorLocationTarget[]>;
+  implementation?(document: LanguageDocumentSnapshot, offset: number): Promise<readonly EditorLocationTarget[]>;
+  references?(document: LanguageDocumentSnapshot, offset: number): Promise<readonly EditorLocationTarget[]>;
+}
+
+export interface EditorRenameChangeSet {
+  filePath?: string;
+  changes: readonly TextChange[];
+}
+
+export interface RenameSource {
+  prepareRename?(document: LanguageDocumentSnapshot, offset: number): Promise<{ from: number; to: number } | null>;
+  rename(
+    document: LanguageDocumentSnapshot,
+    offset: number,
+    nextName: string
+  ): Promise<readonly EditorRenameChangeSet[] | null>;
+}
+
+export interface EditorSymbol {
+  name: string;
+  detail?: string;
+  kind?: string;
+  from: number;
+  to: number;
+  filePath?: string;
+  children?: readonly EditorSymbol[];
+}
+
+export interface SymbolSource {
+  documentSymbols?(document: LanguageDocumentSnapshot): Promise<readonly EditorSymbol[]>;
+  workspaceSymbols?(query: string, document?: LanguageDocumentSnapshot): Promise<readonly EditorSymbol[]>;
+}
+
+export interface EditorSignatureHelp {
+  label: string;
+  documentation?: string;
+  activeParameter?: number;
+}
+
+export interface SignatureHelpSource {
+  signatureHelp(document: LanguageDocumentSnapshot, offset: number): Promise<readonly EditorSignatureHelp[]>;
 }
 
 export interface EditorHover {
@@ -140,6 +204,10 @@ export interface EditorLanguageServices {
   highlighter?: Highlighter;
   syntaxSelector?: SyntaxSelector;
   completion?: CompletionSource;
+  goto?: GotoSource;
+  rename?: RenameSource;
+  symbols?: SymbolSource;
+  signatureHelp?: SignatureHelpSource;
   hover?: HoverSource;
   diagnostics?: DiagnosticsSource;
   codeActions?: CodeActionSource;
