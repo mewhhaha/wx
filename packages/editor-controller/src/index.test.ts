@@ -13,6 +13,15 @@ async function flushAsyncWork(times = 4): Promise<void> {
   }
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+
+  return { promise, resolve };
+}
+
 describe("editor controller", () => {
   it("keeps controller lifecycle and register/jump plumbing out of the root composition file", () => {
     const source = readFileSync(resolve(process.cwd(), "packages/editor-controller/src/index.ts"), "utf8");
@@ -360,6 +369,112 @@ describe("editor controller", () => {
     expect(controller.getPresentationState().ui.completion.active).toBe(false);
   });
 
+  it("ignores stale completion responses when a newer explicit request finishes first", async () => {
+    const first = createDeferred<readonly { label: string }[]>();
+    const second = createDeferred<readonly { label: string }[]>();
+    const controller = createEditorController({
+      value: "al",
+      selection: createSelectionSet([{ anchor: 0, head: 1, preferredColumn: null }])
+    });
+    let callCount = 0;
+
+    controller.setLanguageServices([
+      {
+        completion: {
+          async complete() {
+            callCount += 1;
+            return callCount === 1 ? await first.promise : await second.promise;
+          }
+        }
+      }
+    ]);
+
+    const firstRequest = controller.requestCompletion();
+    const secondRequest = controller.requestCompletion();
+
+    second.resolve([{ label: "second" }]);
+    await secondRequest;
+    await flushAsyncWork();
+
+    first.resolve([{ label: "first" }]);
+    await firstRequest;
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.completion.items.map((item) => item.label)).toEqual(["second"]);
+  });
+
+  it("does no work for completion moves clamped at bounds and clears completion on dismiss", async () => {
+    const controller = createEditorController({
+      value: "al",
+      selection: createSelectionSet([{ anchor: 0, head: 1, preferredColumn: null }])
+    });
+    let updateCount = 0;
+    controller.subscribe(() => {
+      updateCount += 1;
+    });
+    controller.setLanguageServices([
+      {
+        completion: {
+          async complete() {
+            return [{ label: "alpha" }, { label: "alias" }];
+          }
+        }
+      }
+    ]);
+
+    await controller.requestCompletion();
+    updateCount = 0;
+
+    expect(controller.moveCompletion(-1)).toBe(false);
+    expect(updateCount).toBe(0);
+
+    expect(controller.dismissCompletion()).toBe(true);
+    expect(controller.getPresentationState().ui.completion.active).toBe(false);
+    expect(controller.dismissCompletion()).toBe(false);
+  });
+
+  it("uses insertText when accepting a completion item by explicit index", async () => {
+    const controller = createEditorController({
+      value: "al",
+      selection: createSelectionSet([{ anchor: 0, head: 1, preferredColumn: null }])
+    });
+
+    controller.setLanguageServices([
+      {
+        completion: {
+          async complete() {
+            return [
+              { label: "alpha", insertText: "omega" },
+              { label: "alias" }
+            ];
+          }
+        }
+      }
+    ]);
+
+    await controller.requestCompletion();
+    await controller.acceptCompletion(1);
+    expect(controller.getState().doc.text).toBe("omega");
+  });
+
+  it("shows a warning when goto returns no results", async () => {
+    const controller = createEditorController({ value: "alpha" });
+    controller.setLanguageServices([
+      {
+        goto: {
+          async definition() {
+            return [];
+          }
+        }
+      }
+    ]);
+
+    const jumped = await controller.gotoTarget("definition");
+
+    expect(jumped).toBe(false);
+    expect(controller.getPresentationState().ui.bottomMessage?.text).toBe("No definition results");
+  });
+
   it("jumps directly to single goto targets in current file", async () => {
     const controller = createEditorController({ value: "alpha beta alpha" });
     controller.setLanguageServices([
@@ -380,6 +495,176 @@ describe("editor controller", () => {
       head: 15,
       preferredColumn: null
     });
+  });
+
+  it("opens another buffer for single cross-file goto targets", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: filePath === "src/other.ts" ? "beta gamma" : "" };
+      }
+    });
+    controller.setLanguageServices([
+      {
+        goto: {
+          async definition() {
+            return [{ filePath: "src/other.ts", from: 5, to: 10 }];
+          }
+        }
+      }
+    ]);
+
+    const jumped = await controller.gotoTarget("definition");
+
+    expect(jumped).toBe(true);
+    expect(controller.getPresentationState().filePath).toBe("src/other.ts");
+    expect(controller.getState().doc.text).toBe("beta gamma");
+    expect(controller.getState().selection.ranges[0]).toEqual({
+      anchor: 5,
+      head: 9,
+      preferredColumn: null
+    });
+  });
+
+  it("opens modal picker previews for many goto targets and references", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `preview:${filePath}` };
+      }
+    });
+    controller.setLanguageServices([
+      {
+        goto: {
+          async implementation() {
+            return [
+              { filePath: "src/one.ts", from: 0, to: 3, detail: "one" },
+              { filePath: "src/two.ts", from: 2, to: 5, detail: "two" }
+            ];
+          },
+          async references() {
+            return [
+              { filePath: "src/ref-one.ts", from: 0, to: 3, detail: "ref one" },
+              { filePath: "src/ref-two.ts", from: 2, to: 5, detail: "ref two" }
+            ];
+          }
+        }
+      }
+    ]);
+
+    const openedMany = await controller.gotoTarget("implementation");
+    await flushAsyncWork();
+
+    expect(openedMany).toBe(true);
+    expect(controller.getPresentationState().ui.picker.active).toBe(true);
+    expect(controller.getPresentationState().ui.picker.variant).toBe("modal");
+    expect(controller.getPresentationState().ui.picker.items.map((item) => item.label)).toEqual(["src/one.ts", "src/two.ts"]);
+    expect(controller.getPresentationState().ui.picker.previewContent).toBe("preview:src/one.ts");
+
+    controller.clearBottomMessage();
+    const referencesOpened = await controller.gotoTarget("references");
+    await flushAsyncWork();
+
+    expect(referencesOpened).toBe(true);
+    expect(controller.getPresentationState().ui.picker.title).toBe("references");
+    expect(controller.getPresentationState().ui.picker.items.map((item) => item.label)).toEqual([
+      "src/ref-one.ts",
+      "src/ref-two.ts"
+    ]);
+  });
+
+  it("ignores stale navigation responses when a newer request resolves first", async () => {
+    const first = createDeferred<readonly { filePath: string; from: number; to: number }[]>();
+    const second = createDeferred<readonly { filePath: string; from: number; to: number }[]>();
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    let callCount = 0;
+
+    controller.setLanguageServices([
+      {
+        goto: {
+          async references() {
+            callCount += 1;
+            return callCount === 1 ? await first.promise : await second.promise;
+          }
+        }
+      }
+    ]);
+
+    const firstRequest = controller.gotoTarget("references");
+    const secondRequest = controller.gotoTarget("references");
+
+    second.resolve([{ filePath: "src/new.ts", from: 0, to: 3 }]);
+    await secondRequest;
+    await flushAsyncWork();
+
+    first.resolve([{ filePath: "src/old.ts", from: 0, to: 3 }]);
+    await firstRequest;
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.items.map((item) => item.label)).toEqual(["src/new.ts"]);
+  });
+
+  it("opens modal pickers for document symbols and keeps newest workspace symbol query only", async () => {
+    const current = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    current.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `preview:${filePath}` };
+      }
+    });
+    current.setLanguageServices([
+      {
+        symbols: {
+          async documentSymbols() {
+            return [{ name: "alpha", from: 0, to: 5, detail: "fn" }];
+          }
+        }
+      }
+    ]);
+
+    const openedDocument = await current.openSymbols("document");
+    await flushAsyncWork();
+
+    expect(openedDocument).toBe(true);
+    expect(current.getPresentationState().ui.picker.title).toBe("document symbols");
+    expect(current.getPresentationState().ui.picker.items.map((item) => item.label)).toEqual(["alpha"]);
+
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    const first = createDeferred<readonly { name: string; from: number; to: number; filePath: string }[]>();
+    const second = createDeferred<readonly { name: string; from: number; to: number; filePath: string }[]>();
+
+    controller.setLanguageServices([
+      {
+        symbols: {
+          async workspaceSymbols(query) {
+            if (query === "a") {
+              return await first.promise;
+            }
+
+            if (query === "ab") {
+              return await second.promise;
+            }
+
+            return [];
+          }
+        }
+      }
+    ]);
+
+    await controller.openSymbols("workspace");
+    const firstQuery = controller.handleKeyInput({ key: "a", text: "a" });
+    const secondQuery = controller.handleKeyInput({ key: "b", text: "b" });
+
+    second.resolve([{ name: "abSymbol", from: 0, to: 2, filePath: "src/ab.ts" }]);
+    await secondQuery;
+    await flushAsyncWork();
+
+    first.resolve([{ name: "aSymbol", from: 0, to: 1, filePath: "src/a.ts" }]);
+    await firstQuery;
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.title).toBe("workspace symbols");
+    expect(controller.getPresentationState().ui.picker.query).toBe("ab");
+    expect(controller.getPresentationState().ui.picker.items.map((item) => item.label)).toEqual(["abSymbol"]);
   });
 
   it("applies cross-file rename edits through host IO and open buffers", async () => {
@@ -420,6 +705,95 @@ describe("editor controller", () => {
     expect(renamed).toBe(true);
     expect(controller.getState().doc.text).toBe("omega");
     expect(writes).toEqual([{ filePath: "src/other.ts", text: "omega beta" }]);
+  });
+
+  it("updates already-open buffers and keeps active selection on same-file rename", async () => {
+    const controller = createEditorController({
+      value: "alpha",
+      filePath: "src/current.ts",
+      selection: createSelectionSet([{ anchor: 0, head: 4, preferredColumn: null }])
+    });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: filePath === "src/other.ts" ? "alpha other" : "" };
+      },
+      async writeFile() {}
+    });
+    await controller.openBuffer("src/other.ts");
+    const currentBuffer = controller.getBuffers().find((entry) => entry.filePath === "src/current.ts");
+    controller.switchBuffer(currentBuffer!.id);
+    controller.setLanguageServices([
+      {
+        rename: {
+          async rename() {
+            return [
+              { changes: [{ from: 0, to: 5, insert: "omega" }] },
+              { filePath: "src/other.ts", changes: [{ from: 0, to: 5, insert: "omega" }] }
+            ];
+          }
+        }
+      }
+    ]);
+
+    const renamed = await controller.renameSymbol("omega");
+
+    expect(renamed).toBe(true);
+    expect(controller.getState().doc.text).toBe("omega");
+    expect(controller.getState().selection.ranges[0]).toEqual({
+      anchor: 0,
+      head: 4,
+      preferredColumn: null
+    });
+
+    const otherBuffer = controller.getBuffers().find((entry) => entry.filePath === "src/other.ts");
+    controller.switchBuffer(otherBuffer!.id);
+    expect(controller.getState().doc.text).toBe("omega other");
+  });
+
+  it("fails rename safely before partial apply when cross-file IO is unavailable", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.setLanguageServices([
+      {
+        rename: {
+          async rename() {
+            return [
+              { changes: [{ from: 0, to: 5, insert: "omega" }] },
+              { filePath: "src/other.ts", changes: [{ from: 0, to: 5, insert: "omega" }] }
+            ];
+          }
+        }
+      }
+    ]);
+
+    const renamed = await controller.renameSymbol("omega");
+
+    expect(renamed).toBe(false);
+    expect(controller.getState().doc.text).toBe("alpha");
+    expect(controller.getPresentationState().ui.bottomMessage?.text).toBe("Cross-file rename needs host file IO");
+  });
+
+  it("ignores stale rename responses after document revision changes", async () => {
+    const renameDeferred = createDeferred<readonly { changes: readonly { from: number; to: number; insert: string }[] }[] | null>();
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.setLanguageServices([
+      {
+        rename: {
+          async rename() {
+            return await renameDeferred.promise;
+          }
+        }
+      }
+    ]);
+
+    const pendingRename = controller.renameSymbol("omega");
+    controller.dispatch({ changes: [{ from: 0, to: 0, insert: "z" }] });
+    renameDeferred.resolve([{ changes: [{ from: 1, to: 6, insert: "omega" }] }]);
+
+    await pendingRename;
+    await flushAsyncWork();
+
+    expect(controller.getState().doc.text).toBe("zalpha");
+    expect(controller.getPresentationState().ui.rename.active).toBe(true);
   });
 
   it("clears semantic hover and flash state on document edits", async () => {

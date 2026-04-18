@@ -112,6 +112,13 @@ export function parseAnsiInput(chunk: Buffer | string): string[] {
     const code = char.charCodeAt(0);
 
     if (char === "\u001b") {
+      const nextChar = text[index + 1] ?? "";
+      if (nextChar && nextChar !== "[" && nextChar !== "O") {
+        keys.push(`Alt+${nextChar}`);
+        index += 1;
+        continue;
+      }
+
       keys.push("Escape");
       continue;
     }
@@ -326,14 +333,27 @@ export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOption
       key === "Tab" &&
       stateBeforeKey.mode !== "insert" &&
       !presentationBeforeKey.ui.commandLine.active &&
-      !presentationBeforeKey.ui.picker.active;
+      !presentationBeforeKey.ui.picker.active &&
+      !presentationBeforeKey.ui.completion.active;
+    const alt = key.startsWith("Alt+");
     const ctrl = key.startsWith("Ctrl+") || terminalCtrlIAsTab;
     const normalizedKey =
-      key === "Ctrl+Space" ? " " : shiftTab ? "Tab" : terminalCtrlIAsTab ? "i" : ctrl ? key.slice(5) : key;
+      key === "Ctrl+Space"
+        ? " "
+        : shiftTab
+          ? "Tab"
+          : terminalCtrlIAsTab
+            ? "i"
+            : ctrl
+              ? key.slice(5)
+              : alt
+                ? key.slice(4)
+                : key;
     const result = await controller.handleKeyInput(
       {
         key: normalizedKey,
         ctrl,
+        alt,
         shift: shiftTab || (normalizedKey.length === 1 && normalizedKey !== normalizedKey.toLowerCase()),
         source: "ansi",
         text: normalizedKey.length === 1 ? normalizedKey : undefined

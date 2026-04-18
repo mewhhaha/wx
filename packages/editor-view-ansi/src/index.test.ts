@@ -17,7 +17,7 @@ import { createEditorController } from "@wx/editor-controller";
 import { createEditor } from "@wx/editor-view-dom";
 import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
-import { createAnsiEditorMirror, createNodeHostServices, renderEditorAnsiFrame } from "./index";
+import { createAnsiEditorMirror, createNodeHostServices, parseAnsiInput, renderEditorAnsiFrame } from "./index";
 import { createAnsiEditorTerminal } from "./index";
 
 function stripAnsi(text: string): string {
@@ -794,13 +794,19 @@ describe("@wx/editor-view-ansi", () => {
     terminal.destroy();
   });
 
+  it("decodes Alt chords from ANSI escape-prefixed input", () => {
+    expect(parseAnsiInput("\u001bg")).toEqual(["Alt+g"]);
+    expect(parseAnsiInput("\u001bG")).toEqual(["Alt+G"]);
+    expect(parseAnsiInput("\u001br")).toEqual(["Alt+r"]);
+  });
+
   it("routes Ctrl+Space through ANSI completion requests", async () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
     controller.setLanguageServices([
       {
         completion: {
           async complete() {
-            return [{ label: "alphabet", detail: "value" }];
+            return [{ label: "alphabet", detail: "value", sortText: "a" }];
           }
         }
       }
@@ -821,6 +827,185 @@ describe("@wx/editor-view-ansi", () => {
 
     expect(controller.getPresentationState().ui.completion.active).toBe(true);
     expect(controller.getPresentationState().ui.completion.items.map((item) => item.label)).toEqual(["alphabet"]);
+    terminal.destroy();
+  });
+
+  it("routes Alt+g, Alt+Shift+g, and Alt+r through shared ANSI LSP commands", async () => {
+    const controller = createEditorController({ value: "alpha beta alpha", filePath: "src/current.ts" });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `preview:${filePath}` };
+      }
+    });
+    controller.setLanguageServices([
+      {
+        goto: {
+          async definition() {
+            return [{ from: 11, to: 16 }];
+          },
+          async references() {
+            return [
+              { filePath: "src/ref-a.ts", from: 0, to: 3 },
+              { filePath: "src/ref-b.ts", from: 2, to: 5 }
+            ];
+          }
+        }
+      }
+    ]);
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      cols: 80,
+      rows: 12,
+      write: vi.fn(),
+      enterAltScreen: false
+    });
+
+    terminal.mount();
+    input.emit("\u001bg");
+    await flushAsyncWork();
+    expect(controller.getState().selection.ranges[0]?.anchor).toBe(11);
+
+    input.emit("\u001bG");
+    await flushAsyncWork(64);
+    expect(controller.getPresentationState().ui.picker.title).toBe("references");
+    expect(controller.getPresentationState().ui.picker.items.map((item) => item.label)).toEqual([
+      "src/ref-a.ts",
+      "src/ref-b.ts"
+    ]);
+
+    input.emit("\u001b");
+    await flushAsyncWork(64);
+    input.emit("\u001br");
+    await flushAsyncWork(64);
+    expect(controller.getPresentationState().ui.commandLine.value).toBe("rename ");
+    terminal.destroy();
+  });
+
+  it("keeps completion navigation parity between DOM and ANSI", async () => {
+    const domController = createEditorController({ value: "al", selection: createSelection(0, 1) });
+    const ansiController = createEditorController({ value: "al", selection: createSelection(0, 1) });
+    const services = {
+      completion: {
+        async complete() {
+          return [
+            { label: "alpha", sortText: "b" },
+            { label: "beta", insertText: "omega", sortText: "a" }
+          ];
+        }
+      }
+    };
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    createEditor(container, { controller: domController, languageServices: services });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller: ansiController,
+      languageServices: services,
+      input,
+      cols: 80,
+      rows: 12,
+      write: vi.fn(),
+      enterAltScreen: false
+    });
+
+    terminal.mount();
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", ctrlKey: true, bubbles: true }));
+    input.emit("\0");
+    await flushAsyncWork(64);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    input.emit("\t");
+    await flushAsyncWork(64);
+
+    expect(domController.getPresentationState().ui.completion.selectedIndex).toBe(
+      ansiController.getPresentationState().ui.completion.selectedIndex
+    );
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }));
+    input.emit("\u001b[Z");
+    await flushAsyncWork(64);
+
+    expect(domController.getPresentationState().ui.completion.selectedIndex).toBe(
+      ansiController.getPresentationState().ui.completion.selectedIndex
+    );
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    input.emit("\r");
+    await flushAsyncWork(64);
+
+    expect(domController.getState().doc.text).toBe("omega");
+    expect(ansiController.getState().doc.text).toBe("omega");
+    terminal.destroy();
+  });
+
+  it("keeps ? workspace-symbol and rename parity between DOM and ANSI", async () => {
+    const services = {
+      goto: {
+        async references() {
+          return [{ filePath: "src/ref.ts", from: 0, to: 3 }];
+        }
+      },
+      symbols: {
+        async workspaceSymbols(query: string) {
+          return query ? [{ name: `${query}Symbol`, from: 0, to: 2, filePath: "src/query.ts" }] : [];
+        }
+      }
+    };
+    const domController = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    const ansiController = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    const container = document.createElement("div");
+    document.body.append(container);
+    createEditor(container, {
+      controller: domController,
+      languageServices: services
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller: ansiController,
+      languageServices: services,
+      input,
+      cols: 80,
+      rows: 12,
+      write: vi.fn(),
+      enterAltScreen: false
+    });
+    terminal.mount();
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "S", bubbles: true }));
+    input.emit("?");
+    input.emit("S");
+    await flushAsyncWork(64);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    input.emit("a");
+    await flushAsyncWork(64);
+
+    expect(domController.getPresentationState().ui.picker.title).toBe(ansiController.getPresentationState().ui.picker.title);
+    expect(domController.getPresentationState().ui.picker.query).toBe(ansiController.getPresentationState().ui.picker.query);
+    expect(domController.getPresentationState().ui.picker.items.map((item) => item.label)).toEqual(
+      ansiController.getPresentationState().ui.picker.items.map((item) => item.label)
+    );
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    input.emit("\u001b");
+    await flushAsyncWork(64);
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
+    input.emit("?");
+    input.emit("n");
+    await flushAsyncWork(64);
+
+    expect(domController.getPresentationState().ui.commandLine.value).toBe("rename ");
+    expect(ansiController.getPresentationState().ui.commandLine.value).toBe("rename ");
     terminal.destroy();
   });
 

@@ -121,6 +121,10 @@ function createInput(value: string) {
         diagnosticsRequestId: 0,
         lineChangesRequestId: 0,
         hoverRequestId: 0,
+        completionRequestId: 0,
+        navigationRequestId: 0,
+        renameRequestId: 0,
+        symbolsRequestId: 0,
         highlightCache: new Map(),
         highlightCoverage: new Set<number>(),
         diagnostics: [],
@@ -139,6 +143,14 @@ function createInput(value: string) {
         },
         commandCompletionIndex: 0,
         commandCompletionItems: [],
+        completion: {
+          active: false,
+          loading: false,
+          anchorOffset: null,
+          items: [],
+          selectedIndex: 0,
+          error: null
+        },
         picker: {
           active: false,
           loading: false,
@@ -466,6 +478,39 @@ describe("buildEditorLayout", () => {
     expect(pickerPanel?.rows[0]?.map((run) => run.text).join("")).toContain("ma");
     expect(panelText).toContain("src/main.ts");
     expect(panelText).toContain("export const m");
+  });
+
+  it("builds a completion panel from controller-owned completion state", () => {
+    const input = createInput("alpha");
+    const layout = buildEditorLayout({
+      ...input,
+      presentation: {
+        ...input.presentation,
+        ui: {
+          ...input.presentation.ui,
+          completion: {
+            active: true,
+            loading: false,
+            anchorOffset: 2,
+            items: [
+              { label: "alpha", detail: "fn", selected: true },
+              { label: "alias", detail: "value", selected: false }
+            ],
+            selectedIndex: 0,
+            error: null
+          }
+        }
+      }
+    });
+
+    const completionPanel = layout.panels.find((panel) => panel.kind === "completion");
+    const completionText = completionPanel?.rows.flat().map((run) => run.text).join("\n") ?? "";
+
+    expect(completionPanel).toBeTruthy();
+    expect(completionPanel?.anchor.row).toBeGreaterThanOrEqual(0);
+    expect(completionPanel?.anchor.col).toBeGreaterThanOrEqual(0);
+    expect(completionText).toContain("alpha");
+    expect(completionPanel?.rows[0]?.[0]?.token).toBe("picker-selected");
   });
 
   it("keeps the package free of DOM globals", () => {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { createCharacterSelection, createTextDocument, getSelectionOffsets } from "@wx/editor-core";
+import { createCharacterSelection, createSelection, createTextDocument, getSelectionOffsets } from "@wx/editor-core";
 import { createEditorController } from "@wx/editor-controller";
 import type { HighlightSpan, LanguageProvider } from "@wx/editor-language";
 import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
@@ -1545,6 +1545,202 @@ describe("createEditor", () => {
 
     expect(container.querySelector('[data-wx-editor-command-completion="f"]')).toBeNull();
     expect(container.querySelector("[data-wx-editor-picker-modal='true']")).not.toBeNull();
+  });
+
+  it("renders completion popup directly from controller snapshot state", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const controller = createEditorController({
+      value: "al",
+      selection: createSelection(0, 1)
+    });
+    createEditor(container, {
+      controller,
+      languageServices: {
+        completion: {
+          async complete() {
+            return [{ label: "alpha", detail: "keyword", sortText: "a" }];
+          }
+        }
+      }
+    });
+
+    await controller.requestCompletion();
+    await flushAsyncWork();
+
+    const selected = container.querySelector(".wx-editor__command-completion[data-selected='true']");
+    expect(selected?.textContent).toContain("alpha");
+    expect(controller.getPresentationState().ui.completion.active).toBe(true);
+  });
+
+  it("drives completion popup keys through DOM keyboard events", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const controller = createEditorController({
+      value: "al",
+      selection: createSelection(0, 1)
+    });
+
+    const editor = createEditor(container, {
+      controller,
+      languageServices: {
+        completion: {
+          async complete() {
+            return [
+              { label: "alpha", sortText: "b" },
+              { label: "alias", insertText: "omega", sortText: "a" }
+            ];
+          }
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", ctrlKey: true, bubbles: true }));
+    await flushAsyncWork();
+    expect(container.querySelector(".wx-editor__command-completion[data-selected='true']")?.textContent).toContain("alias");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(container.querySelector(".wx-editor__command-completion[data-selected='true']")?.textContent).toContain("alpha");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(container.querySelector(".wx-editor__command-completion[data-selected='true']")?.textContent).toContain("alpha");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }));
+    expect(container.querySelector(".wx-editor__command-completion[data-selected='true']")?.textContent).toContain("alias");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(container.querySelector(".wx-editor__command-completion")).toBeNull();
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", ctrlKey: true, bubbles: true }));
+    await flushAsyncWork();
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushAsyncWork();
+
+    expect(editor.getState().doc.text).toBe("omega");
+    expect(container.querySelector(".wx-editor__command-completion")).toBeNull();
+  });
+
+  it("routes alt-based LSP shortcuts through the shared controller state", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, {
+      value: "alpha beta alpha",
+      filePath: "src/current.ts",
+      host: {
+        async readFile({ filePath }) {
+          return { text: `preview:${filePath}` };
+        }
+      },
+      languageServices: {
+        goto: {
+          async definition() {
+            return [{ from: 11, to: 16 }];
+          },
+          async references() {
+            return [
+              { filePath: "src/ref-a.ts", from: 0, to: 3 },
+              { filePath: "src/ref-b.ts", from: 2, to: 5 }
+            ];
+          }
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", altKey: true, bubbles: true }));
+    await flushAsyncWork();
+    expect(editor.getState().selection.ranges[0]?.anchor).toBe(11);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "G", altKey: true, shiftKey: true, bubbles: true }));
+    await flushAsyncWork(64);
+    expect(container.querySelector("[data-wx-editor-picker-modal='true']")?.textContent ?? "").toContain("src/ref-a.ts");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushAsyncWork(64);
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "r", altKey: true, bubbles: true }));
+    await flushAsyncWork(64);
+    expect(container.querySelector("[data-wx-editor-command-text='true']")?.textContent).toBe("rename ");
+  });
+
+  it("routes ? symbol, reference, and rename actions through controller-owned UI state", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, {
+      value: "alpha",
+      filePath: "src/current.ts",
+      host: {
+        async readFile({ filePath }) {
+          return { text: `preview:${filePath}` };
+        }
+      },
+      languageServices: {
+        goto: {
+          async references() {
+            return [
+              { filePath: "src/ref.ts", from: 0, to: 3 },
+              { filePath: "src/ref-two.ts", from: 2, to: 5 }
+            ];
+          }
+        },
+        symbols: {
+          async documentSymbols() {
+            return [{ name: "alpha", from: 0, to: 5, detail: "fn" }];
+          },
+          async workspaceSymbols(query) {
+            return query ? [{ name: `${query}Symbol`, from: 0, to: 2, filePath: "src/query.ts" }] : [];
+          }
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }));
+    await flushAsyncWork(64);
+    expect(container.querySelector("[data-wx-editor-picker-modal='true']")?.textContent ?? "").toContain("alpha");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushAsyncWork(64);
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "S", bubbles: true }));
+    await flushAsyncWork(64);
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    await flushAsyncWork(64);
+    expect(container.querySelector("[data-wx-editor-picker-modal='true']")?.textContent ?? "").toContain("aSymbol");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushAsyncWork(64);
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true }));
+    await flushAsyncWork(64);
+    expect(container.querySelector("[data-wx-editor-picker-modal='true']")?.textContent ?? "").toContain("src/ref.ts");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushAsyncWork(64);
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
+    await flushAsyncWork(64);
+    expect(container.querySelector("[data-wx-editor-command-text='true']")?.textContent).toBe("rename ");
+  });
+
+  it("does not dirty completion popover work during plain movement when completion is inactive", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, { value: "alpha beta" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+    const commandPopover = container.querySelector("[data-wx-editor-command-popover='true']") as HTMLDivElement;
+    const replaceChildren = vi.spyOn(commandPopover, "replaceChildren");
+
+    replaceChildren.mockClear();
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+
+    expect(replaceChildren).not.toHaveBeenCalled();
+    expect(commandPopover.hidden).toBe(true);
   });
 
   it("cycles theme completions with Tab and Shift+Tab and applies the selected theme on Enter", () => {
