@@ -13,7 +13,7 @@ import type {
   CreateAnsiEditorTerminalOptions
 } from "./index";
 
-const ANSI_ENTER_ALT = "\u001b[?1049h\u001b[2J\u001b[H";
+const ANSI_ENTER_ALT = "\u001b[?1049h\u001b[?25l\u001b[2J\u001b[H";
 const ANSI_EXIT_ALT = "\u001b[0m\u001b[?25h\u001b[?1049l";
 
 function normalizeIndentGuides(input: CreateAnsiEditorMirrorOptions["indentGuides"]) {

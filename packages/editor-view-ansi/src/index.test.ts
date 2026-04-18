@@ -169,6 +169,7 @@ describe("@wx/editor-view-ansi", () => {
     });
 
     expect(stripAnsi(frame)).toContain("alpha");
+    expect(frame).toContain("\u001b[?25l");
     expect(frame).toContain("\u001b[6 q");
     expect(readTerminalCursor(frame)).toEqual({ row: 1, col: 7 });
   });

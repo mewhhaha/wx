@@ -27,6 +27,7 @@ import {
 
 const ANSI_RESET = "\u001b[0m";
 const ANSI_HOME = "\u001b[H";
+const ANSI_HIDE_CURSOR = "\u001b[?25l";
 
 function normalizeIndentGuides(input: RenderEditorAnsiFrameInput["indentGuides"]) {
   return {
@@ -299,8 +300,8 @@ export function renderEditorAnsiFrame(input: RenderEditorAnsiFrameInput): string
 
   const terminalCursor = findTerminalCursor(layout, input.state);
   const cursorSequence = terminalCursor
-    ? `${terminalCursor.shape === "beam" ? "\u001b[6 q" : "\u001b[2 q"}\u001b[?25h\u001b[${terminalCursor.row};${terminalCursor.col}H`
-    : "\u001b[?25l";
+    ? `\u001b[${terminalCursor.row};${terminalCursor.col}H${terminalCursor.shape === "beam" ? "\u001b[6 q" : "\u001b[2 q"}\u001b[?25h`
+    : ANSI_HIDE_CURSOR;
 
-  return `${ANSI_HOME}${buffer.map(serializeRow).join("\n")}${ANSI_RESET}${cursorSequence}`;
+  return `${ANSI_HIDE_CURSOR}${ANSI_HOME}${buffer.map(serializeRow).join("\n")}${ANSI_RESET}${cursorSequence}`;
 }
