@@ -45,6 +45,9 @@ export async function handlePendingActionKey(
       flashRuntime.handleFlashKey("Escape");
     } else {
       context.setPendingActionState(null);
+      if (nextPending.kind === "?") {
+        context.setCommandCompletions([], 0, "ui.pending-action.help");
+      }
     }
     context.clearPendingCount();
     return { handled: true };
@@ -52,6 +55,9 @@ export async function handlePendingActionKey(
 
   if (nextPending.kind !== "flash-target") {
     context.setPendingActionState(null);
+    if (nextPending.kind === "?") {
+      context.setCommandCompletions([], 0, "ui.pending-action.help");
+    }
   }
 
   if (nextPending.kind === "g") {

@@ -327,6 +327,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     selectTextobjectWithFallback: commandsRuntime.selectTextobjectWithFallback,
     syncCommandPreviewTheme: commandRuntime.syncCommandPreviewTheme,
     openCommandLine: commandRuntime.openCommandLineState,
+    setCommandCompletions: sessionRuntime.setCommandCompletions,
     handleActiveCommandLineKey: commandRuntime.handleActiveCommandLineKey,
     clearPendingCount: () => sessionRuntime.clearPendingCount(),
     setPendingActionState: sessionRuntime.setPendingActionState,

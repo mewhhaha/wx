@@ -374,6 +374,7 @@ export function createDomRenderRuntime(options: CreateDomRenderRuntimeOptions): 
       gutterMarker.dataset.wxEditorDiagnosticMarker = markerRun?.severity ?? "";
       gutterNumber.className = "wx-editor__gutter-number";
       gutterNumber.dataset.active = String(layoutRow.isActive);
+      gutterNumber.dataset.jump = String(layoutRow.isJumpHighlighted);
       gutterNumber.textContent = numberRun?.text ?? String(lineIndex + 1);
       gutterChange.className = "wx-editor__gutter-change";
       gutterChange.dataset.change = changeRun?.lineChangeKind ?? "";
@@ -381,6 +382,7 @@ export function createDomRenderRuntime(options: CreateDomRenderRuntimeOptions): 
       gutterChange.dataset.wxEditorLineChange = changeRun?.lineChangeKind ?? (changeRun?.deleted ? "deleted" : "");
       view.gutter.replaceChildren(gutterMarker, gutterNumber, gutterChange);
       view.row.classList.toggle("wx-row-active", layoutRow.isActive);
+      view.row.classList.toggle("wx-row-jump-highlighted", layoutRow.isJumpHighlighted);
       view.content.replaceChildren();
       view.host.replaceChildren(view.row);
       lineText.className = "wx-editor__line-text";

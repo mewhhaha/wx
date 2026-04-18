@@ -3,6 +3,7 @@ import type { EditorDiagnostic } from "@wx/editor-language";
 
 import type {
   EditorBottomMessageState,
+  EditorCommandCompletionItem,
   EditorCommandLineState,
   EditorJumpEntry,
   EditorPendingAction,
@@ -78,6 +79,7 @@ export interface SessionRuntime {
   ): boolean;
   hoverToneForDiagnostic(severity: EditorDiagnostic["severity"]): "info" | "warning" | "error";
   setCommandLineState(next: EditorCommandLineState, effectType?: string): void;
+  setCommandCompletions(next: readonly EditorCommandCompletionItem[], index?: number, effectType?: string): void;
   setCommandCompletionIndex(next: number, effectType?: string): void;
   setPendingActionState(next: EditorPendingAction, effectType?: string): void;
   setPendingCountState(next: string, effectType?: string): void;
@@ -203,6 +205,22 @@ export function createSessionRuntime(options: CreateSessionRuntimeOptions): Sess
       }
 
       presentation.ui.commandLine = next;
+      emitPresentationUpdate(effectType);
+    },
+    setCommandCompletions(next, index = 0, effectType = "ui.command-completion") {
+      const currentItems = presentation.ui.commandCompletionItems;
+      const nextIndex = next.length === 0 ? 0 : Math.max(0, Math.min(next.length - 1, index));
+      const itemsChanged =
+        currentItems.length !== next.length ||
+        currentItems.some((item, itemIndex) => item.label !== next[itemIndex]?.label || item.detail !== next[itemIndex]?.detail);
+      const indexChanged = presentation.ui.commandCompletionIndex !== nextIndex;
+
+      if (!itemsChanged && !indexChanged) {
+        return;
+      }
+
+      presentation.ui.commandCompletionItems = [...next];
+      presentation.ui.commandCompletionIndex = nextIndex;
       emitPresentationUpdate(effectType);
     },
     setCommandCompletionIndex(next, effectType = "ui.command-completion-index") {

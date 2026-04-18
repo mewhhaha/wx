@@ -84,6 +84,14 @@ const EDITOR_STYLE_TEXT = `
     background: color-mix(in srgb, var(--wx-color-current-line) 88%, transparent);
   }
 
+  .wx-row-jump-highlighted {
+    background: color-mix(in srgb, var(--wx-color-current-line) 82%, transparent);
+  }
+
+  .wx-row-active.wx-row-jump-highlighted {
+    background: color-mix(in srgb, var(--wx-color-current-line) 94%, transparent);
+  }
+
   .wx-editor__gutter {
     display: grid;
     grid-template-columns: subgrid;
@@ -106,6 +114,11 @@ const EDITOR_STYLE_TEXT = `
   .wx-editor__gutter-number[data-active="true"] {
     color: var(--wx-color-text);
     font-weight: 700;
+  }
+
+  .wx-editor__gutter-number[data-jump="true"] {
+    color: var(--wx-color-text);
+    font-weight: 600;
   }
 
   .wx-editor__gutter-change {

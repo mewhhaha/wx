@@ -3,6 +3,7 @@ import type { SyntaxTextobjectMode } from "@wx/editor-language";
 
 import type {
   EditorBottomMessageState,
+  EditorCommandCompletionItem,
   EditorCommandLineKeyOptions,
   EditorCommandLineKeyResult,
   EditorController,
@@ -45,6 +46,7 @@ export interface KeyRuntimeContext {
     changed: boolean;
   };
   openCommandLine(prompt: ":" | "/" | "?"): void;
+  setCommandCompletions(next: readonly EditorCommandCompletionItem[], index?: number, effectType?: string): void;
   handleActiveCommandLineKey(
     key: string,
     options?: EditorCommandLineKeyOptions & { shift?: boolean }

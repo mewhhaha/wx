@@ -125,7 +125,10 @@ function renderDocumentRow(
   lineDigits: number,
   contentCols: number
 ): void {
-  const rowBg = layoutRow.isActive ? resolveThemeColor(theme, "currentLine") : resolveThemeColor(theme, "background");
+  const rowBg =
+    layoutRow.isActive || layoutRow.isJumpHighlighted
+      ? resolveThemeColor(theme, "currentLine")
+      : resolveThemeColor(theme, "background");
   const gutterText = buildGutterText(layoutRow, lineDigits);
 
   for (let index = 0; index < Array.from(gutterText).length && index < row.length; index += 1) {

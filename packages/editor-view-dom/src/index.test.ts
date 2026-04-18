@@ -226,6 +226,32 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-flash-hint]")).toBeNull();
   });
 
+  it("highlights all rows in pending jump mode, then narrows to matching rows", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "alpha\nbrick\ngamma" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    expect(container.querySelectorAll(".wx-row-jump-highlighted")).toHaveLength(3);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(container.querySelectorAll(".wx-row-jump-highlighted")).toHaveLength(2);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }));
+
+    expect(editor.getState().doc.positionAt(editor.getState().selection.ranges[0]?.head ?? 0)).toEqual({
+      line: 2,
+      column: 1
+    });
+    expect(container.querySelectorAll(".wx-row-jump-highlighted")).toHaveLength(0);
+    expect(container.querySelectorAll(".wx-row-active")).toHaveLength(1);
+    expect(container.querySelector("[data-wx-editor-gutter='3'] .wx-editor__gutter-number")?.getAttribute("data-active")).toBe(
+      "true"
+    );
+  });
+
   it("renders distinct labels for multiple visible flash targets", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -1500,6 +1526,25 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-command-prompt='true']")?.textContent).toBe(":");
     expect(container.querySelector("[data-wx-editor-command-text='true']")?.textContent).toBe("theme ");
     expect(container.querySelector('[data-wx-editor-command-completion="theme"]')).toBeNull();
+  });
+
+  it("shows ? action help in command popover and clears it after a choice", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, { value: "abc" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+
+    expect(container.querySelector('[data-wx-editor-command-completion="f"]')?.textContent).toContain("search repo files");
+    expect(container.querySelector('[data-wx-editor-command-completion="b"]')?.textContent).toContain("show buffers");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
+    await flushAsyncWork();
+
+    expect(container.querySelector('[data-wx-editor-command-completion="f"]')).toBeNull();
+    expect(container.querySelector("[data-wx-editor-picker-modal='true']")).not.toBeNull();
   });
 
   it("cycles theme completions with Tab and Shift+Tab and applies the selected theme on Enter", () => {

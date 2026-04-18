@@ -124,6 +124,7 @@ export interface EditorLayoutRow {
   visualRowIndex: number;
   isContinuation: boolean;
   isActive: boolean;
+  isJumpHighlighted: boolean;
   gutterRuns: readonly EditorLayoutRun[];
   contentRuns: readonly EditorLayoutRun[];
   overlays: readonly EditorLayoutOverlay[];
@@ -921,6 +922,9 @@ export function buildEditorLayoutRow(
         (hint) => hint.offset >= visualRow.segmentStart && hint.offset < visualRow.segmentEnd
       )
     : [];
+  const isJumpHighlighted =
+    input.presentation.ui.pendingAction?.kind === "flash-target" ||
+    (input.presentation.ui.flash.active && flashHints.length > 0);
   const flashOffsets = new Set(flashHints.map((hint) => hint.offset));
   const contentRuns = renderLineRuns({
     state: input.state,
@@ -1019,6 +1023,7 @@ export function buildEditorLayoutRow(
     visualRowIndex,
     isContinuation: visualRow.isContinuation,
     isActive: visualRowIndex === activeRow.rowIndex,
+    isJumpHighlighted,
     gutterRuns,
     contentRuns,
     overlays,

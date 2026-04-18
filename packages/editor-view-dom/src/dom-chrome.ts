@@ -132,7 +132,9 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
         return;
       }
 
-      if (items.length === 0 || !uiState.commandLine.active || uiState.commandLine.prompt !== ":") {
+      const showQuestionHelp = uiState.pendingAction?.kind === "?" && items.length > 0;
+
+      if ((items.length === 0 || !uiState.commandLine.active || uiState.commandLine.prompt !== ":") && !showQuestionHelp) {
         options.commandPopover.hidden = true;
         delete options.commandPopover.dataset.kind;
         options.commandPopover.replaceChildren();

@@ -12,6 +12,7 @@ import {
   commandForNormalMode,
   commandForVisualMode
 } from "./keymap";
+import { getQuestionActionItems } from "./command-line";
 import type { FlashKeyRuntime } from "./key-flash";
 import type { EditorKeyInputOptions, EditorKeyInputResult } from "./types";
 import type { KeyRuntimeContext } from "./key-runtime-types";
@@ -155,6 +156,7 @@ export async function handleDirectKey(
   if ((state.mode === "normal" || state.mode === "visual") && input.key === "?") {
     context.clearPendingCount();
     context.setPendingActionState({ kind: "?" });
+    context.setCommandCompletions(getQuestionActionItems(), 0, "ui.pending-action.help");
     return { handled: true };
   }
 

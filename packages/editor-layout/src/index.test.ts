@@ -362,6 +362,47 @@ describe("buildEditorLayout", () => {
     expect(layout.statusBar.find((run) => run.part === "status-mode")?.text).toBe(" JMP ");
   });
 
+  it("highlights all visible rows while jump mode is pending", () => {
+    const input = withViewport(createInput("alpha\nbeta\ngamma"), {
+      visibleRowCapacity: 3
+    });
+    const layout = buildEditorLayout({
+      ...input,
+      presentation: {
+        ...input.presentation,
+        ui: {
+          ...input.presentation.ui,
+          pendingAction: { kind: "flash-target" }
+        }
+      }
+    });
+
+    expect(layout.document.rows.every((row) => row.isJumpHighlighted)).toBe(true);
+  });
+
+  it("narrows jump highlighting to rows that still contain jump labels", () => {
+    const input = withViewport(createInput("alpha\nbeta\ngamma"), {
+      visibleRowCapacity: 3
+    });
+    const layout = buildEditorLayout({
+      ...input,
+      presentation: {
+        ...input.presentation,
+        ui: {
+          ...input.presentation.ui,
+          flash: {
+            active: true,
+            target: "a",
+            input: "s",
+            hints: [{ offset: input.state.doc.lineAt(2).start + 1, label: "a" }]
+          }
+        }
+      }
+    });
+
+    expect(layout.document.rows.map((row) => row.isJumpHighlighted)).toEqual([false, false, true]);
+  });
+
   it("builds a tooltip panel from hover content", () => {
     const layout = buildEditorLayout({
       ...createInput("alpha"),

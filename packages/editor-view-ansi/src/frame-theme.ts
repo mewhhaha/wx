@@ -183,5 +183,9 @@ export function styleForGutterCell(
     }
   }
 
+  if (layoutRow.isActive || layoutRow.isJumpHighlighted) {
+    return styleForThemeRole(theme, "text", rowBg, index > 0 && index < gutterTextLength - 1);
+  }
+
   return styleForThemeRole(theme, "gutter", rowBg);
 }

@@ -220,6 +220,23 @@ describe("editor controller", () => {
     expect(controller.getPresentationState().ui.commandLine.active).toBe(false);
   });
 
+  it("shows ? action help items and clears them after handling a choice", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    await controller.handleKeyInput({ key: "?" });
+    expect(controller.getPresentationState().ui.commandCompletionItems.map((item) => item.label)).toEqual([
+      "f",
+      "F",
+      "b",
+      "d",
+      "j"
+    ]);
+
+    await controller.handleKeyInput({ key: "b", text: "b" });
+    expect(controller.getPresentationState().ui.commandCompletionItems).toEqual([]);
+    expect(controller.getPresentationState().ui.picker.active).toBe(true);
+  });
+
   it("handles flash-target state in the controller", () => {
     const controller = createEditorController({ value: "alpha beta gamma" });
     controller.setViewportMetrics({ visibleRowCapacity: 3, wrapColumns: 40, softWrap: true });

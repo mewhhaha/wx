@@ -10,6 +10,18 @@ const ROOT_COMMANDS: EditorCommandCompletionItem[] = [
   { label: "code-actions", detail: "show code actions" }
 ];
 
+const QUESTION_ACTIONS: EditorCommandCompletionItem[] = [
+  { label: "f", detail: "search repo files" },
+  { label: "F", detail: "search folder files" },
+  { label: "b", detail: "show buffers" },
+  { label: "d", detail: "show diagnostics" },
+  { label: "j", detail: "show jumplist" }
+];
+
+export function getQuestionActionItems(): EditorCommandCompletionItem[] {
+  return [...QUESTION_ACTIONS];
+}
+
 export function getCommandCompletionItems(
   commandLine: EditorCommandLineState,
   themeNames: readonly string[] = []
