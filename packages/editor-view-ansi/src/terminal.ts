@@ -354,7 +354,17 @@ export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOption
 
   const handleData = (chunk: Buffer | string) => {
     for (const key of parseAnsiInput(chunk)) {
-      keyQueue = keyQueue.then(() => handleKey(key));
+      const runKey = async () => {
+        try {
+          await handleKey(key);
+        } catch {
+          if (!destroyed) {
+            controller.setBottomMessage({ tone: "error", text: "Terminal input failed" });
+          }
+        }
+      };
+
+      keyQueue = keyQueue.then(runKey, runKey);
     }
   };
 

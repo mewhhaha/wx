@@ -48,6 +48,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   let pickerActions: readonly PickerActionItem[] = [];
   let previewRequestId = 0;
   let searchRequestId = 0;
+  let pickerSessionId = 0;
   let searchSource:
     | null
     | {
@@ -60,6 +61,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   const invalidateAsyncPickerRequests = () => {
     previewRequestId += 1;
     searchRequestId += 1;
+    pickerSessionId += 1;
   };
 
   const setPickerState: PickerRuntime["setPickerState"] = (
@@ -140,6 +142,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     }
 
     const requestId = ++previewRequestId;
+    const sessionId = pickerSessionId;
     const expectedQuery = presentation.ui.picker.query;
     const expectedTitle = presentation.ui.picker.title;
     const expectedIndex = presentation.ui.picker.selectedIndex;
@@ -151,7 +154,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       preview = { title: item.label, content: "Preview failed" };
     }
 
-    if (requestId !== previewRequestId) {
+    if (requestId !== previewRequestId || sessionId !== pickerSessionId) {
       return;
     }
 
@@ -253,6 +256,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   };
 
   const openDiagnosticsPicker = () => {
+    invalidateAsyncPickerRequests();
+    searchSource = null;
     const state = context.getState();
     const presentation = context.getPresentation();
     const items = presentation.language.diagnostics.map((entry) => {
@@ -293,6 +298,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   };
 
   const openJumpListPicker = () => {
+    invalidateAsyncPickerRequests();
+    searchSource = null;
     const state = context.getState();
     const controller = context.getController();
     const items = controller.getJumpList().map((entry, index) => {
@@ -404,6 +411,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     }
 
     const requestId = ++searchRequestId;
+    const sessionId = pickerSessionId;
     previewRequestId += 1;
     searchSource.query = query;
     const presentation = context.getPresentation();
@@ -432,7 +440,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     try {
       items = await searchSource.load(query);
     } catch {
-      if (requestId !== searchRequestId || searchSource !== currentSource) {
+      if (requestId !== searchRequestId || sessionId !== pickerSessionId || searchSource !== currentSource) {
         return false;
       }
       closePicker("ui.picker.close");
@@ -442,6 +450,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
 
     if (
       requestId !== searchRequestId ||
+      sessionId !== pickerSessionId ||
       searchSource !== currentSource ||
       currentSource.query !== query
     ) {
@@ -471,6 +480,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   const loadCodeActions = async (): Promise<boolean> => {
     const controller = context.getController();
     invalidateAsyncPickerRequests();
+    searchSource = null;
+    const sessionId = pickerSessionId;
     setPickerState(
       {
         active: true,
@@ -492,8 +503,21 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     try {
       actions = await controller.requestCodeActions();
     } catch {
+      if (sessionId !== pickerSessionId) {
+        return false;
+      }
       closePicker("ui.picker.close");
       context.setBottomMessage({ tone: "error", text: "Code actions request failed" });
+      return false;
+    }
+
+    const presentation = context.getPresentation();
+    if (
+      sessionId !== pickerSessionId ||
+      !presentation.ui.picker.active ||
+      presentation.ui.picker.title !== "code actions" ||
+      presentation.ui.picker.variant !== "bar"
+    ) {
       return false;
     }
 

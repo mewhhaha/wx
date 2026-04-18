@@ -638,7 +638,9 @@ describe("@wx/editor-view-ansi", () => {
 
     terminal.mount();
     input.emit(":");
-    input.emit("theme tide");
+    input.emit("t");
+    input.emit("\r");
+    input.emit("\u001b[Z");
     input.emit("\r");
     await flushAsyncWork();
 
@@ -813,6 +815,34 @@ describe("@wx/editor-view-ansi", () => {
 
     expect(searchFiles).toHaveBeenCalled();
     expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual(["src/explicit.ts"]);
+    terminal.destroy();
+  });
+
+  it("keeps processing ANSI keys after one input handler failure", async () => {
+    const controller = createEditorController({ value: "alpha" });
+    const originalHandleKeyInput = controller.handleKeyInput.bind(controller);
+    const handleKeyInput = vi.spyOn(controller, "handleKeyInput");
+    handleKeyInput.mockImplementation(async (...args) => originalHandleKeyInput(...args));
+    handleKeyInput.mockImplementationOnce(async () => {
+      throw new Error("boom");
+    });
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      cols: 40,
+      rows: 6,
+      write: vi.fn(),
+      enterAltScreen: false
+    });
+
+    terminal.mount();
+    input.emit("l");
+    input.emit("l");
+    await flushAsyncWork(64);
+
+    expect(controller.getState().selection.ranges[0]?.head).toBe(1);
+    expect(handleKeyInput).toHaveBeenCalledTimes(2);
     terminal.destroy();
   });
 
