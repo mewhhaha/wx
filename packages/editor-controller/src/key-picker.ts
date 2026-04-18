@@ -2,6 +2,7 @@ import type { KeyRuntimeContext } from "./key-runtime-types";
 
 export async function handlePickerKey(context: KeyRuntimeContext, key: string): Promise<boolean> {
   const picker = context.getPresentation().ui.picker;
+  const modal = picker.variant === "modal";
 
   if (!picker.active) {
     return false;
@@ -12,12 +13,12 @@ export async function handlePickerKey(context: KeyRuntimeContext, key: string): 
     return true;
   }
 
-  if (key === "ArrowLeft" || key === "h" || key === "ArrowUp" || key === "k") {
+  if ((!modal && (key === "ArrowLeft" || key === "h")) || key === "ArrowUp") {
     context.movePicker(-1);
     return true;
   }
 
-  if (key === "ArrowRight" || key === "l" || key === "ArrowDown" || key === "j") {
+  if ((!modal && (key === "ArrowRight" || key === "l")) || key === "ArrowDown") {
     context.movePicker(1);
     return true;
   }

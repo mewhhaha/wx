@@ -280,11 +280,13 @@ describe("@wx/editor-view-ansi", () => {
       })
     );
 
-    expect(frame).toContain("repo>ma");
+    expect(frame).toContain("ma");
+    expect(frame).not.toContain("repo>ma");
     expect(frame).toContain("src/main.ts");
     expect(frame).toContain("export const m");
     expect(frame).toContain("│");
     expect(frame).not.toContain("1:src/main.ts 2:src/beta.ts");
+    expect(frame).not.toContain("\u001b[?25h");
   });
 
   it("renders distinct flash-hint labels from layout overlays", () => {
@@ -687,6 +689,43 @@ describe("@wx/editor-view-ansi", () => {
     }
 
     expect(writes.length).toBeGreaterThan(0);
+  });
+
+  it("keeps j and k as search characters in modal picker and uses arrows for movement", async () => {
+    const controller = createEditorController({ value: "export const current = 1;\n", filePath: "src/current.ts" });
+    controller.setHostServices({
+      async searchFiles(context) {
+        return [
+          { filePath: "src/jk-alpha.ts" },
+          { filePath: "src/jk-beta.ts" },
+          { filePath: "src/other.ts" }
+        ].filter((entry) => entry.filePath.toLowerCase().includes(context.query.toLowerCase()));
+      }
+    });
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      cols: 80,
+      rows: 12,
+      write: vi.fn(),
+      enterAltScreen: false
+    });
+
+    terminal.mount();
+    input.emit("?");
+    input.emit("f");
+    await flushAsyncWork();
+    input.emit("j");
+    await flushAsyncWork();
+    input.emit("k");
+    await flushAsyncWork();
+    input.emit("\u001b[B");
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.query).toBe("jk");
+    expect(controller.getPresentationState().ui.picker.selectedIndex).toBe(1);
+    terminal.destroy();
   });
 
   it("supports Ctrl-o and terminal Ctrl-i jumplist navigation through the shared controller path", async () => {

@@ -68,6 +68,16 @@ function fillRange(row: Cell[], col: number, width: number, style: CellStyle): v
   }
 }
 
+function clearRange(row: Cell[], col: number, width: number, style: CellStyle): void {
+  for (let index = 0; index < width; index += 1) {
+    const target = col + index;
+    if (target < 0 || target >= row.length) {
+      continue;
+    }
+    row[target] = { char: " ", style };
+  }
+}
+
 function serializeRow(row: Cell[]): string {
   let output = "";
   let previousStyle: CellStyle | null = null;
@@ -192,27 +202,98 @@ function writeBottomRow(row: Cell[], runs: readonly EditorLayoutRun[], theme: Th
 }
 
 function overlayPanel(buffer: Cell[][], panel: EditorLayoutPanel, theme: ThemeSpec, bodyRows: number): void {
-  const totalWidth = panel.width + 2;
-  const totalHeight = panel.height + 2;
+  const isPickerModal = panel.kind === "picker";
+  const modalMargin = 2;
+  const modalInnerWidth = Math.max(2, buffer[0]!.length - modalMargin * 2 - 2);
+  const modalLeftWidth = Math.max(24, Math.min(48, Math.floor(modalInnerWidth * 0.32)));
+  const modalRightWidth = Math.max(12, modalInnerWidth - modalLeftWidth - 2);
+  const totalWidth = isPickerModal ? Math.max(4, buffer[0]!.length - modalMargin * 2) : panel.width + 2;
+  const totalHeight = isPickerModal ? Math.max(4, bodyRows - modalMargin * 2) : panel.height + 2;
 
   if (totalWidth > buffer[0]!.length || totalHeight > bodyRows) {
     return;
   }
 
-  const startCol = Math.max(0, Math.min(buffer[0]!.length - totalWidth, panel.anchor.col));
-  const startRow = Math.max(0, Math.min(bodyRows - totalHeight, panel.anchor.row));
+  const startCol = isPickerModal ? Math.max(0, Math.floor((buffer[0]!.length - totalWidth) / 2)) : Math.max(0, Math.min(buffer[0]!.length - totalWidth, panel.anchor.col));
+  const startRow = isPickerModal ? Math.max(0, Math.floor((bodyRows - totalHeight) / 2)) : Math.max(0, Math.min(bodyRows - totalHeight, panel.anchor.row));
   const borderStyle = makeStyle(PANEL_BORDER, PANEL_BG, true);
   const bodyStyle = panel.kind === "tooltip"
     ? styleForToken(theme, "tooltip", PANEL_BG, {})
     : styleForToken(theme, "picker", PANEL_BG, {});
+  const pickerListBackground = BOTTOM_BG;
+  const pickerPreviewBackground = PANEL_BG;
+  const pickerListStyle = makeStyle(resolveThemeColor(theme, "text"), pickerListBackground);
+  const pickerPreviewStyle = makeStyle(resolveThemeColor(theme, "text"), pickerPreviewBackground);
+  const pickerPreviewTitleStyle = makeStyle(resolveThemeColor(theme, "comment"), pickerPreviewBackground);
+  const pickerSelectedStyle = styleForToken(theme, "picker-selected", PANEL_BG, {});
 
   writeText(buffer[startRow]!, startCol, `┌${"─".repeat(Math.max(0, totalWidth - 2))}┐`, borderStyle);
   writeText(buffer[startRow + totalHeight - 1]!, startCol, `└${"─".repeat(Math.max(0, totalWidth - 2))}┘`, borderStyle);
 
   for (let rowIndex = startRow + 1; rowIndex < startRow + totalHeight - 1; rowIndex += 1) {
     writeText(buffer[rowIndex]!, startCol, "│", borderStyle);
-    fillRange(buffer[rowIndex]!, startCol + 1, totalWidth - 2, bodyStyle);
+    clearRange(buffer[rowIndex]!, startCol + 1, totalWidth - 2, bodyStyle);
     writeText(buffer[rowIndex]!, startCol + totalWidth - 1, "│", borderStyle);
+  }
+
+  if (isPickerModal) {
+    const innerStartCol = startCol + 1;
+    const dividerCol = innerStartCol + modalLeftWidth + 1;
+    const previewStartCol = dividerCol + 1;
+    const queryRuns = panel.rows[0] ?? [];
+    const queryRun = queryRuns.find((run) => run.part === "picker-query");
+    const countRun = queryRuns.find((run) => run.part === "picker-count");
+
+    for (let rowIndex = startRow + 2; rowIndex < startRow + totalHeight - 1; rowIndex += 1) {
+      clearRange(buffer[rowIndex]!, innerStartCol, modalLeftWidth, pickerListStyle);
+      writeText(buffer[rowIndex]!, dividerCol, "│", borderStyle);
+      clearRange(buffer[rowIndex]!, previewStartCol, modalRightWidth, pickerPreviewStyle);
+    }
+
+    if (queryRun) {
+      writeText(buffer[startRow + 1]!, innerStartCol, queryRun.text, styleForToken(theme, "picker", PANEL_BG, {}));
+    }
+
+    if (countRun) {
+      writeText(
+        buffer[startRow + 1]!,
+        startCol + totalWidth - 1 - countRun.text.length,
+        countRun.text,
+        styleForToken(theme, "picker", PANEL_BG, {})
+      );
+    }
+
+    panel.rows.slice(1).forEach((rowRuns, index) => {
+      const targetRow = buffer[startRow + 2 + index];
+      if (!targetRow || startRow + 2 + index >= startRow + totalHeight - 1) {
+        return;
+      }
+
+      const itemRun = rowRuns.find((run) => run.part === "picker-item");
+      const titleRun = rowRuns.find((run) => run.part === "picker-preview-title");
+      const bodyRun = rowRuns.find((run) => run.part === "picker-preview-body");
+
+      if (itemRun) {
+        writeText(
+          targetRow,
+          innerStartCol,
+          itemRun.text.padEnd(modalLeftWidth, " ").slice(0, modalLeftWidth),
+          itemRun.selectedInPicker ? pickerSelectedStyle : pickerListStyle
+        );
+      }
+
+      const previewRun = titleRun ?? bodyRun;
+      if (previewRun) {
+        writeText(
+          targetRow,
+          previewStartCol,
+          previewRun.text.padEnd(modalRightWidth, " ").slice(0, modalRightWidth),
+          titleRun ? pickerPreviewTitleStyle : pickerPreviewStyle
+        );
+      }
+    });
+
+    return;
   }
 
   panel.rows.forEach((rowRuns, index) => {
@@ -297,7 +378,10 @@ export function renderEditorAnsiFrame(input: RenderEditorAnsiFrameInput): string
   fillRange(buffer[rows - 1]!, 0, cols, makeStyle(resolveThemeColor(theme, "text"), BOTTOM_BG));
   writeBottomRow(buffer[rows - 1]!, layout.bottomBar.runs, theme);
 
-  const terminalCursor = findTerminalCursor(layout, input.state);
+  const terminalCursor =
+    input.presentation.ui.picker.active && input.presentation.ui.picker.variant === "modal"
+      ? null
+      : findTerminalCursor(layout, input.state);
   const cursorSequence = terminalCursor
     ? `\u001b[${terminalCursor.row};${terminalCursor.col}H${terminalCursor.shape === "beam" ? "\u001b[6 q" : "\u001b[2 q"}\u001b[?25h`
     : ANSI_HIDE_CURSOR;

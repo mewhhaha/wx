@@ -132,7 +132,7 @@ export function styleForToken(
     case "bottom-prompt":
       return makeStyle(resolveThemeColor(theme, "keyword"), BOTTOM_BG, true);
     case "picker":
-      return makeStyle(resolveThemeColor(theme, "text"), BOTTOM_BG);
+      return makeStyle(resolveThemeColor(theme, "text"), rowBg);
     case "picker-selected":
       return makeStyle(resolveThemeColor(theme, "cursorText"), resolveThemeColor(theme, "cursor"), true);
     case "tooltip":

@@ -435,6 +435,74 @@ describe("editor controller", () => {
     expect(controller.getBuffers().map((entry) => entry.filePath)).toEqual(["src/current.ts", "src/beta.ts"]);
   });
 
+  it("keeps modal search results visible while a new query is loading", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    let resolveSearch: ((value: readonly { filePath: string }[]) => void) | null = null;
+
+    controller.setHostServices({
+      async searchFiles(context) {
+        if (context.query === "b") {
+          return await new Promise<readonly { filePath: string }[]>((resolve) => {
+            resolveSearch = resolve;
+          });
+        }
+
+        return [{ filePath: "src/alpha.ts" }, { filePath: "src/beta.ts" }];
+      },
+      async readFile(context) {
+        return { text: `opened:${context.filePath}` };
+      }
+    });
+
+    await controller.handleKeyInput({ key: "?" });
+    await controller.handleKeyInput({ key: "f", text: "f" });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual([
+      "src/alpha.ts",
+      "src/beta.ts"
+    ]);
+
+    const pendingUpdate = controller.handleKeyInput({ key: "b", text: "b" });
+    expect(controller.getPresentationState().ui.picker.query).toBe("b");
+    expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual([
+      "src/alpha.ts",
+      "src/beta.ts"
+    ]);
+
+    resolveSearch?.([{ filePath: "src/beta.ts" }]);
+    await pendingUpdate;
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual(["src/beta.ts"]);
+  });
+
+  it("treats j and k as query text inside modal search pickers", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    controller.setHostServices({
+      async searchFiles(context) {
+        return [
+          { filePath: "src/jump.ts" },
+          { filePath: "src/kappa.ts" },
+          { filePath: "src/other.ts" }
+        ].filter((entry) => entry.filePath.toLowerCase().includes(context.query.toLowerCase()));
+      }
+    });
+
+    await controller.handleKeyInput({ key: "?" });
+    await controller.handleKeyInput({ key: "f", text: "f" });
+    await flushAsyncWork();
+    await controller.handleKeyInput({ key: "j", text: "j" });
+    await flushAsyncWork();
+    await controller.handleKeyInput({ key: "k", text: "k" });
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.query).toBe("jk");
+    expect(controller.getPresentationState().ui.picker.selectedIndex).toBe(0);
+  });
+
   it("opens existing buffers through ?b without rereading host text", async () => {
     const readFile = vi.fn(async (context: { filePath: string }) => ({ text: `opened:${context.filePath}` }));
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });

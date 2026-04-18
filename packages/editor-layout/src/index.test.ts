@@ -463,7 +463,7 @@ describe("buildEditorLayout", () => {
     const panelText = pickerPanel?.rows.flat().map((run) => run.text).join("\n") ?? "";
 
     expect(pickerPanel).toBeTruthy();
-    expect(pickerPanel?.rows[0]?.map((run) => run.text).join("")).toContain("repo>ma");
+    expect(pickerPanel?.rows[0]?.map((run) => run.text).join("")).toContain("ma");
     expect(panelText).toContain("src/main.ts");
     expect(panelText).toContain("export const m");
   });

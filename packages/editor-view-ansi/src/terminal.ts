@@ -167,7 +167,7 @@ export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): 
 
   if (options.host !== undefined) {
     controller.setHostServices(options.host);
-  } else if (typeof process !== "undefined" && process.versions?.node) {
+  } else if (typeof process !== "undefined" && process.versions?.node && !controller.getPresentationState().language.host) {
     controller.setHostServices(createNodeHostServices());
   }
 

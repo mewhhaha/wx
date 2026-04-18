@@ -922,8 +922,8 @@ function buildPickerPanel(input: EditorLayoutInput): EditorLayoutPanel | null {
   rows.push([
     {
       col: 0,
-      text: truncatePanelText(`${picker.title}>${queryText}`, innerWidth - countText.length - 1),
-      token: "picker-selected",
+      text: truncatePanelText(queryText, innerWidth - countText.length - 1),
+      token: "picker",
       part: "picker-query"
     },
     {

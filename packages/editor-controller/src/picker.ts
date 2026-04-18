@@ -134,22 +134,6 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     }
 
     const requestId = ++previewRequestId;
-    setPickerState(
-      {
-        active: true,
-        loading: presentation.ui.picker.loading,
-        title: presentation.ui.picker.title,
-        items: pickerActions,
-        selectedIndex: presentation.ui.picker.selectedIndex,
-        error: presentation.ui.picker.error,
-        query: presentation.ui.picker.query,
-        variant: presentation.ui.picker.variant,
-        previewTitle: presentation.ui.picker.previewTitle,
-        previewContent: presentation.ui.picker.previewContent,
-        previewLoading: true
-      },
-      "ui.picker.preview"
-    );
 
     let preview: { title: string; content: string } | null;
     try {
@@ -394,18 +378,22 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     }
 
     searchSource.query = query;
+    const presentation = context.getPresentation();
+    const preserveVisibleModalState = presentation.ui.picker.active && presentation.ui.picker.variant === "modal";
     setPickerState(
       {
         active: true,
         loading: true,
         title: searchSource.title,
-        items: [],
-        selectedIndex: 0,
+        items: preserveVisibleModalState ? pickerActions : [],
+        selectedIndex: preserveVisibleModalState
+          ? Math.max(0, Math.min(pickerActions.length - 1, presentation.ui.picker.selectedIndex))
+          : 0,
         error: null,
         query,
         variant: searchSource.variant,
-        previewTitle: "",
-        previewContent: "",
+        previewTitle: preserveVisibleModalState ? presentation.ui.picker.previewTitle : "",
+        previewContent: preserveVisibleModalState ? presentation.ui.picker.previewContent : "",
         previewLoading: false
       },
       "ui.picker"
