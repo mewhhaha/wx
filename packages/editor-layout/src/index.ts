@@ -872,6 +872,112 @@ function splitPanelRows(token: "tooltip" | "tooltip-source", text: string, part:
   ]);
 }
 
+function truncatePanelText(text: string, width: number): string {
+  const normalized = text.replace(/\t/g, "  ");
+
+  if (width <= 0) {
+    return "";
+  }
+
+  if (normalized.length <= width) {
+    return normalized;
+  }
+
+  if (width === 1) {
+    return normalized.slice(0, 1);
+  }
+
+  return `${normalized.slice(0, Math.max(0, width - 1))}…`;
+}
+
+function buildPickerPanel(input: EditorLayoutInput): EditorLayoutPanel | null {
+  const picker = input.presentation.ui.picker;
+
+  if (!picker.active || picker.variant !== "modal") {
+    return null;
+  }
+
+  const lineDigits = Math.max(2, String(Math.max(1, input.state.doc.lineCount)).length);
+  const gutterCols = lineDigits + 4;
+  const contentCols =
+    input.presentation.viewport.softWrap && Number.isFinite(input.presentation.viewport.wrapColumns)
+      ? Math.max(24, input.presentation.viewport.wrapColumns)
+      : 80;
+  const totalCols = gutterCols + contentCols;
+  const innerWidth = Math.max(36, totalCols - 10);
+  const leftWidth = Math.max(18, Math.min(Math.floor(innerWidth * 0.46), innerWidth - 12));
+  const rightWidth = Math.max(12, innerWidth - leftWidth - 3);
+  const visibleBodyRows = Math.max(4, input.presentation.viewport.visibleRowCapacity - 2);
+  const listRows = Math.max(4, visibleBodyRows - 2);
+  const selectedIndex = Math.max(0, Math.min(picker.items.length - 1, picker.selectedIndex));
+  const startIndex = Math.max(0, Math.min(selectedIndex - Math.floor(listRows / 2), Math.max(0, picker.items.length - listRows)));
+  const visibleItems = picker.items.slice(startIndex, startIndex + listRows);
+  const previewLines = (picker.previewLoading ? "Loading preview..." : (picker.previewContent || "No preview"))
+    .split("\n")
+    .slice(0, listRows - 1);
+  const rows: EditorLayoutRun[][] = [];
+  const queryText = picker.query || " ";
+  const countText = `${picker.items.length > 0 ? selectedIndex + 1 : 0}/${picker.items.length}`;
+
+  rows.push([
+    {
+      col: 0,
+      text: truncatePanelText(`${picker.title}>${queryText}`, innerWidth - countText.length - 1),
+      token: "picker-selected",
+      part: "picker-query"
+    },
+    {
+      col: Math.max(0, innerWidth - countText.length),
+      text: countText,
+      token: "picker",
+      part: "picker-count"
+    }
+  ]);
+
+  for (let rowIndex = 0; rowIndex < listRows; rowIndex += 1) {
+    const item = visibleItems[rowIndex];
+    const previewLine = rowIndex === 0 ? (picker.previewTitle || "preview") : (previewLines[rowIndex - 1] ?? "");
+    const listToken = item?.selected ? "picker-selected" : "picker";
+    const prefix = item ? (item.selected ? "› " : "  ") : "  ";
+    const detailSuffix = item?.detail ? `  ${item.detail}` : "";
+    const listText = item ? truncatePanelText(`${prefix}${item.label}${detailSuffix}`, leftWidth) : "";
+
+    rows.push([
+      {
+        col: 0,
+        text: listText.padEnd(leftWidth, " "),
+        token: listToken,
+        part: "picker-item",
+        selectedInPicker: item?.selected
+      },
+      {
+        col: leftWidth + 1,
+        text: "│",
+        token: "picker",
+        part: "picker-separator"
+      },
+      {
+        col: leftWidth + 3,
+        text: truncatePanelText(previewLine, rightWidth).padEnd(rightWidth, " "),
+        token: rowIndex === 0 ? "tooltip-source" : "tooltip",
+        part: rowIndex === 0 ? "picker-preview-title" : "picker-preview-body"
+      }
+    ]);
+  }
+
+  return {
+    kind: "picker",
+    token: "picker",
+    anchor: {
+      col: Math.max(0, Math.floor((totalCols - (innerWidth + 2)) / 2)),
+      row: Math.max(0, Math.floor(Math.max(1, visibleBodyRows - (rows.length + 2)) / 2))
+    },
+    rows,
+    width: innerWidth,
+    height: rows.length
+  };
+}
+
 export function buildEditorLayoutRow(
   input: EditorLayoutInput,
   visualRow: EditorVisualRow,
@@ -1107,7 +1213,14 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
       part: "command-text"
     });
   } else if (input.presentation.ui.picker.active) {
-    if (input.presentation.ui.picker.loading) {
+    if (input.presentation.ui.picker.variant === "modal") {
+      bottomRuns.push({
+        col: 0,
+        text: " ",
+        token: "bottom",
+        part: "bottom-fill"
+      });
+    } else if (input.presentation.ui.picker.loading) {
       bottomRuns.push({
         col: 0,
         text: `Loading ${input.presentation.ui.picker.title}...`,
@@ -1242,6 +1355,11 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
       width,
       height: Math.max(1, panelRows.length)
     });
+  }
+
+  const pickerPanel = buildPickerPanel(input);
+  if (pickerPanel) {
+    panels.push(pickerPanel);
   }
 
   return {

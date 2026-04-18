@@ -431,6 +431,43 @@ describe("buildEditorLayout", () => {
     expect(layout.panels[0]?.rows.flat().map((run) => run.text)).toEqual(["source", "body line"]);
   });
 
+  it("builds a modal picker panel with list and preview columns", () => {
+    const input = createInput("alpha\nbeta\ngamma");
+    const layout = buildEditorLayout({
+      ...input,
+      presentation: {
+        ...input.presentation,
+        ui: {
+          ...input.presentation.ui,
+          picker: {
+            active: true,
+            loading: false,
+            title: "repo",
+            items: [
+              { label: "src/main.ts", detail: "saved", selected: true },
+              { label: "src/beta.ts", detail: "saved", selected: false }
+            ],
+            selectedIndex: 0,
+            error: null,
+            query: "ma",
+            variant: "modal",
+            previewTitle: "src/main.ts",
+            previewContent: "export const main = 1;",
+            previewLoading: false
+          }
+        }
+      }
+    });
+
+    const pickerPanel = layout.panels.find((panel) => panel.kind === "picker");
+    const panelText = pickerPanel?.rows.flat().map((run) => run.text).join("\n") ?? "";
+
+    expect(pickerPanel).toBeTruthy();
+    expect(pickerPanel?.rows[0]?.map((run) => run.text).join("")).toContain("repo>ma");
+    expect(panelText).toContain("src/main.ts");
+    expect(panelText).toContain("export const m");
+  });
+
   it("keeps the package free of DOM globals", () => {
     const source = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8");
 

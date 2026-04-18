@@ -288,8 +288,7 @@ export function renderEditorAnsiFrame(input: RenderEditorAnsiFrameInput): string
     writeText(targetRow, 0, index === 0 ? "~" : " ", fillerStyle);
   }
 
-  const panel = layout.panels[0];
-  if (panel) {
+  for (const panel of layout.panels) {
     overlayPanel(buffer, panel, theme, bodyRows);
   }
 

@@ -74,5 +74,6 @@ export interface CreateAnsiEditorTerminalOptions extends CreateAnsiEditorMirrorO
 export interface AnsiEditorTerminal extends AnsiEditorMirror {}
 
 export { renderEditorAnsiFrame } from "./frame";
+export { createNodeHostServices } from "./node-host";
 export { createAnsiEditorMirror, createAnsiEditorTerminal, parseAnsiInput } from "./terminal";
 export { runAnsiMirrorDemo } from "./demo-runtime";

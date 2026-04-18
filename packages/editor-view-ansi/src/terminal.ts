@@ -6,6 +6,7 @@ import {
 import { defaultTheme, normalizeCommandThemes, type ThemeSpec } from "@wx/editor-theme";
 
 import { renderEditorAnsiFrame } from "./frame";
+import { createNodeHostServices } from "./node-host";
 import type {
   AnsiEditorMirror,
   AnsiEditorTerminal,
@@ -166,6 +167,8 @@ export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): 
 
   if (options.host !== undefined) {
     controller.setHostServices(options.host);
+  } else if (typeof process !== "undefined" && process.versions?.node) {
+    controller.setHostServices(createNodeHostServices());
   }
 
   if (options.theme) {

@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { tmpdir } from "node:os";
 
 import {
   appendInsertMode,
@@ -15,7 +17,7 @@ import { createEditorController } from "@wx/editor-controller";
 import { createEditor } from "@wx/editor-view-dom";
 import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
-import { createAnsiEditorMirror, renderEditorAnsiFrame } from "./index";
+import { createAnsiEditorMirror, createNodeHostServices, renderEditorAnsiFrame } from "./index";
 import { createAnsiEditorTerminal } from "./index";
 
 function stripAnsi(text: string): string {
@@ -139,6 +141,33 @@ describe("@wx/editor-view-ansi", () => {
     expect(collectCrossPackageSrcLeaks("packages/editor-view-ansi/src")).toEqual([]);
   });
 
+  it("searches repo and folder files through the default Node host helper", async () => {
+    const cwd = await mkdtemp(resolve(tmpdir(), "wx-ansi-host-"));
+    await mkdir(resolve(cwd, "src", "nested"), { recursive: true });
+    await mkdir(resolve(cwd, "pkg"), { recursive: true });
+    await writeFile(resolve(cwd, "src", "main.ts"), "export const main = 1;\n");
+    await writeFile(resolve(cwd, "src", "nested", "beta.ts"), "export const beta = 2;\n");
+    await writeFile(resolve(cwd, "pkg", "gamma.ts"), "export const gamma = 3;\n");
+    const host = createNodeHostServices({ cwd });
+
+    const repoMatches = await host.searchFiles?.({
+      scope: "repo",
+      filePath: "src/main.ts",
+      query: "ta"
+    });
+    const folderMatches = await host.searchFiles?.({
+      scope: "folder",
+      filePath: "src/main.ts",
+      query: "ta"
+    });
+
+    expect(repoMatches?.map((entry) => entry.filePath)).toEqual(["src/nested/beta.ts"]);
+    expect(folderMatches?.map((entry) => entry.filePath)).toEqual(["src/nested/beta.ts"]);
+    await expect(host.readFile?.({ filePath: "pkg/gamma.ts" })).resolves.toEqual({
+      text: "export const gamma = 3;\n"
+    });
+  });
+
   it("renders plain text rows with gutters, status, and bottom rows", () => {
     const { state, presentation } = createPresentation("alpha\nbeta");
 
@@ -221,6 +250,41 @@ describe("@wx/editor-view-ansi", () => {
     });
 
     expect(frame).toContain("48;2;161;98;7m");
+  });
+
+  it("renders modal picker search as popover with list and preview", () => {
+    const { state, presentation } = createPresentation("alpha\nbeta");
+    presentation.ui.picker = {
+      active: true,
+      loading: false,
+      title: "repo",
+      items: [
+        { label: "src/main.ts", detail: "saved", selected: true },
+        { label: "src/beta.ts", detail: "saved", selected: false }
+      ],
+      selectedIndex: 0,
+      error: null,
+      query: "ma",
+      variant: "modal",
+      previewTitle: "src/main.ts",
+      previewContent: "export const main = 1;\nexport const beta = 2;",
+      previewLoading: false
+    };
+
+    const frame = stripAnsi(
+      renderEditorAnsiFrame({
+        state,
+        presentation,
+        cols: 90,
+        rows: 14
+      })
+    );
+
+    expect(frame).toContain("repo>ma");
+    expect(frame).toContain("src/main.ts");
+    expect(frame).toContain("export const m");
+    expect(frame).toContain("│");
+    expect(frame).not.toContain("1:src/main.ts 2:src/beta.ts");
   });
 
   it("renders distinct flash-hint labels from layout overlays", () => {
@@ -582,6 +646,47 @@ describe("@wx/editor-view-ansi", () => {
       expect(controller.getPresentationState().ui.flash.hints.length).toBeGreaterThan(0);
       terminal.destroy();
     });
+  });
+
+  it("uses Node host fallback so ?f populates file results in terminal mode", async () => {
+    const cwd = await mkdtemp(resolve(tmpdir(), "wx-ansi-terminal-"));
+    await mkdir(resolve(cwd, "src"), { recursive: true });
+    await writeFile(resolve(cwd, "src", "current.ts"), "export const current = 1;\n");
+    await writeFile(resolve(cwd, "src", "beta.ts"), "export const beta = 2;\n");
+    const controller = createEditorController({ value: "export const current = 1;\n", filePath: "src/current.ts" });
+    const input = new FakeInput();
+    const writes: string[] = [];
+    const previousCwd = process.cwd();
+    process.chdir(cwd);
+
+    try {
+      const terminal = createAnsiEditorTerminal({
+        controller,
+        input,
+        cols: 80,
+        rows: 12,
+        write: (text) => {
+          writes.push(text);
+        },
+        enterAltScreen: false
+      });
+
+      terminal.mount();
+      await expect(controller.searchFiles("repo", "b")).resolves.toEqual([{ filePath: "src/beta.ts" }]);
+      input.emit("?");
+      input.emit("f");
+      await flushAsyncWork(64);
+      input.emit("b");
+      await flushAsyncWork(64);
+
+      expect(controller.getPresentationState().ui.picker.title).toBe("repo");
+      expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toContain("src/beta.ts");
+      terminal.destroy();
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(writes.length).toBeGreaterThan(0);
   });
 
   it("supports Ctrl-o and terminal Ctrl-i jumplist navigation through the shared controller path", async () => {
