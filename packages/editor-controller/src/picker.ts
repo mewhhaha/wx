@@ -47,6 +47,7 @@ export interface PickerRuntime {
 export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntime {
   let pickerActions: readonly PickerActionItem[] = [];
   let previewRequestId = 0;
+  let searchRequestId = 0;
   let searchSource:
     | null
     | {
@@ -55,6 +56,11 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         variant: "bar" | "modal";
         load(query: string): Promise<readonly PickerActionItem[]>;
       } = null;
+
+  const invalidateAsyncPickerRequests = () => {
+    previewRequestId += 1;
+    searchRequestId += 1;
+  };
 
   const setPickerState: PickerRuntime["setPickerState"] = (
     next,
@@ -134,6 +140,9 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     }
 
     const requestId = ++previewRequestId;
+    const expectedQuery = presentation.ui.picker.query;
+    const expectedTitle = presentation.ui.picker.title;
+    const expectedIndex = presentation.ui.picker.selectedIndex;
 
     let preview: { title: string; content: string } | null;
     try {
@@ -146,16 +155,27 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       return;
     }
 
+    const nextPresentation = context.getPresentation();
+    if (
+      !nextPresentation.ui.picker.active ||
+      nextPresentation.ui.picker.variant !== "modal" ||
+      nextPresentation.ui.picker.query !== expectedQuery ||
+      nextPresentation.ui.picker.title !== expectedTitle ||
+      nextPresentation.ui.picker.selectedIndex !== expectedIndex
+    ) {
+      return;
+    }
+
     setPickerState(
       {
         active: true,
-        loading: presentation.ui.picker.loading,
-        title: presentation.ui.picker.title,
+        loading: nextPresentation.ui.picker.loading,
+        title: nextPresentation.ui.picker.title,
         items: pickerActions,
-        selectedIndex: presentation.ui.picker.selectedIndex,
-        error: presentation.ui.picker.error,
-        query: presentation.ui.picker.query,
-        variant: presentation.ui.picker.variant,
+        selectedIndex: nextPresentation.ui.picker.selectedIndex,
+        error: nextPresentation.ui.picker.error,
+        query: nextPresentation.ui.picker.query,
+        variant: nextPresentation.ui.picker.variant,
         previewTitle: preview?.title ?? "",
         previewContent: preview?.content ?? "",
         previewLoading: false
@@ -165,7 +185,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   };
 
   const closePicker: PickerRuntime["closePicker"] = (effectType = "ui.picker.close") => {
-    previewRequestId += 1;
+    invalidateAsyncPickerRequests();
     setPickerState(
       {
         active: false,
@@ -196,6 +216,10 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       0,
       Math.min(presentation.ui.picker.items.length - 1, presentation.ui.picker.selectedIndex + delta)
     );
+
+    if (nextIndex === presentation.ui.picker.selectedIndex) {
+      return false;
+    }
 
     setPickerState(
       {
@@ -310,6 +334,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   };
 
   const openBuffersPicker = () => {
+    invalidateAsyncPickerRequests();
     const buildItems = async (query: string) => {
       const normalizedQuery = query.trim().toLowerCase();
       return context
@@ -337,6 +362,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   };
 
   const openFileSearchPicker = async (scope: "repo" | "folder") => {
+    invalidateAsyncPickerRequests();
     searchSource = {
       title: scope === "repo" ? "repo" : "folder",
       query: "",
@@ -377,9 +403,12 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       return false;
     }
 
+    const requestId = ++searchRequestId;
+    previewRequestId += 1;
     searchSource.query = query;
     const presentation = context.getPresentation();
     const preserveVisibleModalState = presentation.ui.picker.active && presentation.ui.picker.variant === "modal";
+    const currentSource = searchSource;
     setPickerState(
       {
         active: true,
@@ -403,8 +432,19 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     try {
       items = await searchSource.load(query);
     } catch {
+      if (requestId !== searchRequestId || searchSource !== currentSource) {
+        return false;
+      }
       closePicker("ui.picker.close");
       context.setBottomMessage({ tone: "error", text: "Search failed" });
+      return false;
+    }
+
+    if (
+      requestId !== searchRequestId ||
+      searchSource !== currentSource ||
+      currentSource.query !== query
+    ) {
       return false;
     }
 
@@ -430,6 +470,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
 
   const loadCodeActions = async (): Promise<boolean> => {
     const controller = context.getController();
+    invalidateAsyncPickerRequests();
     setPickerState(
       {
         active: true,

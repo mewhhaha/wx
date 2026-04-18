@@ -18,6 +18,18 @@ function isLikelyTextFile(path: string): boolean {
   return !/\.(png|jpe?g|gif|webp|bmp|ico|wasm|so|dll|dylib|exe|zip|gz|tar|jar|pdf)$/i.test(path);
 }
 
+function getSearchRootContext(cwd: string, absoluteFilePath: string, scope: "repo" | "folder") {
+  return import("node:path").then((path) => {
+    const rootPath = scope === "folder" ? path.dirname(absoluteFilePath) : cwd;
+    const relativeRoot = normalizeRelativePath(path.relative(cwd, rootPath));
+
+    return {
+      rootPath,
+      prefix: !relativeRoot || relativeRoot === "." ? "" : `${relativeRoot.replace(/\/+$/, "")}/`
+    };
+  });
+}
+
 export function createNodeHostServices(options: { cwd?: string; ignoredDirectories?: Iterable<string> } = {}): EditorHostServices {
   const cwd = options.cwd ?? process.cwd();
   const ignoredDirectories = new Set(options.ignoredDirectories ?? DEFAULT_IGNORED_DIRECTORIES);
@@ -83,17 +95,9 @@ export function createNodeHostServices(options: { cwd?: string; ignoredDirectori
       return { text: await fs.readFile(absolute, "utf8") };
     },
     async searchFiles(context) {
-      const path = await import("node:path");
       const normalizedQuery = context.query.trim().toLowerCase();
       const absoluteFilePath = await resolveInsideCwd(context.filePath);
-      const rootPath =
-        context.scope === "folder"
-          ? path.dirname(absoluteFilePath)
-          : cwd;
-      const prefix =
-        context.scope === "folder"
-          ? `${normalizeRelativePath(path.relative(cwd, rootPath)).replace(/\/?$/, "/")}`
-          : "";
+      const { rootPath, prefix } = await getSearchRootContext(cwd, absoluteFilePath, context.scope);
       const files = await walkFiles(rootPath);
 
       return files

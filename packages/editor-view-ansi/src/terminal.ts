@@ -102,6 +102,12 @@ export function parseAnsiInput(chunk: Buffer | string): string[] {
       continue;
     }
 
+    if (slice.startsWith("\u001b[Z")) {
+      keys.push("Shift+Tab");
+      index += 2;
+      continue;
+    }
+
     const char = text[index] ?? "";
     const code = char.charCodeAt(0);
 
@@ -310,18 +316,19 @@ export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOption
 
     const presentationBeforeKey = controller.getPresentationState();
     const stateBeforeKey = controller.getState();
+    const shiftTab = key === "Shift+Tab";
     const terminalCtrlIAsTab =
       key === "Tab" &&
       stateBeforeKey.mode !== "insert" &&
       !presentationBeforeKey.ui.commandLine.active &&
       !presentationBeforeKey.ui.picker.active;
     const ctrl = key.startsWith("Ctrl+") || terminalCtrlIAsTab;
-    const normalizedKey = terminalCtrlIAsTab ? "i" : ctrl ? key.slice(5) : key;
+    const normalizedKey = shiftTab ? "Tab" : terminalCtrlIAsTab ? "i" : ctrl ? key.slice(5) : key;
     const result = await controller.handleKeyInput(
       {
         key: normalizedKey,
         ctrl,
-        shift: normalizedKey.length === 1 && normalizedKey !== normalizedKey.toLowerCase(),
+        shift: shiftTab || (normalizedKey.length === 1 && normalizedKey !== normalizedKey.toLowerCase()),
         source: "ansi",
         text: normalizedKey.length === 1 ? normalizedKey : undefined
       },

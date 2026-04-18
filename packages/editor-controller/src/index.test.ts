@@ -478,6 +478,116 @@ describe("editor controller", () => {
     expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual(["src/beta.ts"]);
   });
 
+  it("ignores stale modal search responses when a newer query finishes first", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    let resolveA: ((value: readonly { filePath: string }[]) => void) | null = null;
+    let resolveAb: ((value: readonly { filePath: string }[]) => void) | null = null;
+
+    controller.setHostServices({
+      async searchFiles(context) {
+        if (context.query === "a") {
+          return await new Promise<readonly { filePath: string }[]>((resolve) => {
+            resolveA = resolve;
+          });
+        }
+
+        if (context.query === "ab") {
+          return await new Promise<readonly { filePath: string }[]>((resolve) => {
+            resolveAb = resolve;
+          });
+        }
+
+        return [{ filePath: "src/seed.ts" }];
+      }
+    });
+
+    await controller.handleKeyInput({ key: "?" });
+    await controller.handleKeyInput({ key: "f", text: "f" });
+    await flushAsyncWork();
+
+    const firstQuery = controller.handleKeyInput({ key: "a", text: "a" });
+    const secondQuery = controller.handleKeyInput({ key: "b", text: "b" });
+
+    resolveAb?.([{ filePath: "src/ab.ts" }]);
+    await secondQuery;
+    await flushAsyncWork();
+
+    resolveA?.([{ filePath: "src/a.ts" }]);
+    await firstQuery;
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.query).toBe("ab");
+    expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual(["src/ab.ts"]);
+  });
+
+  it("ignores stale modal preview responses after the selection changes", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    let resolveFirstPreview: ((value: { text: string }) => void) | null = null;
+    let resolveSecondPreview: ((value: { text: string }) => void) | null = null;
+
+    controller.setHostServices({
+      async searchFiles() {
+        return [{ filePath: "src/alpha.ts" }, { filePath: "src/beta.ts" }];
+      },
+      async readFile(context) {
+        if (context.filePath === "src/alpha.ts") {
+          return await new Promise<{ text: string }>((resolve) => {
+            resolveFirstPreview = resolve;
+          });
+        }
+
+        return await new Promise<{ text: string }>((resolve) => {
+          resolveSecondPreview = resolve;
+        });
+      }
+    });
+
+    await controller.handleKeyInput({ key: "?" });
+    await controller.handleKeyInput({ key: "f", text: "f" });
+    await flushAsyncWork();
+    await controller.handleKeyInput({ key: "ArrowDown" });
+
+    resolveSecondPreview?.({ text: "preview:beta" });
+    await flushAsyncWork();
+
+    resolveFirstPreview?.({ text: "preview:alpha" });
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.selectedIndex).toBe(1);
+    expect(controller.getPresentationState().ui.picker.previewTitle).toBe("src/beta.ts");
+    expect(controller.getPresentationState().ui.picker.previewContent).toBe("preview:beta");
+  });
+
+  it("does no preview or presentation work for picker moves that stay on the same item", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    const readFile = vi.fn(async (context: { filePath: string }) => ({ text: `preview:${context.filePath}` }));
+    let updateCount = 0;
+
+    controller.subscribe(() => {
+      updateCount += 1;
+    });
+    controller.setHostServices({
+      async searchFiles() {
+        return [{ filePath: "src/alpha.ts" }, { filePath: "src/beta.ts" }];
+      },
+      readFile
+    });
+
+    await controller.handleKeyInput({ key: "?" });
+    await controller.handleKeyInput({ key: "f", text: "f" });
+    await flushAsyncWork(8);
+
+    const updatesBeforeNoopMove = updateCount;
+    const readsBeforeNoopMove = readFile.mock.calls.length;
+
+    await controller.handleKeyInput({ key: "ArrowUp" });
+    await flushAsyncWork(8);
+
+    expect(controller.getPresentationState().ui.picker.selectedIndex).toBe(0);
+    expect(updateCount).toBe(updatesBeforeNoopMove);
+    expect(readFile).toHaveBeenCalledTimes(readsBeforeNoopMove);
+  });
+
   it("treats j and k as query text inside modal search pickers", async () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
 

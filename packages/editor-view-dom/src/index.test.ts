@@ -2269,6 +2269,54 @@ describe("createEditor", () => {
     expect(editor.controller.getBuffers().map((entry) => entry.filePath)).toEqual(["src/current.ts", "src/beta.ts"]);
   });
 
+  it("keeps newest modal search results when overlapping DOM queries resolve out of order", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    let resolveA: ((value: readonly { filePath: string }[]) => void) | null = null;
+    let resolveAb: ((value: readonly { filePath: string }[]) => void) | null = null;
+
+    const editor = createEditor(container, {
+      value: "current",
+      filePath: "src/current.ts",
+      host: {
+        async searchFiles(context) {
+          if (context.query === "a") {
+            return await new Promise<readonly { filePath: string }[]>((resolve) => {
+              resolveA = resolve;
+            });
+          }
+
+          if (context.query === "ab") {
+            return await new Promise<readonly { filePath: string }[]>((resolve) => {
+              resolveAb = resolve;
+            });
+          }
+
+          return [{ filePath: "src/seed.ts" }];
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true }));
+    await flushAsyncWork(8);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
+
+    resolveAb?.([{ filePath: "src/ab.ts" }]);
+    await flushAsyncWork(8);
+
+    resolveA?.([{ filePath: "src/a.ts" }]);
+    await flushAsyncWork(8);
+
+    expect(editor.controller.getPresentationState().ui.picker.query).toBe("ab");
+    expect(editor.controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual(["src/ab.ts"]);
+    expect(container.querySelector("[data-wx-editor-picker-modal='true']")?.textContent ?? "").toContain("src/ab.ts");
+    expect(container.querySelector("[data-wx-editor-picker-modal='true']")?.textContent ?? "").not.toContain("src/a.ts");
+  });
+
   it("stores jumps and navigates them with Ctrl-o/Ctrl-i", () => {
     const container = document.createElement("div");
     document.body.append(container);

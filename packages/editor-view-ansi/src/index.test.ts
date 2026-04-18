@@ -168,6 +168,24 @@ describe("@wx/editor-view-ansi", () => {
     });
   });
 
+  it("searches root-folder files through Node host helper without adding a slash prefix", async () => {
+    const cwd = await mkdtemp(resolve(tmpdir(), "wx-ansi-folder-root-"));
+    await mkdir(resolve(cwd, "src"), { recursive: true });
+    await writeFile(resolve(cwd, "package.json"), '{ "name": "wx-test" }\n');
+    await writeFile(resolve(cwd, "README.md"), "# readme\n");
+    await writeFile(resolve(cwd, "src", "main.ts"), "export const main = 1;\n");
+    const host = createNodeHostServices({ cwd });
+
+    const matches = await host.searchFiles?.({
+      scope: "folder",
+      filePath: "package.json",
+      query: ""
+    });
+
+    expect(matches?.map((entry) => entry.filePath)).toContain("README.md");
+    expect(matches?.map((entry) => entry.filePath)).toContain("src/main.ts");
+  });
+
   it("renders plain text rows with gutters, status, and bottom rows", () => {
     const { state, presentation } = createPresentation("alpha\nbeta");
 
@@ -725,6 +743,76 @@ describe("@wx/editor-view-ansi", () => {
 
     expect(controller.getPresentationState().ui.picker.query).toBe("jk");
     expect(controller.getPresentationState().ui.picker.selectedIndex).toBe(1);
+    terminal.destroy();
+  });
+
+  it("routes Shift+Tab through ANSI command completion cycling", async () => {
+    const sunriseTheme = {
+      name: "sunrise",
+      colors: {
+        background: "#20110f"
+      }
+    };
+    const tideTheme = {
+      name: "tide",
+      colors: {
+        background: "#042f3a"
+      }
+    };
+    const controller = createEditorController({ value: "alpha" });
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      cols: 80,
+      rows: 12,
+      write: vi.fn(),
+      enterAltScreen: false,
+      theme: sunriseTheme,
+      availableThemes: [sunriseTheme, tideTheme]
+    });
+
+    terminal.mount();
+    input.emit(":");
+    input.emit("t");
+    input.emit("\r");
+    await flushAsyncWork();
+
+    input.emit("\t");
+    await flushAsyncWork();
+    expect(controller.getPresentationState().ui.previewTheme).toBe("wx-daybreak");
+
+    input.emit("\u001b[Z");
+    await flushAsyncWork();
+    expect(controller.getPresentationState().ui.previewTheme).toBe("sunrise");
+
+    input.emit("\u001b[Z");
+    await flushAsyncWork();
+    expect(controller.getPresentationState().ui.previewTheme).toBe("tide");
+    terminal.destroy();
+  });
+
+  it("keeps explicit controller host services instead of replacing them with Node fallback", async () => {
+    const searchFiles = vi.fn(async () => [{ filePath: "src/explicit.ts" }]);
+    const controller = createEditorController({ value: "export const current = 1;\n", filePath: "src/current.ts" });
+    controller.setHostServices({ searchFiles });
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      cols: 80,
+      rows: 12,
+      write: vi.fn(),
+      enterAltScreen: false
+    });
+
+    terminal.mount();
+    input.emit("?");
+    input.emit("f");
+    await flushAsyncWork(64);
+
+    expect(searchFiles).toHaveBeenCalled();
+    expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual(["src/explicit.ts"]);
     terminal.destroy();
   });
 
