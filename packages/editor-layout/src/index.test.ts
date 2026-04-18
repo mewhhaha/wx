@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { collectSearchMatches, createEditorState, createSelection } from "@wx/editor-core";
 import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
-import { buildEditorLayout, buildFlashLabels, buildVisualRows } from "./index";
+import { buildEditorLayout, buildEditorWorkspaceLayout, buildFlashLabels, buildVisualRows } from "./index";
 
 describe("@wx/editor-layout boundaries", () => {
   it("keeps layout runtime modules on public package surfaces only", () => {
@@ -511,6 +511,41 @@ describe("buildEditorLayout", () => {
     expect(completionPanel?.anchor.col).toBeGreaterThanOrEqual(0);
     expect(completionText).toContain("alpha");
     expect(completionPanel?.rows[0]?.[0]?.token).toBe("picker-selected");
+  });
+
+  it("projects split workspace panes and divider lines", () => {
+    const left = createInput("alpha");
+    const right = createInput("beta");
+    const workspace = buildEditorWorkspaceLayout({
+      cols: 80,
+      rows: 24,
+      activePaneId: "pane-2",
+      layoutTree: {
+        kind: "split",
+        axis: "vertical",
+        ratio: 0.5,
+        first: { kind: "pane", paneId: "pane-1" },
+        second: { kind: "pane", paneId: "pane-2" }
+      },
+      panes: [
+        { paneId: "pane-1", active: false, state: left.state, presentation: left.presentation },
+        { paneId: "pane-2", active: true, state: right.state, presentation: right.presentation }
+      ],
+      indentGuides: left.indentGuides
+    });
+
+    expect(workspace.panes).toHaveLength(2);
+    expect(workspace.dividers).toEqual(expect.arrayContaining([expect.objectContaining({ axis: "vertical" })]));
+    expect(
+      workspace.panes
+        .find((pane) => pane.paneId === "pane-1")
+        ?.layout.document.rows[0]?.contentRuns.map((run) => run.text).join("")
+    ).toContain("alpha");
+    expect(
+      workspace.panes
+        .find((pane) => pane.paneId === "pane-2")
+        ?.layout.document.rows[0]?.contentRuns.map((run) => run.text).join("")
+    ).toContain("beta");
   });
 
   it("keeps the package free of DOM globals", () => {

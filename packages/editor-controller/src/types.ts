@@ -1,7 +1,9 @@
 import type {
   Command,
   CommandContext,
+  EditorBufferDocumentState,
   EditorState,
+  EditorViewState,
   InsertSession,
   SelectionSet,
   TextChange,
@@ -201,6 +203,21 @@ export interface EditorViewportPresentationState {
   wrapRevision: number;
 }
 
+export type EditorWorkspaceSplitAxis = "horizontal" | "vertical";
+
+export type EditorPaneTreeNode =
+  | {
+      kind: "pane";
+      paneId: string;
+    }
+  | {
+      kind: "split";
+      axis: EditorWorkspaceSplitAxis;
+      ratio: number;
+      first: EditorPaneTreeNode;
+      second: EditorPaneTreeNode;
+    };
+
 export interface EditorLanguagePresentationState {
   services: readonly EditorLanguageServices[];
   host: EditorHostServices | null;
@@ -256,6 +273,24 @@ export interface EditorPresentationState {
   registers: EditorRegisterState;
 }
 
+export interface EditorWorkspacePanePresentationState {
+  paneId: string;
+  bufferId: string;
+  active: boolean;
+  filePath: string;
+  buffer: EditorBufferDocumentState;
+  view: EditorViewState;
+  state: EditorState;
+  presentation: EditorPresentationState;
+}
+
+export interface EditorWorkspacePresentationState {
+  activePaneId: string;
+  activeBufferId: string;
+  layoutTree: EditorPaneTreeNode;
+  panes: readonly EditorWorkspacePanePresentationState[];
+}
+
 export interface EditorFileSearchResult {
   filePath: string;
   detail?: string;
@@ -309,6 +344,7 @@ export interface HistoryPlugin {
 export interface EditorController {
   getState(): EditorState;
   getPresentationState(): EditorPresentationState;
+  getWorkspacePresentationState(): EditorWorkspacePresentationState;
   dispatch(transaction: Transaction): void;
   replaceState(nextState: EditorState, transaction?: Transaction): void;
   execute(command: Command, context?: Omit<CommandContext, "history">): boolean;
@@ -327,6 +363,10 @@ export interface EditorController {
   getBuffers(): readonly EditorBufferState[];
   switchBuffer(bufferId: string): boolean;
   openBuffer(filePath: string): Promise<boolean>;
+  splitPane(axis: EditorWorkspaceSplitAxis): boolean;
+  closePane(): boolean;
+  focusPane(direction: "left" | "right" | "up" | "down"): boolean;
+  setActivePane(paneId: string): boolean;
   searchFiles(scope: "repo" | "folder", query?: string): Promise<readonly EditorFileSearchResult[]>;
   selectNextOccurrence(reverse?: boolean): boolean;
   selectAllOccurrences(): boolean;

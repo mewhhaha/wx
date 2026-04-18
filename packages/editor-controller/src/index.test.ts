@@ -288,8 +288,10 @@ describe("editor controller", () => {
       "f",
       "F",
       "b",
+      "B",
       "d",
       "j",
+      "p",
       "s",
       "S",
       "r",
@@ -953,6 +955,65 @@ describe("editor controller", () => {
     expect(controller.getState().doc.text).toBe("opened:src/beta.ts");
     expect(controller.getPresentationState().filePath).toBe("src/beta.ts");
     expect(controller.getBuffers().map((entry) => entry.filePath)).toEqual(["src/current.ts", "src/beta.ts"]);
+  });
+
+  it("splits panes on shared buffers and keeps edits synchronized", () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    expect(controller.splitPane("vertical")).toBe(true);
+
+    const workspace = controller.getWorkspacePresentationState();
+    expect(workspace.panes).toHaveLength(2);
+    expect(workspace.panes.every((pane) => pane.bufferId === workspace.activeBufferId)).toBe(true);
+
+    const inactivePane = workspace.panes.find((pane) => !pane.active)!;
+    controller.setActivePane(inactivePane.paneId);
+    controller.execute(enterInsertMode);
+    controller.execute(insertText("x"));
+    controller.execute(enterNormalMode);
+
+    const nextWorkspace = controller.getWorkspacePresentationState();
+    expect(nextWorkspace.panes.map((pane) => pane.state.doc.text)).toEqual(["xalpha", "xalpha"]);
+  });
+
+  it("switches buffers on the active pane only", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `opened:${filePath}` };
+      }
+    });
+
+    expect(controller.splitPane("horizontal")).toBe(true);
+    const originalActivePaneId = controller.getWorkspacePresentationState().activePaneId;
+
+    await controller.openBuffer("src/other.ts");
+
+    const workspace = controller.getWorkspacePresentationState();
+    const activePane = workspace.panes.find((pane) => pane.paneId === workspace.activePaneId)!;
+    const siblingPane = workspace.panes.find((pane) => pane.paneId !== workspace.activePaneId)!;
+
+    expect(workspace.activePaneId).toBe(originalActivePaneId);
+    expect(activePane.filePath).toBe("src/other.ts");
+    expect(activePane.state.doc.text).toBe("opened:src/other.ts");
+    expect(siblingPane.filePath).toBe("src/current.ts");
+    expect(siblingPane.state.doc.text).toBe("alpha");
+  });
+
+  it("focuses and closes panes through workspace APIs", () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    controller.splitPane("vertical");
+    const workspace = controller.getWorkspacePresentationState();
+    const originalActive = workspace.activePaneId;
+    const sibling = workspace.panes.find((pane) => pane.paneId !== originalActive)!;
+
+    expect(controller.focusPane("left")).toBe(true);
+    expect(controller.getWorkspacePresentationState().activePaneId).toBe(sibling.paneId);
+    expect(controller.closePane()).toBe(true);
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(1);
+    expect(controller.closePane()).toBe(false);
+    expect(controller.getPresentationState().ui.bottomMessage?.text).toBe("Cannot close the last pane");
   });
 
   it("keeps modal search results visible while a new query is loading", async () => {

@@ -142,6 +142,11 @@ export async function handlePendingActionKey(
       return { handled: true };
     }
 
+    if (input.key === "B") {
+      context.openBuffersPicker();
+      return { handled: true };
+    }
+
     if (input.key === "d") {
       context.openDiagnosticsPicker();
       return { handled: true };
@@ -149,6 +154,11 @@ export async function handlePendingActionKey(
 
     if (input.key === "j") {
       context.openJumpListPicker();
+      return { handled: true };
+    }
+
+    if (input.key === "p") {
+      context.openPanesPicker();
       return { handled: true };
     }
 

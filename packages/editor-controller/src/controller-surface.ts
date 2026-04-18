@@ -10,7 +10,8 @@ import type {
   EditorJumpEntry,
   EditorPresentationState,
   EditorSearchState,
-  EditorUpdateListener
+  EditorUpdateListener,
+  EditorWorkspacePresentationState
 } from "./types";
 
 interface CreateControllerSurfaceOptions {
@@ -92,20 +93,25 @@ interface CreateControllerSurfaceOptions {
     selectRegister(name: string | null): void;
     getSelectedRegister(): string | null;
   };
-  buffersRuntime: {
+  workspaceRuntime: {
+    getWorkspacePresentationState(state: EditorState, presentation: EditorPresentationState): EditorWorkspacePresentationState;
+    getBuffers(): readonly EditorBufferState[];
+    getBufferById(bufferId: string): { id: string; filePath: string; dirty: boolean } | null;
+    findBufferByFilePath(filePath: string): { id: string; filePath: string; dirty: boolean } | null;
     syncActiveFilePath(filePath: string): void;
     markActiveSaved(filePath?: string): void;
-    getBuffers(): readonly EditorBufferState[];
-    getBufferEntry(bufferId: string): { id: string; filePath: string; state: EditorState; dirty: boolean } | null;
-    findBufferByFilePath(filePath: string): { id: string; filePath: string; state: EditorState; dirty: boolean } | null;
-    addBuffer(filePath: string, state: EditorState, dirty?: boolean): {
+    storeBufferState(filePath: string, state: EditorState, dirty?: boolean): {
       id: string;
       filePath: string;
-      state: EditorState;
       dirty: boolean;
     };
-    activateBuffer(bufferId: string): boolean;
+    bindActivePaneToBuffer(bufferId: string): boolean;
     createStateForText(text: string, template: EditorState): EditorState;
+    splitActivePane(axis: "horizontal" | "vertical"): boolean;
+    closeActivePane(): { changed: boolean; nextActivePaneId: string | null };
+    focusPane(direction: "left" | "right" | "up" | "down"): string | null;
+    setActivePane(paneId: string): boolean;
+    loadActivePaneInto(state: EditorState, presentation: EditorPresentationState): EditorState;
   };
   keyRuntime: {
     handleKeyInput: EditorController["handleKeyInput"];
@@ -124,39 +130,44 @@ interface CreateControllerSurfaceOptions {
 
 export function createControllerSurface(options: CreateControllerSurfaceOptions): EditorController {
   const presentation = options.getPresentation();
-  const loadBufferState = (nextState: EditorState, filePath: string, effectType: string) => {
+  const loadActivePaneState = (
+    effectType: string,
+    runtimeOptions: { clearHistory?: boolean; resetLanguage?: boolean } = {}
+  ) => {
     const prevState = options.getState();
-    options.setState({
-      ...nextState,
-      revision: prevState.revision + 1
-    });
-    presentation.filePath = filePath;
-    options.buffersRuntime.syncActiveFilePath(filePath);
-    options.history?.clear?.();
+    const nextState = options.workspaceRuntime.loadActivePaneInto(prevState, presentation);
+    options.setState(nextState);
+    if (runtimeOptions.clearHistory) {
+      options.history?.clear?.();
+    }
     options.refreshSearchMatchCache(options.getState());
-    options.languageRuntime.resetRequestTracking();
-    options.languageRuntime.clearLanguageState();
+    if (runtimeOptions.resetLanguage) {
+      options.languageRuntime.resetRequestTracking();
+      options.languageRuntime.clearLanguageState();
+    }
     options.viewportModelRuntime.rebuildViewportModel();
     options.languageRuntime.syncVisibleLanguageDecorations();
     options.lifecycleRuntime.notify(prevState, options.getState(), { effects: [{ type: effectType }] }, { recordHistory: false });
-    void options.languageRuntime.syncLanguage({
-      forceDocumentSync: true,
-      refreshHighlights: true,
-      refreshDiagnostics: true,
-      refreshLineChanges: true
-    });
+    if (runtimeOptions.resetLanguage) {
+      void options.languageRuntime.syncLanguage({
+        forceDocumentSync: true,
+        refreshHighlights: true,
+        refreshDiagnostics: true,
+        refreshLineChanges: true
+      });
+    }
   };
   const switchBuffer = (bufferId: string) => {
-    const entry = options.buffersRuntime.getBufferEntry(bufferId);
+    const entry = options.workspaceRuntime.getBufferById(bufferId);
     if (!entry) {
       return false;
     }
 
-    if (!options.buffersRuntime.activateBuffer(bufferId)) {
+    if (!options.workspaceRuntime.bindActivePaneToBuffer(bufferId)) {
       return false;
     }
 
-    loadBufferState(entry.state, entry.filePath, "buffer.switch");
+    loadActivePaneState("buffer.switch", { clearHistory: true, resetLanguage: true });
     return true;
   };
 
@@ -166,6 +177,9 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     },
     getPresentationState() {
       return presentation;
+    },
+    getWorkspacePresentationState() {
+      return options.workspaceRuntime.getWorkspacePresentationState(options.getState(), presentation);
     },
     ...options.compatibilityApi,
     dispatch(transaction) {
@@ -231,13 +245,13 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       return options.registersJumpsRuntime.getSelectedRegister();
     },
     getBuffers() {
-      return options.buffersRuntime.getBuffers();
+      return options.workspaceRuntime.getBuffers();
     },
     switchBuffer(bufferId) {
       return switchBuffer(bufferId);
     },
     async openBuffer(filePath) {
-      const existing = options.buffersRuntime.findBufferByFilePath(filePath);
+      const existing = options.workspaceRuntime.findBufferByFilePath(filePath);
       if (existing) {
         return switchBuffer(existing.id);
       }
@@ -257,11 +271,46 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       }
 
       const text = typeof payload === "string" ? payload : payload.text;
-      const entry = options.buffersRuntime.addBuffer(
+      const entry = options.workspaceRuntime.storeBufferState(
         filePath,
-        options.buffersRuntime.createStateForText(text, options.getState())
+        options.workspaceRuntime.createStateForText(text, options.getState())
       );
       return switchBuffer(entry.id);
+    },
+    splitPane(axis) {
+      if (!options.workspaceRuntime.splitActivePane(axis)) {
+        return false;
+      }
+
+      loadActivePaneState(`pane.split.${axis}`, { clearHistory: false, resetLanguage: false });
+      return true;
+    },
+    closePane() {
+      const result = options.workspaceRuntime.closeActivePane();
+      if (!result.changed) {
+        options.sessionRuntime.setBottomMessage({ tone: "warning", text: "Cannot close the last pane" });
+        return false;
+      }
+
+      loadActivePaneState("pane.close", { clearHistory: false, resetLanguage: false });
+      return true;
+    },
+    focusPane(direction) {
+      const paneId = options.workspaceRuntime.focusPane(direction);
+      if (!paneId || !options.workspaceRuntime.setActivePane(paneId)) {
+        return false;
+      }
+
+      loadActivePaneState("pane.focus", { clearHistory: false, resetLanguage: false });
+      return true;
+    },
+    setActivePane(paneId) {
+      if (!options.workspaceRuntime.setActivePane(paneId)) {
+        return false;
+      }
+
+      loadActivePaneState("pane.active", { clearHistory: false, resetLanguage: false });
+      return true;
     },
     async searchFiles(scope, query = "") {
       const searchFiles = presentation.language.host?.searchFiles;
@@ -369,7 +418,7 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       }
 
       presentation.filePath = filePath;
-      options.buffersRuntime.syncActiveFilePath(filePath);
+      options.workspaceRuntime.syncActiveFilePath(filePath);
       options.lifecycleRuntime.emitPresentationUpdate("presentation.file-path");
       void options.languageRuntime.syncLanguage({
         refreshHighlights: false,
@@ -469,7 +518,7 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     saveDocument(targetPath = presentation.filePath) {
       return options.languageRuntime.saveDocument(targetPath).then((saved) => {
         if (saved) {
-          options.buffersRuntime.markActiveSaved(targetPath);
+          options.workspaceRuntime.markActiveSaved(targetPath);
         }
         return saved;
       });

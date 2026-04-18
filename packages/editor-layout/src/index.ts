@@ -322,6 +322,71 @@ export interface EditorLayoutInput {
   };
 }
 
+export type EditorWorkspaceLayoutTreeNode =
+  | {
+      kind: "pane";
+      paneId: string;
+    }
+  | {
+      kind: "split";
+      axis: "horizontal" | "vertical";
+      ratio: number;
+      first: EditorWorkspaceLayoutTreeNode;
+      second: EditorWorkspaceLayoutTreeNode;
+    };
+
+export interface EditorWorkspaceLayoutPaneInput {
+  paneId: string;
+  active: boolean;
+  state: EditorState;
+  presentation: EditorLayoutPresentationState & {
+    language: EditorLayoutPresentationState["language"] & {
+      highlightCache?: ReadonlyMap<number, readonly HighlightSpan[]>;
+    };
+    search: EditorLayoutPresentationState["search"] & {
+      matches?: readonly { from: number; to: number }[];
+    };
+  };
+  hoverAnchor?: {
+    col: number;
+    row: number;
+  };
+}
+
+export interface EditorWorkspaceLayoutInput {
+  cols: number;
+  rows: number;
+  activePaneId: string;
+  layoutTree: EditorWorkspaceLayoutTreeNode;
+  panes: readonly EditorWorkspaceLayoutPaneInput[];
+  indentGuides: EditorLayoutInput["indentGuides"];
+}
+
+export interface EditorWorkspaceDivider {
+  axis: "horizontal" | "vertical";
+  col: number;
+  row: number;
+  length: number;
+}
+
+export interface EditorWorkspaceLayoutPane {
+  paneId: string;
+  active: boolean;
+  rect: {
+    col: number;
+    row: number;
+    cols: number;
+    rows: number;
+  };
+  layout: EditorLayoutModel;
+}
+
+export interface EditorWorkspaceLayoutModel {
+  activePaneId: string;
+  panes: readonly EditorWorkspaceLayoutPane[];
+  dividers: readonly EditorWorkspaceDivider[];
+}
+
 interface EditorLayoutRowBuildContext {
   activeOffset: number;
   activeRow: ReturnType<typeof getVisualRowForOffset>;
@@ -1499,5 +1564,181 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
       runs: bottomRuns
     },
     panels
+  };
+}
+
+function collectWorkspaceRects(
+  node: EditorWorkspaceLayoutTreeNode,
+  col: number,
+  row: number,
+  cols: number,
+  rows: number,
+  rects: Array<{ paneId: string; col: number; row: number; cols: number; rows: number }>,
+  dividers: EditorWorkspaceDivider[]
+): void {
+  if (node.kind === "pane") {
+    rects.push({ paneId: node.paneId, col, row, cols, rows });
+    return;
+  }
+
+  if (node.axis === "vertical") {
+    const firstCols = Math.max(1, Math.round(cols * node.ratio));
+    const dividerCol = col + Math.max(0, Math.min(cols - 1, firstCols));
+    const secondCols = Math.max(1, cols - firstCols - 1);
+    collectWorkspaceRects(node.first, col, row, firstCols, rows, rects, dividers);
+    dividers.push({ axis: "vertical", col: dividerCol, row, length: rows });
+    collectWorkspaceRects(node.second, dividerCol + 1, row, secondCols, rows, rects, dividers);
+    return;
+  }
+
+  const firstRows = Math.max(1, Math.round(rows * node.ratio));
+  const dividerRow = row + Math.max(0, Math.min(rows - 1, firstRows));
+  const secondRows = Math.max(1, rows - firstRows - 1);
+  collectWorkspaceRects(node.first, col, row, cols, firstRows, rects, dividers);
+  dividers.push({ axis: "horizontal", col, row: dividerRow, length: cols });
+  collectWorkspaceRects(node.second, col, dividerRow + 1, cols, secondRows, rects, dividers);
+}
+
+function clipVisibleHighlightsByViewport(
+  viewport: { fromLine: number; toLine: number },
+  presentation: EditorWorkspaceLayoutPaneInput["presentation"]
+): Map<number, HighlightSpan[]> {
+  const source = presentation.language.highlightCache ?? presentation.language.visibleHighlightsByLine;
+  const next = new Map<number, HighlightSpan[]>();
+
+  for (let line = viewport.fromLine; line <= viewport.toLine; line += 1) {
+    const spans = source.get(line);
+    if (spans?.length) {
+      next.set(line, spans.map((span) => ({ ...span })));
+    }
+  }
+
+  return next;
+}
+
+function clipVisibleMatchesByViewport(
+  state: EditorState,
+  viewport: { fromLine: number; toLine: number },
+  presentation: EditorWorkspaceLayoutPaneInput["presentation"]
+): Map<number, { from: number; to: number }[]> {
+  const matches = presentation.search.matches ?? [];
+  const next = new Map<number, { from: number; to: number }[]>();
+
+  for (const match of matches) {
+    const startLine = state.doc.positionAt(match.from).line;
+    const endLine = state.doc.positionAt(Math.max(match.from, match.to - 1)).line;
+
+    if (endLine < viewport.fromLine || startLine > viewport.toLine) {
+      continue;
+    }
+
+    for (let line = Math.max(viewport.fromLine, startLine); line <= Math.min(viewport.toLine, endLine); line += 1) {
+      const entry = next.get(line);
+      if (entry) {
+        entry.push({ ...match });
+      } else {
+        next.set(line, [{ ...match }]);
+      }
+    }
+  }
+
+  return next;
+}
+
+export function buildEditorWorkspaceLayout(input: EditorWorkspaceLayoutInput): EditorWorkspaceLayoutModel {
+  const paneLookup = new Map(input.panes.map((pane) => [pane.paneId, pane]));
+  const rects: Array<{ paneId: string; col: number; row: number; cols: number; rows: number }> = [];
+  const dividers: EditorWorkspaceDivider[] = [];
+  collectWorkspaceRects(
+    input.layoutTree,
+    0,
+    0,
+    Math.max(1, input.cols),
+    Math.max(1, input.rows),
+    rects,
+    dividers
+  );
+  const paneLayouts = new Map<string, EditorLayoutModel>();
+
+  for (const pane of input.panes) {
+    const rect = rects.find((entry) => entry.paneId === pane.paneId) ?? {
+      paneId: pane.paneId,
+      col: 0,
+      row: 0,
+      cols: input.cols,
+      rows: input.rows
+    };
+    const lineDigits = Math.max(2, String(Math.max(1, pane.state.doc.lineCount)).length);
+    const visibleRowCapacity = Math.max(1, rect.rows - 2);
+    const wrapColumns = pane.presentation.viewport.softWrap
+      ? Math.max(1, rect.cols - (lineDigits + 4))
+      : pane.presentation.viewport.wrapColumns;
+    const { visualRows, lineVisualRanges } = buildVisualRows({
+      state: pane.state,
+      viewport: {
+        cols: wrapColumns,
+        rows: visibleRowCapacity,
+        topVisualRow: pane.presentation.viewport.topVisualRow
+      },
+      softWrap: pane.presentation.viewport.softWrap
+    });
+    const visibleVisualRows = visualRows.slice(
+      pane.presentation.viewport.topVisualRow,
+      pane.presentation.viewport.topVisualRow + visibleRowCapacity
+    );
+    const visibleRange = {
+      fromLine: visibleVisualRows[0]?.docLine ?? 0,
+      toLine: visibleVisualRows[visibleVisualRows.length - 1]?.docLine ?? Math.max(0, pane.state.doc.lineCount - 1)
+    };
+
+    paneLayouts.set(
+      pane.paneId,
+      buildEditorLayout({
+        state: pane.state,
+        presentation: {
+          ...pane.presentation,
+          viewport: {
+            ...pane.presentation.viewport,
+            visibleRowCapacity,
+            wrapColumns,
+            visualRows,
+            visibleVisualRows,
+            lineVisualRanges
+          },
+          language: {
+            ...pane.presentation.language,
+            visibleHighlightsByLine: clipVisibleHighlightsByViewport(visibleRange, pane.presentation)
+          },
+          search: {
+            ...pane.presentation.search,
+            visibleMatchesByLine: clipVisibleMatchesByViewport(pane.state, visibleRange, pane.presentation)
+          }
+        },
+        hoverAnchor: pane.hoverAnchor ?? { col: 0, row: 0 },
+        indentGuides: input.indentGuides
+      })
+    );
+  }
+
+  const panes: EditorWorkspaceLayoutPane[] = [];
+  for (const rect of rects) {
+    const pane = paneLookup.get(rect.paneId);
+    const layout = paneLayouts.get(rect.paneId);
+    if (!pane || !layout) {
+      continue;
+    }
+
+    panes.push({
+      paneId: rect.paneId,
+      active: pane.active,
+      rect,
+      layout
+    });
+  }
+
+  return {
+    activePaneId: input.activePaneId,
+    panes,
+    dividers
   };
 }

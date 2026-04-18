@@ -151,6 +151,17 @@ describe("createEditor", () => {
     expect(container.querySelector('[data-wx-editor-gutter="1"] .wx-editor__gutter-number')?.getAttribute("data-active")).toBe("true");
   });
 
+  it("renders split workspace panes from controller workspace state", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "alpha" });
+    editor.controller.splitPane("vertical");
+
+    expect(container.querySelectorAll(".wx-editor__workspace-pane")).toHaveLength(2);
+    expect(container.querySelector(".wx-editor__workspace-pane[data-active='true']")).not.toBeNull();
+  });
+
   it("moves the cursor with hjkl and arrow keys", () => {
     const container = document.createElement("div");
     document.body.append(container);

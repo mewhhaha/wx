@@ -402,6 +402,48 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
         return { handled: true };
       }
 
+      if (value === "vsplit") {
+        controller.splitPane("vertical");
+        return { handled: true };
+      }
+
+      if (value === "hsplit") {
+        controller.splitPane("horizontal");
+        return { handled: true };
+      }
+
+      if (value === "close") {
+        controller.closePane();
+        return { handled: true };
+      }
+
+      if (value === "only") {
+        const workspace = controller.getWorkspacePresentationState();
+        for (const pane of workspace.panes) {
+          if (!pane.active) {
+            controller.setActivePane(pane.paneId);
+            controller.closePane();
+          }
+        }
+        controller.setActivePane(workspace.activePaneId);
+        return { handled: true };
+      }
+
+      if (value === "buffer-next" || value === "buffer-prev") {
+        const buffers = controller.getBuffers();
+        const workspace = controller.getWorkspacePresentationState();
+        const currentIndex = buffers.findIndex((entry) => entry.id === workspace.activeBufferId);
+        if (buffers.length === 0 || currentIndex < 0) {
+          context.setBottomMessage({ tone: "warning", text: "No buffers available" });
+          return { handled: true };
+        }
+
+        const delta = value === "buffer-next" ? 1 : -1;
+        const nextIndex = (currentIndex + delta + buffers.length) % buffers.length;
+        controller.switchBuffer(buffers[nextIndex]!.id);
+        return { handled: true };
+      }
+
       if (value === "goto") {
         if (!commandArgument) {
           context.setBottomMessage({ tone: "warning", text: "Goto target required" });

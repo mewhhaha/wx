@@ -75,6 +75,7 @@ export interface KeyRuntimeContext {
   openDiagnosticsPicker(): boolean;
   openJumpListPicker(): boolean;
   openBuffersPicker(): boolean;
+  openPanesPicker(): boolean;
   openFileSearchPicker(scope: "repo" | "folder"): Promise<boolean>;
   updatePickerQuery(query: string): Promise<boolean>;
   loadCodeActions(): Promise<boolean>;

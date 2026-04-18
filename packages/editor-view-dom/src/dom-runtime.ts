@@ -1,6 +1,8 @@
 import {
   buildEditorLayout,
-  type EditorLayoutModel
+  buildEditorWorkspaceLayout,
+  type EditorLayoutModel,
+  type EditorLayoutRun
 } from "@wx/editor-layout";
 import type { EditorState } from "@wx/editor-core";
 import type {
@@ -30,6 +32,58 @@ import {
   VERTICAL_SCROLLOFF_ROWS,
   viewportEquals
 } from "./dom-viewport";
+
+function runClassNames(run: EditorLayoutRun): string[] {
+  const classes: string[] = [];
+
+  if (
+    run.token === "text" ||
+    run.token === "comment" ||
+    run.token === "function" ||
+    run.token === "gutter" ||
+    run.token === "keyword" ||
+    run.token === "number" ||
+    run.token === "operator" ||
+    run.token === "punctuation" ||
+    run.token === "string" ||
+    run.token === "type"
+  ) {
+    classes.push(`wx-role-${run.token}`);
+  }
+
+  if (run.token.startsWith("diagnostic-")) {
+    classes.push(`wx-${run.token}`);
+  }
+
+  if (run.token === "status-mode") {
+    classes.push("wx-editor__status-mode-chip");
+  }
+
+  if (run.token === "picker-selected") {
+    classes.push("wx-editor__picker-item--selected");
+  }
+
+  if (run.cursorBlock) {
+    classes.push("wx-cursor-block", "wx-is-selected");
+  }
+
+  return classes;
+}
+
+function appendRuns(target: HTMLElement, runs: readonly EditorLayoutRun[]): void {
+  for (const run of runs) {
+    const span = document.createElement("span");
+    span.textContent = run.text;
+    const classes = runClassNames(run);
+    if (classes.length > 0) {
+      span.className = classes.join(" ");
+    }
+    if (run.part === "status-mode") {
+      span.dataset.mode = run.text.trim();
+    }
+    target.append(span);
+  }
+}
 
 export interface DomEditorContext {
   controller: EditorController;
@@ -349,6 +403,16 @@ export function createDomEditorRuntime(context: DomEditorContext): DomEditorRunt
       syncRenderedThemeFromPresentation(true);
     }
 
+    if (context.controller.getWorkspacePresentationState().panes.length > 1) {
+      renderWorkspaceSnapshot();
+      return;
+    }
+
+    context.statusMode.hidden = false;
+    context.statusFile.hidden = false;
+    context.statusMeta.hidden = false;
+    context.bottomRow.hidden = false;
+
     if (options.forceRows) {
       renderVisibleRows(true);
     }
@@ -383,6 +447,111 @@ export function createDomEditorRuntime(context: DomEditorContext): DomEditorRunt
     return true;
   };
 
+  const renderWorkspaceSnapshot = () => {
+    const workspace = context.controller.getWorkspacePresentationState();
+    const metrics = context.metrics;
+    const cols = Math.max(1, Math.floor(context.surface.clientWidth / Math.max(metrics.charWidth, 1)));
+    const rows = Math.max(3, Math.floor(context.surface.clientHeight / Math.max(metrics.lineHeight, 1)));
+    const workspaceLayout = buildEditorWorkspaceLayout({
+      cols,
+      rows,
+      activePaneId: workspace.activePaneId,
+      layoutTree: workspace.layoutTree,
+      panes: workspace.panes.map((pane) => ({
+        paneId: pane.paneId,
+        active: pane.active,
+        state: pane.state,
+        presentation: pane.presentation,
+        hoverAnchor: pane.active
+          ? {
+              col: Math.max(0, Math.floor(context.hoverAnchor.left / Math.max(metrics.charWidth, 1))),
+              row: Math.max(0, Math.floor(context.hoverAnchor.top / Math.max(metrics.lineHeight, 1)))
+            }
+          : { col: 0, row: 0 }
+      })),
+      indentGuides: context.indentGuides
+    });
+
+    const fragment = document.createDocumentFragment();
+    context.viewportRows.replaceChildren();
+    context.rowViews = [];
+    context.renderedViewport = { fromLine: 0, toLine: -1 };
+
+    for (const divider of workspaceLayout.dividers) {
+      const line = document.createElement("div");
+      line.className = `wx-editor__pane-divider wx-editor__pane-divider--${divider.axis}`;
+      line.style.position = "absolute";
+      if (divider.axis === "vertical") {
+        line.style.left = `${divider.col * metrics.charWidth}px`;
+        line.style.top = `${divider.row * metrics.lineHeight}px`;
+        line.style.width = `${Math.max(1, metrics.charWidth)}px`;
+        line.style.height = `${divider.length * metrics.lineHeight}px`;
+      } else {
+        line.style.left = `${divider.col * metrics.charWidth}px`;
+        line.style.top = `${divider.row * metrics.lineHeight}px`;
+        line.style.width = `${divider.length * metrics.charWidth}px`;
+        line.style.height = `${Math.max(1, metrics.lineHeight)}px`;
+      }
+      fragment.append(line);
+    }
+
+    for (const pane of workspaceLayout.panes) {
+      const paneHost = document.createElement("div");
+      paneHost.className = "wx-editor__workspace-pane";
+      if (pane.active) {
+        paneHost.dataset.active = "true";
+      }
+      paneHost.style.position = "absolute";
+      paneHost.style.left = `${pane.rect.col * metrics.charWidth}px`;
+      paneHost.style.top = `${pane.rect.row * metrics.lineHeight}px`;
+      paneHost.style.width = `${pane.rect.cols * metrics.charWidth}px`;
+      paneHost.style.height = `${pane.rect.rows * metrics.lineHeight}px`;
+      paneHost.addEventListener("mousedown", () => {
+        context.controller.setActivePane(pane.paneId);
+        const textarea = context.root.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement | null;
+        textarea?.focus();
+      });
+
+      const body = document.createElement("div");
+      body.className = "wx-editor__workspace-pane-body";
+      const status = document.createElement("div");
+      status.className = "wx-editor__workspace-pane-status";
+      const bottom = document.createElement("div");
+      bottom.className = "wx-editor__workspace-pane-bottom";
+
+      for (const row of pane.layout.document.rows) {
+        const rowHost = document.createElement("div");
+        rowHost.className = "wx-editor__row";
+        rowHost.dataset.wxEditorRow = String(row.docLine + 1);
+        const gutter = document.createElement("div");
+        gutter.className = "wx-editor__gutter";
+        const content = document.createElement("div");
+        content.className = "wx-editor__content";
+        appendRuns(gutter, row.gutterRuns);
+        appendRuns(content, row.contentRuns);
+        rowHost.append(gutter, content);
+        body.append(rowHost);
+      }
+
+      appendRuns(status, pane.layout.statusBar);
+      appendRuns(bottom, pane.layout.bottomBar.runs);
+      paneHost.append(body, status, bottom);
+      fragment.append(paneHost);
+
+      if (pane.active) {
+        context.currentLayoutModel = pane.layout;
+      }
+    }
+
+    context.viewportRows.replaceChildren(fragment);
+    context.statusMode.hidden = true;
+    context.statusFile.hidden = true;
+    context.statusMeta.hidden = true;
+    context.bottomRow.hidden = true;
+    patchCommandPopover();
+    patchTooltip();
+  };
+
   const handleControllerUpdate = (update: EditorUpdate) => {
     const previousState = update.prevState;
     const nextState = update.nextState;
@@ -402,6 +571,11 @@ export function createDomEditorRuntime(context: DomEditorContext): DomEditorRunt
 
     context.state = nextState;
     syncPresentationMirrors();
+    if (context.controller.getWorkspacePresentationState().panes.length > 1) {
+      syncRenderedThemeFromPresentation();
+      renderWorkspaceSnapshot();
+      return;
+    }
     const viewportChanged = !viewportEquals(previousVisibleViewport, getVisibleViewport());
     const work = computeRenderWork({
       hasDocumentChanges,
@@ -467,7 +641,11 @@ export function createDomEditorRuntime(context: DomEditorContext): DomEditorRunt
       refreshGutterWidth(true);
       refreshViewportMetricsIfNeeded(true);
       revealCursor();
-      renderVisibleRows(true);
+      if (context.controller.getWorkspacePresentationState().panes.length > 1) {
+        renderWorkspaceSnapshot();
+      } else {
+        renderVisibleRows(true);
+      }
     });
   };
 

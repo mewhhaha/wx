@@ -738,6 +738,54 @@ const EDITOR_STYLE_TEXT = `
     grid-column: 1 / 4;
     align-items: center;
   }
+
+  .wx-editor__workspace-pane {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--wx-color-background);
+    border: 1px solid color-mix(in srgb, var(--wx-color-gutter) 45%, transparent);
+  }
+
+  .wx-editor__workspace-pane[data-active="true"] {
+    border-color: var(--wx-color-cursor);
+  }
+
+  .wx-editor__workspace-pane-body {
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .wx-editor__workspace-pane-status,
+  .wx-editor__workspace-pane-bottom {
+    display: flex;
+    align-items: center;
+    min-height: var(--wx-line-height, 24px);
+    overflow: hidden;
+    white-space: pre;
+  }
+
+  .wx-editor__workspace-pane-status {
+    background: var(--wx-color-current-line);
+  }
+
+  .wx-editor__workspace-pane-bottom {
+    background: color-mix(in srgb, var(--wx-color-background) 92%, black);
+  }
+
+  .wx-editor__pane-divider {
+    position: absolute;
+    background: color-mix(in srgb, var(--wx-color-gutter) 50%, transparent);
+    pointer-events: none;
+  }
+
+  .wx-editor__pane-divider--vertical {
+    width: 1px;
+  }
+
+  .wx-editor__pane-divider--horizontal {
+    height: 1px;
+  }
 `;
 
 export function mountStyles(styleHost: HTMLElement): void {

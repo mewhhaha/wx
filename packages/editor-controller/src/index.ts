@@ -2,7 +2,6 @@ import { createEditorState, type EditorState } from "@wx/editor-core";
 
 import { createCommandRuntime, type CommandRuntime } from "./command-runtime";
 import { createCommandsRuntime, type CommandsRuntime } from "./commands";
-import { createBuffersRuntime } from "./buffers";
 import { createCompatibilityApi } from "./compat";
 import { createControllerContextRuntime } from "./controller-context";
 import { createControllerLifecycleRuntime } from "./controller-lifecycle";
@@ -20,6 +19,7 @@ import { createSessionRuntime, createJumpEntry, normalizeRegisterName } from "./
 import { syncVisibleViewportRows as syncVisibleViewportRowsInPresentation } from "./viewport";
 import { createViewportModelRuntime } from "./viewport-model";
 import { createViewportRuntime, type ViewportRuntime } from "./viewport-runtime";
+import { createWorkspaceRuntime } from "./workspace";
 import type {
   CreateEditorControllerOptions,
   EditorBottomMessageState,
@@ -67,6 +67,9 @@ export type {
   EditorRepeatableMotion,
   EditorSearchPresentationState,
   EditorSearchState,
+  EditorWorkspacePanePresentationState,
+  EditorWorkspacePresentationState,
+  EditorWorkspaceSplitAxis,
   EditorUiPresentationState,
   EditorUpdate,
   EditorUpdateListener,
@@ -105,9 +108,9 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let searchRuntime!: ReturnType<typeof createControllerSearchRuntime>;
   let sessionRuntime!: ReturnType<typeof createSessionRuntime>;
   let registersJumpsRuntime!: ReturnType<typeof createRegistersJumpsRuntime>;
-  const buffersRuntime = createBuffersRuntime({
-    initialState: state,
-    initialFilePath: presentation.filePath
+  const workspaceRuntime = createWorkspaceRuntime({
+    state,
+    presentation
   });
   let viewportModelRuntime!: ReturnType<typeof createViewportModelRuntime>;
   let viewportRuntime!: ViewportRuntime;
@@ -159,12 +162,12 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     pushJump: () => registersJumpsRuntime.pushJumpEntry(createJumpEntry(state)),
     openBuffer: async (filePath) => controller.openBuffer(filePath),
     findBufferState(filePath) {
-      return buffersRuntime.findBufferByFilePath(filePath)?.state ?? null;
+      return workspaceRuntime.getBufferState(filePath);
     },
     storeBufferState(filePath, nextState, dirty) {
-      buffersRuntime.addBuffer(filePath, nextState, dirty);
+      workspaceRuntime.storeBufferState(filePath, nextState, dirty);
     },
-    createStateForText: buffersRuntime.createStateForText,
+    createStateForText: workspaceRuntime.createStateForText,
     openActionPicker(options) {
       return pickerRuntime.openActionPicker(options);
     },
@@ -234,7 +237,9 @@ export function createEditorController(options: CreateEditorControllerOptions = 
           }
         }
       }
-      buffersRuntime.syncActiveState(nextState, { docChanged: nextState.doc.text !== prevState.doc.text });
+      workspaceRuntime.syncFromActiveState(nextState, presentation, {
+        docChanged: nextState.doc.text !== prevState.doc.text
+      });
     }
   });
 
@@ -290,7 +295,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getState: () => state,
     getPresentation: () => presentation,
     getController: () => controller,
-    getBuffers: () => buffersRuntime.getBuffers(),
+    getBuffers: () => workspaceRuntime.getBuffers(),
     setBottomMessage: sessionRuntime.setBottomMessage,
     emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
     jumpToSelection(from, to) {
@@ -391,6 +396,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     openDiagnosticsPicker: pickerRuntime.openDiagnosticsPicker,
     openJumpListPicker: pickerRuntime.openJumpListPicker,
     openBuffersPicker: pickerRuntime.openBuffersPicker,
+    openPanesPicker: pickerRuntime.openPanesPicker,
     openFileSearchPicker: pickerRuntime.openFileSearchPicker,
     updatePickerQuery: pickerRuntime.updatePickerQuery,
     loadCodeActions: pickerRuntime.loadCodeActions,
@@ -419,11 +425,17 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     languageRuntime,
     sessionRuntime,
     registersJumpsRuntime,
-    buffersRuntime,
+    workspaceRuntime,
     keyRuntime,
     multiSelectionRuntime,
     getActiveOffset: contextRuntime.getActiveOffset,
     createJumpEntry: () => createJumpEntry(state)
+  });
+
+  listeners.add((update) => {
+    if (update.docChanged && update.transaction.changes?.length) {
+      workspaceRuntime.applyBufferChangesToSiblingPanes(update.transaction.changes);
+    }
   });
 
   return controller;

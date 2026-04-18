@@ -5,7 +5,7 @@ import {
 } from "@wx/editor-language";
 import { defaultTheme, normalizeCommandThemes, type ThemeSpec } from "@wx/editor-theme";
 
-import { renderEditorAnsiFrame } from "./frame";
+import { renderEditorAnsiFrame, renderEditorAnsiWorkspaceFrame } from "./frame";
 import { createNodeHostServices } from "./node-host";
 import type {
   AnsiEditorMirror,
@@ -212,14 +212,22 @@ export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): 
     }
 
     write(
-      renderEditorAnsiFrame({
-        state: controller.getState(),
-        presentation: controller.getPresentationState(),
-        theme,
-        cols,
-        rows,
-        indentGuides
-      })
+      controller.getWorkspacePresentationState().panes.length > 1
+        ? renderEditorAnsiWorkspaceFrame({
+            workspace: controller.getWorkspacePresentationState(),
+            theme,
+            cols,
+            rows,
+            indentGuides
+          })
+        : renderEditorAnsiFrame({
+            state: controller.getState(),
+            presentation: controller.getPresentationState(),
+            theme,
+            cols,
+            rows,
+            indentGuides
+          })
     );
   };
 

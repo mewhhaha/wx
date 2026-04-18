@@ -19,6 +19,7 @@ import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundar
 
 import { createAnsiEditorMirror, createNodeHostServices, parseAnsiInput, renderEditorAnsiFrame } from "./index";
 import { createAnsiEditorTerminal } from "./index";
+import { renderEditorAnsiWorkspaceFrame } from "./frame";
 
 function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
@@ -201,6 +202,22 @@ describe("@wx/editor-view-ansi", () => {
     expect(frame).toContain("1  ");
     expect(frame).toContain("alpha");
     expect(frame).toContain("examples/test");
+  });
+
+  it("renders split workspace panes with divider lines", () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.splitPane("vertical");
+
+    const frame = stripAnsi(
+      renderEditorAnsiWorkspaceFrame({
+        workspace: controller.getWorkspacePresentationState(),
+        cols: 80,
+        rows: 12
+      })
+    );
+
+    expect(frame).toContain("alpha");
+    expect(frame).toContain("│");
   });
 
   it("renders insert mode with a real beam cursor without replacing text", () => {

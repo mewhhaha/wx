@@ -46,6 +46,7 @@ export interface PickerRuntime {
   openDiagnosticsPicker(): boolean;
   openJumpListPicker(): boolean;
   openBuffersPicker(): boolean;
+  openPanesPicker(): boolean;
   openActionPicker(options: {
     title: string;
     items: readonly PickerActionItem[];
@@ -377,6 +378,38 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     return true;
   };
 
+  const openPanesPicker = () => {
+    invalidateAsyncPickerRequests();
+    const workspace = context.getController().getWorkspacePresentationState();
+    const items = workspace.panes.map((pane) => ({
+      label: pane.filePath,
+      detail: pane.active ? "active pane" : pane.bufferId,
+      preview: () => ({
+        title: pane.filePath,
+        content: pane.state.doc.text
+      }),
+      run: () => {
+        context.getController().setActivePane(pane.paneId);
+        closePicker("ui.picker.close");
+      }
+    }));
+
+    if (items.length === 0) {
+      context.setBottomMessage({ tone: "warning", text: "No panes" });
+      return false;
+    }
+
+    return openActionPicker({
+      title: "panes",
+      items,
+      selectedIndex: Math.max(
+        0,
+        workspace.panes.findIndex((pane) => pane.active)
+      ),
+      variant: "modal"
+    });
+  };
+
   const openActionPicker: PickerRuntime["openActionPicker"] = (options) => {
     invalidateAsyncPickerRequests();
     searchSource = null;
@@ -614,6 +647,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     openDiagnosticsPicker,
     openJumpListPicker,
     openBuffersPicker,
+    openPanesPicker,
     openActionPicker,
     openSearchPicker,
     openFileSearchPicker,

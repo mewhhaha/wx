@@ -1,10 +1,13 @@
 import type { EditorState } from "@wx/editor-core";
+import type { EditorWorkspacePresentationState } from "@wx/editor-controller";
 import {
   buildEditorLayout,
+  buildEditorWorkspaceLayout,
   type EditorLayoutModel,
   type EditorLayoutPanel,
   type EditorLayoutRow,
-  type EditorLayoutRun
+  type EditorLayoutRun,
+  type EditorWorkspaceLayoutPane
 } from "@wx/editor-layout";
 import { defaultTheme, resolveThemeColor, type ThemeSpec } from "@wx/editor-theme";
 
@@ -334,6 +337,160 @@ function findTerminalCursor(layout: EditorLayoutModel, state: EditorState): { ro
   }
 
   return null;
+}
+
+function renderLayoutIntoBuffer(
+  buffer: Cell[][],
+  layout: EditorLayoutModel,
+  state: EditorState,
+  theme: ThemeSpec,
+  rect: { col: number; row: number; cols: number; rows: number }
+): void {
+  const background = resolveThemeColor(theme, "background");
+  const bodyRows = Math.max(1, rect.rows - 2);
+  const lineDigits = Math.max(2, String(Math.max(1, state.doc.lineCount)).length);
+  const { contentCols } = getContentCols(rect.cols, state.doc.lineCount);
+
+  for (let index = 0; index < bodyRows; index += 1) {
+    const targetRow = buffer[rect.row + index];
+    if (!targetRow) {
+      continue;
+    }
+
+    const layoutRow = layout.document.rows[index];
+    clearRange(targetRow, rect.col, rect.cols, makeStyle(resolveThemeColor(theme, "text"), background));
+
+    if (layoutRow) {
+      const slice = createBlankRow(rect.cols, makeStyle(resolveThemeColor(theme, "text"), background));
+      renderDocumentRow(slice, layoutRow, theme, lineDigits, contentCols);
+      for (let column = 0; column < rect.cols; column += 1) {
+        const cell = slice[column];
+        if (cell) {
+          targetRow[rect.col + column] = cell;
+        }
+      }
+      continue;
+    }
+
+    const fillerStyle = styleForThemeRole(theme, "gutter", background);
+    writeText(targetRow, rect.col, index === 0 ? "~" : " ", fillerStyle);
+  }
+
+  const statusRow = buffer[rect.row + rect.rows - 2];
+  const bottomRow = buffer[rect.row + rect.rows - 1];
+  if (statusRow) {
+    fillRange(statusRow, rect.col, rect.cols, makeStyle(resolveThemeColor(theme, "text"), STATUS_BG));
+    const slice = createBlankRow(rect.cols, makeStyle(resolveThemeColor(theme, "text"), STATUS_BG));
+    writeStatusRow(slice, layout.statusBar, theme);
+    for (let column = 0; column < rect.cols; column += 1) {
+      const cell = slice[column];
+      if (cell) {
+        statusRow[rect.col + column] = cell;
+      }
+    }
+  }
+
+  if (bottomRow) {
+    fillRange(bottomRow, rect.col, rect.cols, makeStyle(resolveThemeColor(theme, "text"), BOTTOM_BG));
+    const slice = createBlankRow(rect.cols, makeStyle(resolveThemeColor(theme, "text"), BOTTOM_BG));
+    writeBottomRow(slice, layout.bottomBar.runs, theme);
+    for (let column = 0; column < rect.cols; column += 1) {
+      const cell = slice[column];
+      if (cell) {
+        bottomRow[rect.col + column] = cell;
+      }
+    }
+  }
+}
+
+function findWorkspaceCursor(
+  pane: EditorWorkspaceLayoutPane,
+  state: EditorState
+): { row: number; col: number; shape: "beam" | "block" } | null {
+  const cursor = findTerminalCursor(pane.layout, state);
+  if (!cursor) {
+    return null;
+  }
+
+  return {
+    row: pane.rect.row + cursor.row,
+    col: pane.rect.col + cursor.col,
+    shape: cursor.shape
+  };
+}
+
+export function renderEditorAnsiWorkspaceFrame(input: {
+  workspace: EditorWorkspacePresentationState;
+  theme?: ThemeSpec;
+  cols: number;
+  rows: number;
+  indentGuides?: RenderEditorAnsiFrameInput["indentGuides"];
+}): string {
+  const theme = input.theme ?? defaultTheme;
+  const cols = Math.max(1, input.cols);
+  const rows = Math.max(2, input.rows);
+  const background = resolveThemeColor(theme, "background");
+  const buffer = Array.from({ length: rows }, () =>
+    createBlankRow(cols, makeStyle(resolveThemeColor(theme, "text"), background))
+  );
+  const workspaceLayout = buildEditorWorkspaceLayout({
+    cols,
+    rows,
+    activePaneId: input.workspace.activePaneId,
+    layoutTree: input.workspace.layoutTree,
+    panes: input.workspace.panes.map((pane) => ({
+      paneId: pane.paneId,
+      active: pane.active,
+      state: pane.state,
+      presentation: pane.presentation,
+      hoverAnchor: { col: 0, row: 0 }
+    })),
+    indentGuides: normalizeIndentGuides(input.indentGuides)
+  });
+
+  for (const pane of workspaceLayout.panes) {
+    renderLayoutIntoBuffer(buffer, pane.layout, input.workspace.panes.find((entry) => entry.paneId === pane.paneId)!.state, theme, pane.rect);
+  }
+
+  for (const divider of workspaceLayout.dividers) {
+    if (divider.axis === "vertical") {
+      for (let row = divider.row; row < Math.min(rows, divider.row + divider.length); row += 1) {
+        writeText(buffer[row]!, divider.col, "│", makeStyle(resolveThemeColor(theme, "gutter"), background));
+      }
+      continue;
+    }
+
+    writeText(buffer[divider.row]!, divider.col, "─".repeat(Math.max(1, divider.length)), makeStyle(resolveThemeColor(theme, "gutter"), background));
+  }
+
+  const activePane = workspaceLayout.panes.find((pane) => pane.active);
+  const activeSnapshot = input.workspace.panes.find((pane) => pane.paneId === activePane?.paneId) ?? null;
+  if (activePane && activeSnapshot) {
+    for (const panel of activePane.layout.panels) {
+      overlayPanel(
+        buffer,
+        {
+          ...panel,
+          anchor: {
+            col: panel.anchor.col + activePane.rect.col,
+            row: panel.anchor.row + activePane.rect.row
+          }
+        },
+        theme,
+        rows - 2
+      );
+    }
+  }
+
+  const terminalCursor =
+    activePane && activeSnapshot && !activeSnapshot.presentation.ui.picker.active
+      ? findWorkspaceCursor(activePane, activeSnapshot.state)
+      : null;
+  const cursorSequence = terminalCursor
+    ? `\u001b[${terminalCursor.row};${terminalCursor.col}H${terminalCursor.shape === "beam" ? "\u001b[6 q" : "\u001b[2 q"}\u001b[?25h`
+    : ANSI_HIDE_CURSOR;
+
+  return `${ANSI_HIDE_CURSOR}${ANSI_HOME}${buffer.map(serializeRow).join("\n")}${ANSI_RESET}${cursorSequence}`;
 }
 
 export function renderEditorAnsiFrame(input: RenderEditorAnsiFrameInput): string {

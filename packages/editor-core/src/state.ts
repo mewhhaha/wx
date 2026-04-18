@@ -56,6 +56,21 @@ export interface EditorState {
   };
 }
 
+export interface EditorBufferDocumentState {
+  doc: TextDocument;
+  revision: number;
+  language?: string;
+  theme?: string;
+}
+
+export interface EditorViewState {
+  selection: SelectionSet;
+  mode: EditorMode;
+  yankBuffer: string | null;
+  lastDeletedFrom: number | null;
+  insertSession: InsertSession | null;
+}
+
 function fallbackSelectionRange(): SelectionRange {
   return { anchor: 0, head: 0, preferredColumn: null };
 }
@@ -189,6 +204,58 @@ export function createEditorState(options: {
       fromLine: 0,
       toLine: 0
     }
+  };
+}
+
+export function splitEditorState(state: EditorState): {
+  buffer: EditorBufferDocumentState;
+  view: EditorViewState;
+} {
+  return {
+    buffer: {
+      doc: state.doc,
+      revision: state.revision,
+      language: state.language,
+      theme: state.theme
+    },
+    view: {
+      selection: createSelectionSet(state.selection.ranges, state.selection.primaryIndex),
+      mode: state.mode,
+      yankBuffer: state.yankBuffer,
+      lastDeletedFrom: state.lastDeletedFrom,
+      insertSession: state.insertSession ? { ...state.insertSession } : null
+    }
+  };
+}
+
+export function combineEditorState(
+  buffer: EditorBufferDocumentState,
+  view: EditorViewState,
+  viewport: EditorState["viewport"] = { fromLine: 0, toLine: 0 }
+): EditorState {
+  return {
+    doc: buffer.doc,
+    revision: buffer.revision,
+    language: buffer.language,
+    theme: buffer.theme,
+    selection: normalizeSelection(buffer.doc, view.selection, view.mode),
+    mode: view.mode,
+    yankBuffer: view.yankBuffer,
+    lastDeletedFrom: view.lastDeletedFrom,
+    insertSession: view.mode === "insert" ? view.insertSession : null,
+    viewport
+  };
+}
+
+export function remapEditorViewState(
+  view: EditorViewState,
+  doc: TextDocument,
+  changes: readonly TextChange[]
+): EditorViewState {
+  return {
+    ...view,
+    selection: normalizeSelection(doc, mapSelection(view.selection, changes), view.mode),
+    insertSession: view.mode === "insert" ? mapInsertSession(view.insertSession, changes) : null
   };
 }
 
