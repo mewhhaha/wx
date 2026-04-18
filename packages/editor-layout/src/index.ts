@@ -111,7 +111,7 @@ export type EditorLayoutOverlay =
     };
 
 export interface EditorLayoutPanel {
-  kind: "tooltip" | "picker";
+  kind: "tooltip" | "picker" | "completion";
   token: "tooltip" | "picker";
   anchor: { col: number; row: number };
   rows: ReadonlyArray<readonly EditorLayoutRun[]>;
@@ -214,6 +214,24 @@ export interface EditorLayoutPickerState {
   previewLoading: boolean;
 }
 
+export interface EditorLayoutCompletionItemState {
+  label: string;
+  detail?: string;
+  kind?: string;
+  documentation?: string;
+  insertText?: string;
+  selected?: boolean;
+}
+
+export interface EditorLayoutCompletionState {
+  active: boolean;
+  loading: boolean;
+  anchorOffset: number | null;
+  items: readonly EditorLayoutCompletionItemState[];
+  selectedIndex: number;
+  error: string | null;
+}
+
 export interface EditorLayoutBottomMessageState {
   tone: "info" | "warning" | "error";
   text: string;
@@ -224,6 +242,8 @@ export interface EditorLayoutHoverState {
   content: string;
   source?: string;
   tone: "info" | "warning" | "error";
+  pinned?: boolean;
+  offset?: number | null;
 }
 
 export interface EditorLayoutFlashHintState {
@@ -266,13 +286,18 @@ export interface EditorLayoutPresentationState {
     diagnosticsByLine: ReadonlyMap<number, readonly EditorDiagnostic[]>;
     lineChangesByLine: ReadonlyMap<number, EditorLayoutLineChangeState>;
     visibleHighlightsByLine: ReadonlyMap<number, readonly HighlightSpan[]>;
+    visibleDiagnostics?: readonly EditorDiagnostic[];
+    visibleLineChanges?: ReadonlyArray<{ line: number; kind: "added" | "modified" | "deleted" }>;
   };
   search: {
     lastMatch: { from: number; to: number } | null;
     visibleMatchesByLine: ReadonlyMap<number, readonly { from: number; to: number }[]>;
+    query?: string;
+    direction?: "forward" | "backward";
   };
   ui: {
     commandLine: EditorLayoutCommandLineState;
+    completion?: EditorLayoutCompletionState;
     picker: EditorLayoutPickerState;
     bottomMessage: EditorLayoutBottomMessageState | null;
     hover: EditorLayoutHoverState;
@@ -980,6 +1005,86 @@ function buildPickerPanel(input: EditorLayoutInput): EditorLayoutPanel | null {
   };
 }
 
+function buildCompletionPanel(input: EditorLayoutInput): EditorLayoutPanel | null {
+  const completion = input.presentation.ui.completion ?? {
+    active: false,
+    loading: false,
+    anchorOffset: null,
+    items: [],
+    selectedIndex: 0,
+    error: null
+  };
+
+  if (!completion.active) {
+    return null;
+  }
+
+  const anchorOffset = completion.anchorOffset ?? getSelectionOffsets(input.state).to;
+  const anchorRow = getVisualRowForOffset(
+    input.state,
+    input.presentation.viewport.visualRows,
+    input.presentation.viewport.lineVisualRanges,
+    anchorOffset,
+    input.presentation.viewport.softWrap,
+    input.presentation.viewport.softWrap ? Math.max(1, input.presentation.viewport.wrapColumns) : Number.MAX_SAFE_INTEGER
+  );
+  const visibleItems = completion.items.slice(0, 8);
+  const width = Math.max(
+    18,
+    Math.min(
+      52,
+      visibleItems.reduce((max, item) => Math.max(max, item.label.length + (item.detail ? item.detail.length + 2 : 0)), 0)
+    )
+  );
+  const rows: EditorLayoutRun[][] = [];
+
+  if (completion.loading) {
+    rows.push([
+      {
+        col: 0,
+        text: "Loading completions...",
+        token: "picker",
+        part: "completion-item"
+      }
+    ]);
+  } else if (completion.error && completion.items.length === 0) {
+    rows.push([
+      {
+        col: 0,
+        text: truncatePanelText(completion.error, width),
+        token: "picker",
+        part: "completion-item"
+      }
+    ]);
+  } else {
+    visibleItems.forEach((item, index) => {
+      const selected = index === completion.selectedIndex;
+      const detail = item.detail ? `  ${item.detail}` : "";
+      rows.push([
+        {
+          col: 0,
+          text: truncatePanelText(`${item.label}${detail}`, width).padEnd(width, " "),
+          token: selected ? "picker-selected" : "picker",
+          part: "completion-item",
+          selectedInPicker: selected
+        }
+      ]);
+    });
+  }
+
+  return {
+    kind: "completion",
+    token: "picker",
+    anchor: {
+      col: Math.max(0, anchorRow.column + 6),
+      row: Math.max(0, anchorRow.rowIndex + 1)
+    },
+    rows,
+    width,
+    height: Math.max(1, rows.length)
+  };
+}
+
 export function buildEditorLayoutRow(
   input: EditorLayoutInput,
   visualRow: EditorVisualRow,
@@ -1362,6 +1467,11 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
   const pickerPanel = buildPickerPanel(input);
   if (pickerPanel) {
     panels.push(pickerPanel);
+  }
+
+  const completionPanel = buildCompletionPanel(input);
+  if (completionPanel) {
+    panels.push(completionPanel);
   }
 
   return {

@@ -28,6 +28,25 @@ export function createKeyRuntime(context: KeyRuntimeContext): KeyRuntime {
       }
     }
 
+    if (presentation.ui.completion.active) {
+      if (key === "Escape") {
+        context.dismissCompletion();
+        return { handled: true };
+      }
+
+      if (key === "ArrowUp" || (key === "Tab" && shift)) {
+        return { handled: context.moveCompletion(-1) };
+      }
+
+      if (key === "ArrowDown" || key === "Tab") {
+        return { handled: context.moveCompletion(1) };
+      }
+
+      if (key === "Enter") {
+        return { handled: await context.acceptCompletion() };
+      }
+    }
+
     if (presentation.ui.picker.active) {
       return { handled: await handlePickerKey(context, key) };
     }

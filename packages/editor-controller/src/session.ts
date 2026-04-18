@@ -81,6 +81,8 @@ export interface SessionRuntime {
   setCommandLineState(next: EditorCommandLineState, effectType?: string): void;
   setCommandCompletions(next: readonly EditorCommandCompletionItem[], index?: number, effectType?: string): void;
   setCommandCompletionIndex(next: number, effectType?: string): void;
+  setCompletionState(next: EditorPresentationState["ui"]["completion"], effectType?: string): void;
+  setRenameState(next: EditorPresentationState["ui"]["rename"], effectType?: string): void;
   setPendingActionState(next: EditorPendingAction, effectType?: string): void;
   setPendingCountState(next: string, effectType?: string): void;
   clearPendingCount(): void;
@@ -148,6 +150,35 @@ export function createSessionRuntime(options: CreateSessionRuntimeOptions): Sess
     presentation.ui.pendingCount = next;
     emitPresentationUpdate(effectType);
   };
+
+  const completionStateEquals = (
+    left: EditorPresentationState["ui"]["completion"],
+    right: EditorPresentationState["ui"]["completion"]
+  ) =>
+    left.active === right.active &&
+    left.loading === right.loading &&
+    left.anchorOffset === right.anchorOffset &&
+    left.selectedIndex === right.selectedIndex &&
+    left.error === right.error &&
+    left.items.length === right.items.length &&
+    left.items.every(
+      (item, index) =>
+        item.label === right.items[index]?.label &&
+        item.detail === right.items[index]?.detail &&
+        item.kind === right.items[index]?.kind &&
+        item.documentation === right.items[index]?.documentation &&
+        item.insertText === right.items[index]?.insertText &&
+        item.selected === right.items[index]?.selected
+    );
+
+  const renameStateEquals = (
+    left: EditorPresentationState["ui"]["rename"],
+    right: EditorPresentationState["ui"]["rename"]
+  ) =>
+    left.active === right.active &&
+    left.anchorOffset === right.anchorOffset &&
+    left.value === right.value &&
+    left.error === right.error;
 
   return {
     setBottomMessageValue,
@@ -229,6 +260,22 @@ export function createSessionRuntime(options: CreateSessionRuntimeOptions): Sess
       }
 
       presentation.ui.commandCompletionIndex = next;
+      emitPresentationUpdate(effectType);
+    },
+    setCompletionState(next, effectType = "ui.completion") {
+      if (completionStateEquals(presentation.ui.completion, next)) {
+        return;
+      }
+
+      presentation.ui.completion = next;
+      emitPresentationUpdate(effectType);
+    },
+    setRenameState(next, effectType = "ui.rename") {
+      if (renameStateEquals(presentation.ui.rename, next)) {
+        return;
+      }
+
+      presentation.ui.rename = next;
       emitPresentationUpdate(effectType);
     },
     setPendingActionState(next, effectType = "ui.pending-action") {

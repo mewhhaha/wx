@@ -28,6 +28,10 @@ export function createPresentationState(
       diagnosticsRequestId: 0,
       lineChangesRequestId: 0,
       hoverRequestId: 0,
+      completionRequestId: 0,
+      navigationRequestId: 0,
+      renameRequestId: 0,
+      symbolsRequestId: 0,
       highlightCache: new Map(),
       highlightCoverage: new Set(),
       diagnostics: [],
@@ -42,6 +46,20 @@ export function createPresentationState(
       commandLine: { active: false, value: "", prompt: ":" },
       commandCompletionIndex: 0,
       commandCompletionItems: [],
+      completion: {
+        active: false,
+        loading: false,
+        anchorOffset: null,
+        items: [],
+        selectedIndex: 0,
+        error: null
+      },
+      rename: {
+        active: false,
+        anchorOffset: null,
+        value: "",
+        error: null
+      },
       picker: {
         active: false,
         loading: false,

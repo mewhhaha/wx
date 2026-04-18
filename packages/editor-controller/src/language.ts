@@ -3,19 +3,23 @@ import type { EditorState, TextChange } from "@wx/editor-core";
 import { createLanguageActionsRuntime } from "./language-actions";
 import { createLanguageDiagnosticsRuntime } from "./language-diagnostics";
 import { createLanguageHighlightsRuntime } from "./language-highlights";
+import { createLanguageLspRuntime } from "./language-lsp";
 import type {
-  LanguageActionsRuntime,
   LanguageCodeActionSource,
-  LanguageDiagnosticsRuntime,
+  LanguageCompletionSource,
   LanguageDiagnosticsSource,
   LanguageFormatter,
+  LanguageGotoSource,
   LanguageHighlighter,
   LanguageHoverSource,
+  LanguageRenameSource,
   LanguageRuntime,
   LanguageRuntimeContext,
+  LanguageSymbolSource,
   LineChangeHostServices
 } from "./language-runtime-types";
-import type { EditorPresentationState } from "./types";
+import type { EditorBottomMessageState, EditorPresentationState } from "./types";
+import type { PickerActionItem, PickerSearchSource } from "./picker";
 
 function getHighlighter(presentation: EditorPresentationState): LanguageHighlighter | undefined {
   return presentation.language.services.find((services) => services.highlighter)?.highlighter;
@@ -33,6 +37,22 @@ function getCodeActionSource(presentation: EditorPresentationState): LanguageCod
   return presentation.language.services.find((services) => services.codeActions)?.codeActions;
 }
 
+function getCompletionSource(presentation: EditorPresentationState): LanguageCompletionSource | undefined {
+  return presentation.language.services.find((services) => services.completion)?.completion;
+}
+
+function getGotoSource(presentation: EditorPresentationState): LanguageGotoSource | undefined {
+  return presentation.language.services.find((services) => services.goto)?.goto;
+}
+
+function getRenameSource(presentation: EditorPresentationState): LanguageRenameSource | undefined {
+  return presentation.language.services.find((services) => services.rename)?.rename;
+}
+
+function getSymbolSource(presentation: EditorPresentationState): LanguageSymbolSource | undefined {
+  return presentation.language.services.find((services) => services.symbols)?.symbols;
+}
+
 function getFormatter(presentation: EditorPresentationState): LanguageFormatter | undefined {
   return presentation.language.services.find((services) => services.formatter)?.formatter;
 }
@@ -43,7 +63,34 @@ function getHostServices(presentation: EditorPresentationState): LineChangeHostS
 
 export type { LanguageRuntime } from "./language-runtime-types";
 
-export function createLanguageRuntime(context: LanguageRuntimeContext): LanguageRuntime {
+interface CreateLanguageRuntimeOptions {
+  context: LanguageRuntimeContext;
+  setBottomMessage(message: EditorBottomMessageState | null): void;
+  setCompletionState(next: EditorPresentationState["ui"]["completion"], effectType?: string): void;
+  setRenameState(next: EditorPresentationState["ui"]["rename"], effectType?: string): void;
+  applySelectionRange(from: number, to: number): void;
+  revealSelectionWithinViewport(): boolean;
+  syncVisibleViewportRows(): boolean;
+  syncVisibleLanguageDecorations(): boolean;
+  ensureVisibleHighlightCoverage(): Promise<void>;
+  pushJump(): boolean;
+  openBuffer(filePath: string): Promise<boolean>;
+  findBufferState(filePath: string): EditorState | null;
+  storeBufferState(filePath: string, state: EditorState, dirty?: boolean): void;
+  createStateForText(text: string, template: EditorState): EditorState;
+  openActionPicker(options: {
+    title: string;
+    items: readonly PickerActionItem[];
+    selectedIndex?: number;
+    query?: string;
+    variant?: "bar" | "modal";
+    effectType?: string;
+  }): boolean;
+  openSearchPicker(source: PickerSearchSource): Promise<boolean>;
+}
+
+export function createLanguageRuntime(options: CreateLanguageRuntimeOptions): LanguageRuntime {
+  const { context } = options;
   const highlightsRuntime = createLanguageHighlightsRuntime({
     context,
     getHighlighter
@@ -63,6 +110,30 @@ export function createLanguageRuntime(context: LanguageRuntimeContext): Language
     getFormatter,
     getHostServices,
     refreshLineChanges: diagnosticsRuntime.refreshLineChanges
+  });
+
+  const lspRuntime = createLanguageLspRuntime({
+    context,
+    getCompletionSource,
+    getGotoSource,
+    getRenameSource,
+    getSymbolSource,
+    getHostServices,
+    setBottomMessage: options.setBottomMessage,
+    setCompletionState: options.setCompletionState,
+    setRenameState: options.setRenameState,
+    applySelectionRange: options.applySelectionRange,
+    revealSelectionWithinViewport: options.revealSelectionWithinViewport,
+    syncVisibleViewportRows: options.syncVisibleViewportRows,
+    syncVisibleLanguageDecorations: options.syncVisibleLanguageDecorations,
+    ensureVisibleHighlightCoverage: options.ensureVisibleHighlightCoverage,
+    pushJump: options.pushJump,
+    openBuffer: options.openBuffer,
+    findBufferState: options.findBufferState,
+    storeBufferState: options.storeBufferState,
+    createStateForText: options.createStateForText,
+    openActionPicker: options.openActionPicker,
+    openSearchPicker: options.openSearchPicker
   });
 
   const syncLanguage = async (
@@ -106,6 +177,7 @@ export function createLanguageRuntime(context: LanguageRuntimeContext): Language
     highlightsRuntime.resetHighlightTracking();
     diagnosticsRuntime.resetDiagnosticsTracking();
     actionsRuntime.resetActionTracking();
+    lspRuntime.resetLspTracking();
   };
 
   return {
@@ -119,6 +191,13 @@ export function createLanguageRuntime(context: LanguageRuntimeContext): Language
     refreshLineChanges: diagnosticsRuntime.refreshLineChanges,
     requestCodeActions: actionsRuntime.requestCodeActions,
     applyCodeAction: actionsRuntime.applyCodeAction,
+    requestCompletion: lspRuntime.requestCompletion,
+    acceptCompletion: lspRuntime.acceptCompletion,
+    moveCompletion: lspRuntime.moveCompletion,
+    dismissCompletion: lspRuntime.dismissCompletion,
+    gotoTarget: lspRuntime.gotoTarget,
+    renameSymbol: lspRuntime.renameSymbol,
+    openSymbols: lspRuntime.openSymbols,
     formatDocument: actionsRuntime.formatDocument,
     saveDocument: actionsRuntime.saveDocument
   };

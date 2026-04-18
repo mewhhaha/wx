@@ -34,12 +34,14 @@ export function isControllerHandledModifierKey(
         event.key === "." ||
         event.key === "*" ||
         event.key === "/" ||
+        event.key.toLowerCase() === "g" ||
+        event.key.toLowerCase() === "r" ||
         event.key.toLowerCase() === "k")
     );
   }
 
   if (event.ctrlKey && !event.metaKey && !event.altKey) {
-    return ["s", "r", "o", "i", "b", "d", "f", "u", "."].includes(event.key);
+    return [" ", "s", "r", "o", "i", "b", "d", "f", "u", "."].includes(event.key);
   }
 
   return false;
@@ -69,6 +71,7 @@ export function shouldRouteKeydown(
     state: EditorState;
     commandLineActive: boolean;
     pickerActive: boolean;
+    completionActive: boolean;
     flashActive: boolean;
     pendingAction: EditorPendingAction;
     stickyViewMode: boolean;
@@ -79,6 +82,7 @@ export function shouldRouteKeydown(
     options.flashActive ||
     options.commandLineActive ||
     options.pickerActive ||
+    options.completionActive ||
     !!options.pendingAction ||
     options.stickyViewMode ||
     options.hoverActive;

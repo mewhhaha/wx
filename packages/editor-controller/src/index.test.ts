@@ -280,7 +280,11 @@ describe("editor controller", () => {
       "F",
       "b",
       "d",
-      "j"
+      "j",
+      "s",
+      "S",
+      "r",
+      "n"
     ]);
 
     await controller.handleKeyInput({ key: "b", text: "b" });
@@ -325,6 +329,97 @@ describe("editor controller", () => {
       source: "fake-lsp",
       tone: "info"
     });
+  });
+
+  it("requests explicit completion and applies selected text through controller state", async () => {
+    const controller = createEditorController({
+      value: "al",
+      selection: createSelectionSet([{ anchor: 0, head: 1, preferredColumn: null }])
+    });
+    controller.setLanguageServices([
+      {
+        completion: {
+          async complete() {
+            return [
+              { label: "alpha", detail: "keyword" },
+              { label: "alias", detail: "value" }
+            ];
+          }
+        }
+      }
+    ]);
+
+    await controller.requestCompletion();
+    expect(controller.getPresentationState().ui.completion.active).toBe(true);
+    expect(controller.getPresentationState().ui.completion.items.map((item) => item.label)).toEqual(["alias", "alpha"]);
+
+    controller.moveCompletion(1);
+    await controller.acceptCompletion();
+
+    expect(controller.getState().doc.text).toBe("alpha");
+    expect(controller.getPresentationState().ui.completion.active).toBe(false);
+  });
+
+  it("jumps directly to single goto targets in current file", async () => {
+    const controller = createEditorController({ value: "alpha beta alpha" });
+    controller.setLanguageServices([
+      {
+        goto: {
+          async definition() {
+            return [{ from: 11, to: 16 }];
+          }
+        }
+      }
+    ]);
+
+    const jumped = await controller.gotoTarget("definition");
+
+    expect(jumped).toBe(true);
+    expect(controller.getState().selection.ranges[0]).toEqual({
+      anchor: 11,
+      head: 15,
+      preferredColumn: null
+    });
+  });
+
+  it("applies cross-file rename edits through host IO and open buffers", async () => {
+    const writes: Array<{ filePath: string; text: string }> = [];
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        if (filePath === "src/other.ts") {
+          return "alpha beta";
+        }
+
+        return "";
+      },
+      async writeFile(payload) {
+        writes.push(payload);
+      }
+    });
+    controller.setLanguageServices([
+      {
+        rename: {
+          async rename() {
+            return [
+              {
+                changes: [{ from: 0, to: 5, insert: "omega" }]
+              },
+              {
+                filePath: "src/other.ts",
+                changes: [{ from: 0, to: 5, insert: "omega" }]
+              }
+            ];
+          }
+        }
+      }
+    ]);
+
+    const renamed = await controller.renameSymbol("omega");
+
+    expect(renamed).toBe(true);
+    expect(controller.getState().doc.text).toBe("omega");
+    expect(writes).toEqual([{ filePath: "src/other.ts", text: "omega beta" }]);
   });
 
   it("clears semantic hover and flash state on document edits", async () => {

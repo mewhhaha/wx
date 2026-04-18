@@ -77,6 +77,7 @@ export function createDomEventRuntime(context: DomEditorContext, runtime: DomEdi
           state: context.state,
           commandLineActive: uiState.commandLine.active,
           pickerActive: uiState.picker.active,
+          completionActive: uiState.completion.active,
           flashActive: uiState.flash.active,
           pendingAction: uiState.pendingAction,
           stickyViewMode: uiState.stickyViewMode,

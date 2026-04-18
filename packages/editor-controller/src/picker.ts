@@ -17,6 +17,13 @@ export interface PickerActionItem {
   preview?: () => Promise<{ title: string; content: string } | null> | { title: string; content: string } | null;
 }
 
+export interface PickerSearchSource {
+  title: string;
+  query?: string;
+  variant?: "bar" | "modal";
+  load(query: string): Promise<readonly PickerActionItem[]>;
+}
+
 interface PickerRuntimeContext {
   getState(): EditorState;
   getPresentation(): EditorPresentationState;
@@ -39,6 +46,15 @@ export interface PickerRuntime {
   openDiagnosticsPicker(): boolean;
   openJumpListPicker(): boolean;
   openBuffersPicker(): boolean;
+  openActionPicker(options: {
+    title: string;
+    items: readonly PickerActionItem[];
+    selectedIndex?: number;
+    query?: string;
+    variant?: "bar" | "modal";
+    effectType?: string;
+  }): boolean;
+  openSearchPicker(source: PickerSearchSource): Promise<boolean>;
   openFileSearchPicker(scope: "repo" | "folder"): Promise<boolean>;
   updatePickerQuery(query: string): Promise<boolean>;
   loadCodeActions(): Promise<boolean>;
@@ -49,14 +65,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   let previewRequestId = 0;
   let searchRequestId = 0;
   let pickerSessionId = 0;
-  let searchSource:
-    | null
-    | {
-        title: string;
-        query: string;
-        variant: "bar" | "modal";
-        load(query: string): Promise<readonly PickerActionItem[]>;
-      } = null;
+  let searchSource: (PickerSearchSource & { query: string; variant: "bar" | "modal" }) | null = null;
 
   const invalidateAsyncPickerRequests = () => {
     previewRequestId += 1;
@@ -368,11 +377,50 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     return true;
   };
 
-  const openFileSearchPicker = async (scope: "repo" | "folder") => {
+  const openActionPicker: PickerRuntime["openActionPicker"] = (options) => {
+    invalidateAsyncPickerRequests();
+    searchSource = null;
+
+    if (options.items.length === 0) {
+      context.setBottomMessage({ tone: "warning", text: `No ${options.title}` });
+      return false;
+    }
+
+    setPickerState(
+      {
+        active: true,
+        loading: false,
+        title: options.title,
+        items: options.items,
+        selectedIndex: Math.max(0, Math.min(options.items.length - 1, options.selectedIndex ?? 0)),
+        error: null,
+        query: options.query ?? "",
+        variant: options.variant ?? "modal",
+        previewTitle: "",
+        previewContent: "",
+        previewLoading: false
+      },
+      options.effectType ?? "ui.picker"
+    );
+    void syncSelectedPreview();
+    return true;
+  };
+
+  const openSearchPicker: PickerRuntime["openSearchPicker"] = async (source) => {
     invalidateAsyncPickerRequests();
     searchSource = {
+      title: source.title,
+      query: source.query ?? "",
+      variant: source.variant ?? "modal",
+      load: source.load
+    };
+
+    return updatePickerQuery(searchSource.query);
+  };
+
+  const openFileSearchPicker = async (scope: "repo" | "folder") => {
+    return openSearchPicker({
       title: scope === "repo" ? "repo" : "folder",
-      query: "",
       variant: "modal",
       load: async (query) => {
         const files = await context.getController().searchFiles(scope, query);
@@ -400,9 +448,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
           }
         }));
       }
-    };
-
-    return updatePickerQuery("");
+    });
   };
 
   const updatePickerQuery = async (query: string) => {
@@ -568,6 +614,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     openDiagnosticsPicker,
     openJumpListPicker,
     openBuffersPicker,
+    openActionPicker,
+    openSearchPicker,
     openFileSearchPicker,
     updatePickerQuery,
     loadCodeActions

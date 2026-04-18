@@ -131,6 +131,11 @@ export function parseAnsiInput(chunk: Buffer | string): string[] {
       continue;
     }
 
+    if (code === 0) {
+      keys.push("Ctrl+Space");
+      continue;
+    }
+
     if (code >= 1 && code <= 26) {
       keys.push(`Ctrl+${String.fromCharCode(96 + code)}`);
       continue;
@@ -323,7 +328,8 @@ export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOption
       !presentationBeforeKey.ui.commandLine.active &&
       !presentationBeforeKey.ui.picker.active;
     const ctrl = key.startsWith("Ctrl+") || terminalCtrlIAsTab;
-    const normalizedKey = shiftTab ? "Tab" : terminalCtrlIAsTab ? "i" : ctrl ? key.slice(5) : key;
+    const normalizedKey =
+      key === "Ctrl+Space" ? " " : shiftTab ? "Tab" : terminalCtrlIAsTab ? "i" : ctrl ? key.slice(5) : key;
     const result = await controller.handleKeyInput(
       {
         key: normalizedKey,

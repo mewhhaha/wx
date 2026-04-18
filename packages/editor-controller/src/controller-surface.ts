@@ -62,6 +62,13 @@ interface CreateControllerSurfaceOptions {
     requestRawHover(offset: number): Promise<EditorHover | null>;
     requestCodeActions(): Promise<readonly EditorCodeAction[]>;
     applyCodeAction(action: EditorCodeAction): Promise<boolean>;
+    requestCompletion(): Promise<boolean>;
+    acceptCompletion(index?: number): Promise<boolean>;
+    moveCompletion(delta: number): boolean;
+    dismissCompletion(): boolean;
+    gotoTarget(kind: "definition" | "declaration" | "type-definition" | "implementation" | "references"): Promise<boolean>;
+    renameSymbol(nextName: string): Promise<boolean>;
+    openSymbols(kind: "document" | "workspace"): Promise<boolean>;
     formatDocument(): Promise<boolean>;
     saveDocument(targetPath: string): Promise<boolean>;
   };
@@ -286,6 +293,27 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     },
     removePrimarySelection() {
       return options.multiSelectionRuntime.removePrimarySelection();
+    },
+    requestCompletion() {
+      return options.languageRuntime.requestCompletion();
+    },
+    acceptCompletion(index) {
+      return options.languageRuntime.acceptCompletion(index);
+    },
+    moveCompletion(delta) {
+      return options.languageRuntime.moveCompletion(delta);
+    },
+    dismissCompletion() {
+      return options.languageRuntime.dismissCompletion();
+    },
+    gotoTarget(kind) {
+      return options.languageRuntime.gotoTarget(kind);
+    },
+    renameSymbol(nextName) {
+      return options.languageRuntime.renameSymbol(nextName);
+    },
+    openSymbols(kind) {
+      return options.languageRuntime.openSymbols(kind);
     },
     setBottomMessage(message) {
       options.sessionRuntime.setBottomMessage(message);

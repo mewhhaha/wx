@@ -6,7 +6,8 @@ import {
   findTillNextChar,
   findTillPrevChar,
   gotoMatchingBracket,
-  insertText
+  insertText,
+  replaceSurround
 } from "@wx/editor-core";
 
 import {
@@ -148,6 +149,27 @@ export async function handlePendingActionKey(
 
     if (input.key === "j") {
       context.openJumpListPicker();
+      return { handled: true };
+    }
+
+    if (input.key === "s") {
+      await context.openSymbols("document");
+      return { handled: true };
+    }
+
+    if (input.key === "S") {
+      await context.openSymbols("workspace");
+      return { handled: true };
+    }
+
+    if (input.key === "r") {
+      await context.gotoTarget("references");
+      return { handled: true };
+    }
+
+    if (input.key === "n") {
+      context.openCommandLine(":");
+      await context.getController().handleTextInput("rename ");
       return { handled: true };
     }
   }

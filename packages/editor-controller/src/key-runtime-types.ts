@@ -32,6 +32,13 @@ export interface KeyRuntimeContext {
   executeEditorCommand(command: Command): boolean;
   executeCommandWithCount(command: Command, options?: EditorKeyInputOptions): Promise<boolean>;
   executeCommandWithCountSync(command: Command): boolean;
+  requestCompletion(): Promise<boolean>;
+  acceptCompletion(index?: number): Promise<boolean>;
+  moveCompletion(delta: number): boolean;
+  dismissCompletion(): boolean;
+  gotoTarget(kind: "definition" | "declaration" | "type-definition" | "implementation" | "references"): Promise<boolean>;
+  renameSymbol(nextName: string): Promise<boolean>;
+  openSymbols(kind: "document" | "workspace"): Promise<boolean>;
   runRepeatableMotion(motion: EditorRepeatableMotion, options?: EditorKeyInputOptions): Promise<boolean>;
   recordRepeatableMotion(candidate: EditorRepeatableMotion, didChange: boolean): void;
   handleAltArrowSyntaxSelection(key: "ArrowUp" | "ArrowDown"): Promise<boolean>;

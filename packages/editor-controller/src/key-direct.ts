@@ -77,6 +77,20 @@ export async function handleDirectKey(
     return { handled: true };
   }
 
+  if (input.alt && !input.meta && !input.ctrl && state.mode !== "insert" && input.key.toLowerCase() === "g") {
+    return { handled: await context.gotoTarget(input.shift ? "references" : "definition") };
+  }
+
+  if (input.alt && !input.meta && !input.ctrl && state.mode !== "insert" && input.key.toLowerCase() === "r") {
+    context.openCommandLine(":");
+    await context.getController().handleTextInput("rename ");
+    return { handled: true };
+  }
+
+  if (input.ctrl && !input.meta && !input.alt && input.key === " ") {
+    return { handled: await context.requestCompletion() };
+  }
+
   if (input.ctrl && !input.meta && !input.alt && state.mode === "insert" && input.key === "s") {
     controller.execute((_state, _dispatch, commandContext) => commandContext.history?.checkpoint?.() ?? false);
     return { handled: true };

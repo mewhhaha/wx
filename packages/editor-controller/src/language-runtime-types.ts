@@ -1,5 +1,15 @@
 import type { EditorState, TextChange, Transaction } from "@wx/editor-core";
-import type { EditorCodeAction, EditorDiagnostic, EditorHover, EditorLineRange, HighlightSpan } from "@wx/editor-language";
+import type {
+  EditorCodeAction,
+  EditorCompletionItem,
+  EditorDiagnostic,
+  EditorHover,
+  EditorLineRange,
+  EditorLocationTarget,
+  EditorRenameChangeSet,
+  EditorSymbol,
+  HighlightSpan
+} from "@wx/editor-language";
 
 import type {
   EditorFileSearchResult,
@@ -46,6 +56,28 @@ export interface LanguageCodeActionSource {
   }): Promise<readonly EditorCodeAction[]>;
 }
 
+export interface LanguageCompletionSource {
+  complete(document: Snapshot, offset: number): Promise<readonly EditorCompletionItem[]>;
+}
+
+export interface LanguageGotoSource {
+  definition?(document: Snapshot, offset: number): Promise<readonly EditorLocationTarget[]>;
+  declaration?(document: Snapshot, offset: number): Promise<readonly EditorLocationTarget[]>;
+  typeDefinition?(document: Snapshot, offset: number): Promise<readonly EditorLocationTarget[]>;
+  implementation?(document: Snapshot, offset: number): Promise<readonly EditorLocationTarget[]>;
+  references?(document: Snapshot, offset: number): Promise<readonly EditorLocationTarget[]>;
+}
+
+export interface LanguageRenameSource {
+  prepareRename?(document: Snapshot, offset: number): Promise<{ from: number; to: number } | null>;
+  rename(document: Snapshot, offset: number, nextName: string): Promise<readonly EditorRenameChangeSet[] | null>;
+}
+
+export interface LanguageSymbolSource {
+  documentSymbols?(document: Snapshot): Promise<readonly EditorSymbol[]>;
+  workspaceSymbols?(query: string, document?: Snapshot): Promise<readonly EditorSymbol[]>;
+}
+
 export interface LanguageFormatter {
   format(context: {
     document: Snapshot;
@@ -71,6 +103,13 @@ export interface LanguageRuntime {
   refreshLineChanges(): Promise<void>;
   requestCodeActions(): Promise<readonly EditorCodeAction[]>;
   applyCodeAction(action: EditorCodeAction): Promise<boolean>;
+  requestCompletion(): Promise<boolean>;
+  acceptCompletion(index?: number): Promise<boolean>;
+  moveCompletion(delta: number): boolean;
+  dismissCompletion(): boolean;
+  gotoTarget(kind: "definition" | "declaration" | "type-definition" | "implementation" | "references"): Promise<boolean>;
+  renameSymbol(nextName: string): Promise<boolean>;
+  openSymbols(kind: "document" | "workspace"): Promise<boolean>;
   formatDocument(): Promise<boolean>;
   saveDocument(targetPath?: string): Promise<boolean>;
 }
@@ -104,6 +143,17 @@ export interface LanguageActionsRuntime {
   formatDocument(): Promise<boolean>;
   saveDocument(targetPath?: string): Promise<boolean>;
   resetActionTracking(): void;
+}
+
+export interface LanguageLspRuntime {
+  requestCompletion(): Promise<boolean>;
+  acceptCompletion(index?: number): Promise<boolean>;
+  moveCompletion(delta: number): boolean;
+  dismissCompletion(): boolean;
+  gotoTarget(kind: "definition" | "declaration" | "type-definition" | "implementation" | "references"): Promise<boolean>;
+  renameSymbol(nextName: string): Promise<boolean>;
+  openSymbols(kind: "document" | "workspace"): Promise<boolean>;
+  resetLspTracking(): void;
 }
 
 export interface LineChangeHostServices {

@@ -8,6 +8,10 @@ const ROOT_COMMANDS: EditorCommandCompletionItem[] = [
   { label: "write", detail: "save document" },
   { label: "format", detail: "format document" },
   { label: "code-actions", detail: "show code actions" },
+  { label: "completion", detail: "request completion" },
+  { label: "goto", detail: "goto definition or references" },
+  { label: "symbols", detail: "show document or workspace symbols" },
+  { label: "rename", detail: "rename current symbol" },
   { label: "select-next", detail: "add next occurrence" },
   { label: "select-prev", detail: "add previous occurrence" },
   { label: "select-all", detail: "select all occurrences" },
@@ -21,7 +25,11 @@ const QUESTION_ACTIONS: EditorCommandCompletionItem[] = [
   { label: "F", detail: "search folder files" },
   { label: "b", detail: "show buffers" },
   { label: "d", detail: "show diagnostics" },
-  { label: "j", detail: "show jumplist" }
+  { label: "j", detail: "show jumplist" },
+  { label: "s", detail: "show document symbols" },
+  { label: "S", detail: "show workspace symbols" },
+  { label: "r", detail: "show references" },
+  { label: "n", detail: "rename current symbol" }
 ];
 
 export function getQuestionActionItems(): EditorCommandCompletionItem[] {
@@ -54,6 +62,18 @@ export function getCommandCompletionItems(
       .map((entry) => ({ label: entry, detail: "theme" }));
   }
 
+  if (commandName === "goto") {
+    return ["definition", "declaration", "type-definition", "implementation", "references"]
+      .filter((entry) => entry.includes(commandArgument.toLowerCase()))
+      .map((entry) => ({ label: entry, detail: "goto target" }));
+  }
+
+  if (commandName === "symbols") {
+    return ["document", "workspace"]
+      .filter((entry) => entry.includes(commandArgument.toLowerCase()))
+      .map((entry) => ({ label: entry, detail: "symbol scope" }));
+  }
+
   if (!hasArgumentSpace) {
     return ROOT_COMMANDS.filter((entry) => entry.label.startsWith(commandName));
   }
@@ -71,6 +91,7 @@ export function hasRunnableCommandLineValue(rawValue: string, themeNames: readon
   const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
   const value = commandName.toLowerCase();
   const commandArgument = argumentParts.join(" ").trim();
+  const normalizedArgument = commandArgument.toLowerCase();
 
   if (
     [
@@ -81,6 +102,7 @@ export function hasRunnableCommandLineValue(rawValue: string, themeNames: readon
       "code-actions",
       "codeaction",
       "ca",
+      "completion",
       "q",
       "quit",
       "select-next",
@@ -95,14 +117,20 @@ export function hasRunnableCommandLineValue(rawValue: string, themeNames: readon
   }
 
   if (value !== "theme") {
-    return false;
+    if (value === "goto") {
+      return ["definition", "declaration", "type-definition", "implementation", "references"].includes(normalizedArgument);
+    }
+
+    if (value === "symbols") {
+      return ["document", "workspace"].includes(normalizedArgument);
+    }
+
+    return value === "rename" ? !!commandArgument : false;
   }
 
   if (!commandArgument) {
     return true;
   }
-
-  const normalizedArgument = commandArgument.toLowerCase();
   return themeNames.some(
     (entry) => entry.toLowerCase() === normalizedArgument || entry.toLowerCase().startsWith(normalizedArgument)
   );

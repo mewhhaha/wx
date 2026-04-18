@@ -114,6 +114,31 @@ export interface EditorPickerState {
   previewLoading: boolean;
 }
 
+export interface EditorCompletionItemState {
+  label: string;
+  detail?: string;
+  kind?: string;
+  documentation?: string;
+  insertText?: string;
+  selected?: boolean;
+}
+
+export interface EditorCompletionState {
+  active: boolean;
+  loading: boolean;
+  anchorOffset: number | null;
+  items: readonly EditorCompletionItemState[];
+  selectedIndex: number;
+  error: string | null;
+}
+
+export interface EditorRenameState {
+  active: boolean;
+  anchorOffset: number | null;
+  value: string;
+  error: string | null;
+}
+
 export interface EditorHoverState {
   active: boolean;
   pinned: boolean;
@@ -185,6 +210,10 @@ export interface EditorLanguagePresentationState {
   diagnosticsRequestId: number;
   lineChangesRequestId: number;
   hoverRequestId: number;
+  completionRequestId: number;
+  navigationRequestId: number;
+  renameRequestId: number;
+  symbolsRequestId: number;
   highlightCache: Map<number, HighlightSpan[]>;
   highlightCoverage: Set<number>;
   diagnostics: readonly EditorDiagnostic[];
@@ -200,6 +229,8 @@ export interface EditorUiPresentationState {
   commandLine: EditorCommandLineState;
   commandCompletionIndex: number;
   commandCompletionItems: readonly EditorCommandCompletionItem[];
+  completion: EditorCompletionState;
+  rename: EditorRenameState;
   picker: EditorPickerState;
   bottomMessage: EditorBottomMessageState | null;
   hover: EditorHoverState;
@@ -302,6 +333,13 @@ export interface EditorController {
   splitSelectionsByLine(): boolean;
   collapseSelections(): boolean;
   removePrimarySelection(): boolean;
+  requestCompletion(): Promise<boolean>;
+  acceptCompletion(index?: number): Promise<boolean>;
+  moveCompletion(delta: number): boolean;
+  dismissCompletion(): boolean;
+  gotoTarget(kind: "definition" | "declaration" | "type-definition" | "implementation" | "references"): Promise<boolean>;
+  renameSymbol(nextName: string): Promise<boolean>;
+  openSymbols(kind: "document" | "workspace"): Promise<boolean>;
   updatePresentationState(
     updater: (state: EditorPresentationState) => void,
     effectType?: string,

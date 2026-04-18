@@ -132,14 +132,45 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   });
 
   languageRuntime = createLanguageRuntime({
-    getState: () => state,
-    getPresentation: () => presentation,
-    getSearchMatchCache: () => searchRuntime.getSearchMatchCache(),
-    getVisibleLineViewport: () => viewportModelRuntime.getVisibleLineViewportValue(),
-    getVisibleHighlightViewport: () => viewportModelRuntime.getVisibleHighlightViewportValue(),
-    getSnapshot: contextRuntime.getSnapshot,
-    emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
-    dispatch: (transaction) => lifecycleRuntime.dispatch(transaction)
+    context: {
+      getState: () => state,
+      getPresentation: () => presentation,
+      getSearchMatchCache: () => searchRuntime.getSearchMatchCache(),
+      getVisibleLineViewport: () => viewportModelRuntime.getVisibleLineViewportValue(),
+      getVisibleHighlightViewport: () => viewportModelRuntime.getVisibleHighlightViewportValue(),
+      getSnapshot: contextRuntime.getSnapshot,
+      emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
+      dispatch: (transaction) => lifecycleRuntime.dispatch(transaction)
+    },
+    setBottomMessage(message) {
+      sessionRuntime.setBottomMessage(message);
+    },
+    setCompletionState(next, effectType) {
+      sessionRuntime.setCompletionState(next, effectType);
+    },
+    setRenameState(next, effectType) {
+      sessionRuntime.setRenameState(next, effectType);
+    },
+    applySelectionRange: contextRuntime.applySelectionRange,
+    revealSelectionWithinViewport: () => viewportModelRuntime.revealSelectionWithinViewport(),
+    syncVisibleViewportRows,
+    syncVisibleLanguageDecorations: () => languageRuntime.syncVisibleLanguageDecorations(),
+    ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
+    pushJump: () => registersJumpsRuntime.pushJumpEntry(createJumpEntry(state)),
+    openBuffer: async (filePath) => controller.openBuffer(filePath),
+    findBufferState(filePath) {
+      return buffersRuntime.findBufferByFilePath(filePath)?.state ?? null;
+    },
+    storeBufferState(filePath, nextState, dirty) {
+      buffersRuntime.addBuffer(filePath, nextState, dirty);
+    },
+    createStateForText: buffersRuntime.createStateForText,
+    openActionPicker(options) {
+      return pickerRuntime.openActionPicker(options);
+    },
+    openSearchPicker(source) {
+      return pickerRuntime.openSearchPicker(source);
+    }
   });
 
   const syncVisibleLanguageDecorations = () => languageRuntime.syncVisibleLanguageDecorations();
@@ -287,6 +318,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
     setBottomMessage: sessionRuntime.setBottomMessage,
     setCommandLineState: sessionRuntime.setCommandLineState,
+    setRenameState: sessionRuntime.setRenameState,
     emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
     loadCodeActions: () => pickerRuntime.loadCodeActions()
   });
@@ -321,6 +353,13 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     executeEditorCommand: commandsRuntime.executeEditorCommand,
     executeCommandWithCount: commandsRuntime.executeCommandWithCount,
     executeCommandWithCountSync: commandsRuntime.executeCommandWithCountSync,
+    requestCompletion: () => languageRuntime.requestCompletion(),
+    acceptCompletion: (index) => languageRuntime.acceptCompletion(index),
+    moveCompletion: (delta) => languageRuntime.moveCompletion(delta),
+    dismissCompletion: () => languageRuntime.dismissCompletion(),
+    gotoTarget: (kind) => languageRuntime.gotoTarget(kind),
+    renameSymbol: (nextName) => languageRuntime.renameSymbol(nextName),
+    openSymbols: (kind) => languageRuntime.openSymbols(kind),
     runRepeatableMotion: commandsRuntime.runRepeatableMotion,
     recordRepeatableMotion(candidate, didChange) {
       if (didChange) {

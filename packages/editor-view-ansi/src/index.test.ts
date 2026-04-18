@@ -794,6 +794,36 @@ describe("@wx/editor-view-ansi", () => {
     terminal.destroy();
   });
 
+  it("routes Ctrl+Space through ANSI completion requests", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.setLanguageServices([
+      {
+        completion: {
+          async complete() {
+            return [{ label: "alphabet", detail: "value" }];
+          }
+        }
+      }
+    ]);
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      cols: 80,
+      rows: 12,
+      write: vi.fn(),
+      enterAltScreen: false
+    });
+
+    terminal.mount();
+    input.emit("\0");
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.completion.active).toBe(true);
+    expect(controller.getPresentationState().ui.completion.items.map((item) => item.label)).toEqual(["alphabet"]);
+    terminal.destroy();
+  });
+
   it("keeps explicit controller host services instead of replacing them with Node fallback", async () => {
     const searchFiles = vi.fn(async () => [{ filePath: "src/explicit.ts" }]);
     const controller = createEditorController({ value: "export const current = 1;\n", filePath: "src/current.ts" });

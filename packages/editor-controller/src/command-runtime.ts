@@ -35,6 +35,7 @@ interface CommandRuntimeContext {
   ensureVisibleHighlightCoverage(): Promise<void>;
   setBottomMessage(message: EditorBottomMessageState | null): void;
   setCommandLineState(next: EditorPresentationState["ui"]["commandLine"], effectType?: string): void;
+  setRenameState(next: EditorPresentationState["ui"]["rename"], effectType?: string): void;
   emitPresentationUpdate(effectType?: string): void;
   loadCodeActions(): Promise<boolean>;
 }
@@ -212,6 +213,25 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
     return { themeName: next.themeName, changed: next.changed };
   };
 
+  const syncRenamePromptState = (value: string, active: boolean) => {
+    const trimmed = value.trimStart();
+    if (!active || !trimmed.toLowerCase().startsWith("rename")) {
+      context.setRenameState({ active: false, anchorOffset: null, value: "", error: null }, "ui.rename");
+      return;
+    }
+
+    const argument = trimmed.slice("rename".length).trimStart();
+    context.setRenameState(
+      {
+        active: true,
+        anchorOffset: context.getActiveOffset(),
+        value: argument,
+        error: null
+      },
+      "ui.rename"
+    );
+  };
+
   const applyCommandCompletion = async (themeNames: readonly string[] = []): Promise<EditorKeyInputResult | null> => {
     const presentation = context.getPresentation();
     const items = getCommandCompletionItems(presentation.ui.commandLine, themeNames);
@@ -266,6 +286,7 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
     presentation.ui.commandCompletionIndex = 0;
     presentation.ui.commandCompletionItems = [];
     presentation.ui.previewTheme = null;
+    context.setRenameState({ active: false, anchorOffset: null, value: "", error: null }, "ui.rename");
     context.setCommandLineState({ active: true, value: "", prompt }, "ui.command-line.open");
   };
 
@@ -287,6 +308,7 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
       presentation.ui.commandCompletionIndex = 0;
       presentation.ui.commandCompletionItems = [];
       presentation.ui.previewTheme = null;
+      context.setRenameState({ active: false, anchorOffset: null, value: "", error: null }, "ui.rename");
       context.setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.close");
       return { handled: true };
     }
@@ -294,6 +316,7 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
     if (key === "Backspace") {
       const nextValue = commandLine.value.slice(0, -1);
       context.setCommandLineState({ ...commandLine, value: nextValue }, "ui.command-line.input");
+      syncRenamePromptState(nextValue, commandLine.prompt === ":");
       if (commandLine.prompt === "/" || commandLine.prompt === "?") {
         previewSearch(nextValue, commandLine.prompt === "/" ? "forward" : "backward");
       }
@@ -306,6 +329,7 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
       presentation.ui.commandCompletionIndex = 0;
       presentation.ui.commandCompletionItems = [];
       presentation.ui.previewTheme = null;
+      context.setRenameState({ active: false, anchorOffset: null, value: "", error: null }, "ui.rename");
       context.setCommandLineState({ active: false, value: "", prompt: ":" }, "ui.command-line.commit");
 
       if (prompt === "/" || prompt === "?") {
@@ -373,6 +397,60 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
         return { handled: true };
       }
 
+      if (value === "completion") {
+        await controller.requestCompletion();
+        return { handled: true };
+      }
+
+      if (value === "goto") {
+        if (!commandArgument) {
+          context.setBottomMessage({ tone: "warning", text: "Goto target required" });
+          return { handled: true };
+        }
+
+        const kind =
+          commandArgument === "definition" ||
+          commandArgument === "declaration" ||
+          commandArgument === "type-definition" ||
+          commandArgument === "implementation" ||
+          commandArgument === "references"
+            ? commandArgument
+            : null;
+
+        if (!kind) {
+          context.setBottomMessage({ tone: "warning", text: `Unknown goto target: ${commandArgument}` });
+          return { handled: true };
+        }
+
+        await controller.gotoTarget(kind);
+        return { handled: true };
+      }
+
+      if (value === "symbols") {
+        if (!commandArgument) {
+          context.setBottomMessage({ tone: "warning", text: "Symbol scope required" });
+          return { handled: true };
+        }
+
+        if (commandArgument !== "document" && commandArgument !== "workspace") {
+          context.setBottomMessage({ tone: "warning", text: `Unknown symbols scope: ${commandArgument}` });
+          return { handled: true };
+        }
+
+        await controller.openSymbols(commandArgument);
+        return { handled: true };
+      }
+
+      if (value === "rename") {
+        if (!commandArgument) {
+          context.setBottomMessage({ tone: "warning", text: "Rename target required" });
+          return { handled: true };
+        }
+
+        await controller.renameSymbol(commandArgument);
+        return { handled: true };
+      }
+
       if (value === "select-next") {
         controller.selectNextOccurrence(false);
         return { handled: true };
@@ -410,6 +488,7 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
     if (key.length === 1) {
       const nextValue = `${commandLine.value}${key}`;
       context.setCommandLineState({ ...commandLine, value: nextValue }, "ui.command-line.input");
+      syncRenamePromptState(nextValue, commandLine.prompt === ":");
       if (commandLine.prompt === "/" || commandLine.prompt === "?") {
         previewSearch(nextValue, commandLine.prompt === "/" ? "forward" : "backward");
       }

@@ -55,6 +55,8 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
     patchCommandPopover() {
       const uiState = options.getUiState();
       const items = uiState.commandCompletionItems;
+      const layout = options.getRenderedLayout();
+      const completionPanel = layout.panels.find((panel) => panel.kind === "completion");
 
       if (uiState.picker.active && uiState.picker.variant === "modal") {
         options.commandPopover.hidden = false;
@@ -128,6 +130,30 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
         preview.append(previewTitle, previewBody);
         body.append(list, preview);
         panel.append(queryRow, body);
+        options.commandPopover.replaceChildren(panel);
+        return;
+      }
+
+      if (completionPanel) {
+        options.commandPopover.hidden = false;
+        options.commandPopover.dataset.kind = "completion";
+        const panel = document.createElement("div");
+        panel.className = "wx-editor__command-popover-panel";
+
+        completionPanel.rows.forEach((rowRuns, index) => {
+          const row = document.createElement("div");
+          const run = rowRuns[0];
+          row.className = "wx-editor__command-completion";
+          row.dataset.selected = String(index === uiState.completion.selectedIndex || !!run?.selectedInPicker);
+          row.dataset.wxEditorCommandCompletion = run?.text.trimEnd() ?? "";
+
+          const label = document.createElement("span");
+          label.className = "wx-editor__command-completion-label";
+          label.textContent = run?.text.trimEnd() ?? "";
+          row.append(label);
+          panel.append(row);
+        });
+
         options.commandPopover.replaceChildren(panel);
         return;
       }
@@ -294,7 +320,7 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
         return;
       }
 
-      const panel = options.getRenderedLayout().panels[0];
+      const panel = options.getRenderedLayout().panels.find((entry) => entry.kind === "tooltip");
 
       if (!panel) {
         options.tooltip.hidden = true;
