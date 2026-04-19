@@ -32,6 +32,7 @@ const EDITOR_STYLE_TEXT = `
 
   .wx-editor__surface {
     position: relative;
+    display: flex;
     flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
@@ -51,13 +52,19 @@ const EDITOR_STYLE_TEXT = `
 
   .wx-editor__rows {
     position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
     z-index: 1;
   }
 
   .wx-editor__viewport {
     display: grid;
     grid-template-columns: 1ch max-content 2ch minmax(0, 1fr);
+    align-content: start;
     column-gap: 0;
+    height: 100%;
+    overflow: hidden;
   }
 
   .wx-editor__spacer {

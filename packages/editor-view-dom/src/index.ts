@@ -246,7 +246,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       }
       runtime.renderVisibleRows(true);
     });
-    resizeObserver.observe(surface);
+    resizeObserver.observe(container);
   }
 
   return {
