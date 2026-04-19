@@ -88,7 +88,7 @@ export function createDomHandleRuntime(options: CreateDomHandleRuntimeOptions): 
       return options.controller.getState();
     },
     setFilePath(filePath) {
-      options.context.filePath = filePath;
+      options.context.bufferTitle = filePath;
       options.controller.setFilePath(filePath);
       options.runtime.patchStatus();
     },

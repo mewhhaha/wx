@@ -71,7 +71,7 @@ interface CreateControllerSurfaceOptions {
     renameSymbol(nextName: string): Promise<boolean>;
     openSymbols(kind: "document" | "workspace"): Promise<boolean>;
     formatDocument(): Promise<boolean>;
-    saveDocument(targetPath: string): Promise<boolean>;
+    saveDocument(targetPath?: string | null): Promise<boolean>;
   };
   sessionRuntime: {
     setBottomMessage(message: EditorPresentationState["ui"]["bottomMessage"] | null, effectType?: string): void;
@@ -96,18 +96,29 @@ interface CreateControllerSurfaceOptions {
   workspaceRuntime: {
     getWorkspacePresentationState(state: EditorState, presentation: EditorPresentationState): EditorWorkspacePresentationState;
     getBuffers(): readonly EditorBufferState[];
-    getBufferById(bufferId: string): { id: string; filePath: string; dirty: boolean } | null;
-    findBufferByFilePath(filePath: string): { id: string; filePath: string; dirty: boolean } | null;
-    syncActiveFilePath(filePath: string): void;
-    markActiveSaved(filePath?: string): void;
+    getBufferById(bufferId: string): EditorBufferState | null;
+    findBufferByFilePath(filePath: string): EditorBufferState | null;
+    syncActiveFilePath(filePath: string | null): void;
+    markActiveSaved(filePath?: string | null): void;
     storeBufferState(filePath: string, state: EditorState, dirty?: boolean): {
       id: string;
+      kind: "file";
       filePath: string;
+      displayName: string;
+      dirty: boolean;
+    };
+    createScratchBuffer(state: EditorState): {
+      id: string;
+      kind: "scratch";
+      filePath: null;
+      displayName: string;
       dirty: boolean;
     };
     bindActivePaneToBuffer(bufferId: string): boolean;
+    bindActivePaneToNewScratch(): { id: string } | null;
     createStateForText(text: string, template: EditorState): EditorState;
     splitActivePane(axis: "horizontal" | "vertical"): boolean;
+    splitActivePaneWithScratch(axis: "horizontal" | "vertical"): { id: string } | null;
     closeActivePane(): { changed: boolean; nextActivePaneId: string | null };
     onlyActivePane(): boolean;
     swapActivePane(direction: "left" | "right" | "up" | "down"): boolean;
@@ -256,6 +267,11 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     return true;
   };
   const openSelectionInPane = async (axis: "horizontal" | "vertical") => {
+    if (!presentation.filePath) {
+      options.sessionRuntime.setBottomMessage({ tone: "warning", text: "Scratch buffer has no folder context" });
+      return false;
+    }
+
     const selectedText = extractSelectionTarget(options.getState(), options.getActiveOffset());
     const target = selectedText ? normalizePathLikeText(selectedText) : null;
     if (!target) {
@@ -394,6 +410,24 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       );
       return switchBuffer(entry.id);
     },
+    newScratchBuffer() {
+      const scratch = options.workspaceRuntime.bindActivePaneToNewScratch();
+      if (!scratch) {
+        return false;
+      }
+
+      loadActivePaneState("buffer.new-scratch", { clearHistory: true, resetLanguage: true });
+      return true;
+    },
+    newScratchSplit(axis) {
+      const scratch = options.workspaceRuntime.splitActivePaneWithScratch(axis);
+      if (!scratch) {
+        return false;
+      }
+
+      loadActivePaneState(`pane.split-scratch.${axis}`, { clearHistory: true, resetLanguage: true });
+      return true;
+    },
     splitPane(axis) {
       if (!options.workspaceRuntime.splitActivePane(axis)) {
         return false;
@@ -458,6 +492,11 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       return true;
     },
     async searchFiles(scope, query = "") {
+      if (scope === "folder" && !presentation.filePath) {
+        options.sessionRuntime.setBottomMessage({ tone: "warning", text: "Scratch buffer has no folder context" });
+        return [];
+      }
+
       const searchFiles = presentation.language.host?.searchFiles;
       if (!searchFiles) {
         return [];
@@ -466,7 +505,7 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       try {
         return await searchFiles({
           scope,
-          filePath: presentation.filePath,
+          filePath: presentation.filePath ?? "",
           query
         });
       } catch {
@@ -563,6 +602,7 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       }
 
       presentation.filePath = filePath;
+      presentation.bufferTitle = filePath ?? presentation.bufferTitle;
       options.workspaceRuntime.syncActiveFilePath(filePath);
       options.lifecycleRuntime.emitPresentationUpdate("presentation.file-path");
       void options.languageRuntime.syncLanguage({

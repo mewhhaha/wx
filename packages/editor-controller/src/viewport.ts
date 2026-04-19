@@ -50,6 +50,7 @@ export function rebuildViewportPresentation(
   const nextInput = {
     state,
     filePath: presentation.filePath,
+    bufferTitle: presentation.bufferTitle,
     searchState: presentation.search,
     highlights: [] as HighlightSpan[],
     diagnostics: [] as EditorDiagnostic[],

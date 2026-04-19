@@ -261,7 +261,8 @@ export interface EditorUiPresentationState {
 }
 
 export interface EditorPresentationState {
-  filePath: string;
+  filePath: string | null;
+  bufferTitle: string;
   themeName: string | null;
   viewport: EditorViewportPresentationState;
   language: EditorLanguagePresentationState;
@@ -278,7 +279,8 @@ export interface EditorWorkspacePanePresentationState {
   paneId: string;
   bufferId: string;
   active: boolean;
-  filePath: string;
+  filePath: string | null;
+  bufferTitle: string;
   buffer: EditorBufferDocumentState;
   view: EditorViewState;
   state: EditorState;
@@ -299,7 +301,9 @@ export interface EditorFileSearchResult {
 
 export interface EditorBufferState {
   id: string;
-  filePath: string;
+  kind: "file" | "scratch";
+  filePath: string | null;
+  displayName: string;
   dirty: boolean;
 }
 
@@ -364,6 +368,8 @@ export interface EditorController {
   getBuffers(): readonly EditorBufferState[];
   switchBuffer(bufferId: string): boolean;
   openBuffer(filePath: string): Promise<boolean>;
+  newScratchBuffer(): boolean;
+  newScratchSplit(axis: EditorWorkspaceSplitAxis): boolean;
   splitPane(axis: EditorWorkspaceSplitAxis): boolean;
   closePane(): boolean;
   onlyPane(): boolean;
@@ -398,7 +404,7 @@ export interface EditorController {
   revealSelection(): void;
   setLanguageServices(languageServices: EditorLanguageServiceInput | readonly EditorLanguageServices[] | null): void;
   setHostServices(host: EditorHostServices | null): void;
-  setFilePath(filePath: string): void;
+  setFilePath(filePath: string | null): void;
   setThemeName(themeName: string | null): void;
   handleKeyInput(input: EditorKeyInput, options?: EditorKeyInputOptions): Promise<EditorKeyInputResult>;
   handleTextInput(text: string, options?: EditorKeyInputOptions): Promise<EditorKeyInputResult>;

@@ -6,7 +6,8 @@ export function createPresentationState(
   options: CreateEditorControllerOptions
 ): EditorPresentationState {
   return {
-    filePath: options.filePath ?? "untitled.ts",
+    filePath: options.filePath ?? null,
+    bufferTitle: options.filePath ?? "[scratch]",
     themeName: options.theme ?? null,
     viewport: {
       topVisualRow: 0,

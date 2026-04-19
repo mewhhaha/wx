@@ -204,6 +204,26 @@ describe("@wx/editor-view-ansi", () => {
     expect(frame).toContain("examples/test");
   });
 
+  it("renders scratch title by default in ANSI frame output", () => {
+    const controller = createEditorController({ value: "alpha" });
+    controller.setViewportMetrics({
+      visibleRowCapacity: 4,
+      wrapColumns: 24,
+      softWrap: true
+    });
+
+    const frame = stripAnsi(
+      renderEditorAnsiFrame({
+        state: controller.getState(),
+        presentation: controller.getPresentationState(),
+        cols: 30,
+        rows: 6
+      })
+    );
+
+    expect(frame).toContain("[scratch]");
+  });
+
   it("renders split workspace panes with divider lines", () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
     controller.splitPane("vertical");
@@ -929,6 +949,12 @@ describe("@wx/editor-view-ansi", () => {
     input.emit("v");
     await flushAsyncWork();
     expect(controller.getWorkspacePresentationState().panes).toHaveLength(2);
+
+    input.emit("\u0017");
+    input.emit("n");
+    await flushAsyncWork();
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(3);
+    expect(controller.getPresentationState().bufferTitle).toBe("[scratch]");
 
     await controller.openBuffer("src/one.ts");
     await controller.openBuffer("src/two.ts");

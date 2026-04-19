@@ -101,7 +101,7 @@ export interface DomEditorContext {
   normalizeCommandThemes(themes: readonly ThemeSpec[] | undefined, activeTheme: ThemeSpec): ThemeSpec[];
   state: EditorState;
   presentation: EditorPresentationState;
-  filePath: string;
+  bufferTitle: string;
   theme: ThemeSpec;
   languageServices: EditorLanguageServices[];
   availableCommandThemes: ThemeSpec[];
@@ -241,7 +241,7 @@ export function createDomEditorRuntime(context: DomEditorContext): DomEditorRunt
     readStatusSignature({
       state: context.state,
       presentation: context.presentation,
-      filePath: context.filePath,
+      bufferTitle: context.bufferTitle,
       diagnosticsSummary: getDiagnosticsSummary()
     });
 
@@ -278,7 +278,7 @@ export function createDomEditorRuntime(context: DomEditorContext): DomEditorRunt
   };
 
   const syncPresentationMirrors = () => {
-    context.filePath = context.presentation.filePath;
+    context.bufferTitle = context.presentation.bufferTitle;
     syncViewportMirrors();
     syncLanguageMirrors();
     context.currentLayoutModel = null;

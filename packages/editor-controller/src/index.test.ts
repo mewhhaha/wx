@@ -1005,6 +1005,80 @@ describe("editor controller", () => {
     expect(siblingPane.state.doc.text).toBe("alpha");
   });
 
+  it("starts without a file path as a real scratch buffer", () => {
+    const controller = createEditorController({ value: "alpha" });
+
+    expect(controller.getPresentationState().filePath).toBeNull();
+    expect(controller.getPresentationState().bufferTitle).toBe("[scratch]");
+    expect(controller.getBuffers()).toEqual([
+      expect.objectContaining({
+        kind: "scratch",
+        filePath: null,
+        displayName: "[scratch]"
+      })
+    ]);
+  });
+
+  it("creates numbered scratch buffers and scratch splits", () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    expect(controller.newScratchBuffer()).toBe(true);
+    expect(controller.getPresentationState().bufferTitle).toBe("[scratch]");
+
+    expect(controller.newScratchSplit("vertical")).toBe(true);
+    const workspace = controller.getWorkspacePresentationState();
+
+    expect(workspace.panes).toHaveLength(2);
+    expect(controller.getBuffers().filter((entry) => entry.kind === "scratch").map((entry) => entry.displayName)).toEqual([
+      "[scratch]",
+      "[scratch 2]"
+    ]);
+  });
+
+  it("warns on bare write for scratch and converts on write with path", async () => {
+    const writes: Array<{ filePath: string; text: string }> = [];
+    const controller = createEditorController({ value: "alpha" });
+    controller.setHostServices({
+      async writeFile(payload) {
+        writes.push(payload);
+      }
+    });
+
+    controller.openCommandLine(":");
+    for (const key of "write") {
+      await controller.handleCommandLineKey(key);
+    }
+    await controller.handleCommandLineKey("Enter");
+
+    expect(controller.getPresentationState().ui.bottomMessage?.text).toBe("Scratch buffer has no file path");
+    expect(controller.getPresentationState().filePath).toBeNull();
+
+    controller.openCommandLine(":");
+    for (const key of "write examples/demo.ts") {
+      await controller.handleCommandLineKey(key);
+    }
+    await controller.handleCommandLineKey("Enter");
+
+    expect(writes).toEqual([{ filePath: "examples/demo.ts", text: "alpha" }]);
+    expect(controller.getPresentationState().filePath).toBe("examples/demo.ts");
+    expect(controller.getPresentationState().bufferTitle).toBe("examples/demo.ts");
+    expect(controller.getBuffers()[0]).toEqual(
+      expect.objectContaining({
+        kind: "file",
+        filePath: "examples/demo.ts",
+        displayName: "examples/demo.ts",
+        dirty: false
+      })
+    );
+  });
+
+  it("warns when folder search starts from scratch", async () => {
+    const controller = createEditorController({ value: "alpha" });
+
+    expect(await controller.searchFiles("folder", "a")).toEqual([]);
+    expect(controller.getPresentationState().ui.bottomMessage?.text).toBe("Scratch buffer has no folder context");
+  });
+
   it("focuses and closes panes through workspace APIs", () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
 

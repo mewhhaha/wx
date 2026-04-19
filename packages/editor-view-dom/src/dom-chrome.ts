@@ -12,7 +12,7 @@ interface CreateDomChromeRuntimeOptions {
   getState(): EditorState;
   getPresentation(): EditorPresentationState;
   getUiState(): EditorPresentationState["ui"];
-  getFilePath(): string;
+  getBufferTitle(): string;
   getMetrics(): { charWidth: number; lineHeight: number };
   getRenderedLayout(): EditorLayoutModel;
   getDiagnosticsSummary(): { errors: number; warnings: number };
@@ -207,7 +207,7 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
 
       options.statusMode.textContent = ` ${statusModeName} `;
       options.statusMode.dataset.mode = statusModeName;
-      options.statusFile.textContent = ` ${options.getFilePath()}`;
+      options.statusFile.textContent = ` ${options.getBufferTitle()}`;
       options.statusMeta.textContent = [
         "1 sel",
         errors > 0 ? `E${errors}` : "",

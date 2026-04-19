@@ -356,10 +356,21 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       const normalizedQuery = query.trim().toLowerCase();
       return context
         .getBuffers()
-        .filter((entry) => !normalizedQuery || entry.filePath.toLowerCase().includes(normalizedQuery))
+        .filter((entry) => {
+          if (!normalizedQuery) {
+            return true;
+          }
+
+          return `${entry.displayName}\n${entry.filePath ?? ""}`.toLowerCase().includes(normalizedQuery);
+        })
         .map((entry) => ({
-          label: entry.filePath,
-          detail: entry.dirty ? "modified" : "saved",
+          label: entry.displayName,
+          detail:
+            entry.filePath && entry.filePath !== entry.displayName
+              ? `${entry.dirty ? "modified" : "saved"} • ${entry.filePath}`
+              : entry.dirty
+                ? "modified"
+                : "saved",
           run: () => {
             context.getController().switchBuffer(entry.id);
             closePicker("ui.picker.close");
@@ -382,10 +393,10 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     invalidateAsyncPickerRequests();
     const workspace = context.getController().getWorkspacePresentationState();
     const items = workspace.panes.map((pane) => ({
-      label: pane.filePath,
+      label: pane.bufferTitle,
       detail: pane.active ? "active pane" : pane.bufferId,
       preview: () => ({
-        title: pane.filePath,
+        title: pane.bufferTitle,
         content: pane.state.doc.text
       }),
       run: () => {

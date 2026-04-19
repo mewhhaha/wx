@@ -163,10 +163,14 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
     return true;
   };
 
-  const loadPreviewText = async (filePath: string) => {
+  const loadPreviewText = async (filePath: string | null) => {
     const presentation = options.context.getPresentation();
     if (filePath === presentation.filePath) {
       return options.context.getState().doc.text;
+    }
+
+    if (!filePath) {
+      return null;
     }
 
     const existing = options.findBufferState(filePath);
@@ -188,16 +192,18 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
     snapshot: ReturnType<LanguageRuntimeContext["getSnapshot"]>
   ): PickerActionItem[] => {
     return targets.map((target) => {
-      const filePath = target.filePath ?? options.context.getPresentation().filePath;
+      const presentation = options.context.getPresentation();
+      const filePath = target.filePath ?? presentation.filePath;
+      const title = filePath ?? presentation.bufferTitle;
       return {
-        label: filePath,
+        label: title,
         detail: describeLocation(snapshot, target),
         preview: async () => {
           const text = await loadPreviewText(filePath);
           if (text === null) {
             return null;
           }
-          return { title: filePath, content: text };
+          return { title, content: text };
         },
         run: async () => {
           const jumped = await jumpToTarget(target);
@@ -461,7 +467,10 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
           if (text === null) {
             return null;
           }
-          return { title: targetFilePath, content: text };
+          return {
+            title: targetFilePath ?? options.context.getPresentation().bufferTitle,
+            content: text
+          };
         },
         run: async () => {
           await jumpToTarget({

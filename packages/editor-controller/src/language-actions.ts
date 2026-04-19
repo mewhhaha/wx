@@ -138,13 +138,13 @@ export function createLanguageActionsRuntime(options: CreateLanguageActionsRunti
       .catch(() => false);
   };
 
-  const saveDocument = (targetPath?: string) => {
+  const saveDocument = (targetPath?: string | null) => {
     const state = options.context.getState();
     const presentation = options.context.getPresentation();
     const nextPath = targetPath ?? presentation.filePath;
     const writeFile = options.getHostServices(presentation)?.writeFile;
 
-    if (!writeFile) {
+    if (!nextPath || !writeFile) {
       return Promise.resolve(false);
     }
 
@@ -155,6 +155,7 @@ export function createLanguageActionsRuntime(options: CreateLanguageActionsRunti
     })
       .then(() => {
         presentation.filePath = nextPath;
+        presentation.bufferTitle = nextPath;
         options.context.emitPresentationUpdate("presentation.file-path");
         void options.refreshLineChanges();
         queueMicrotask(() => {

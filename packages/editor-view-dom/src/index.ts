@@ -43,16 +43,18 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     options.controller ??
     createEditorController({
       value: options.value ?? "",
-      theme: options.theme?.name
+      theme: options.theme?.name,
+      filePath: options.filePath
     });
   let state = controller.getState();
-  let filePath = options.filePath ?? "untitled.ts";
   const host = options.host ?? null;
   let languageServices = normalizeLanguageServices(
     options.languageServices ?? languageProviderToServices(options.language ?? null)
   );
   let theme = options.theme ?? defaultTheme;
-  controller.setFilePath(filePath);
+  if (options.filePath !== undefined) {
+    controller.setFilePath(options.filePath);
+  }
   controller.setThemeName(theme.name);
   controller.setHostServices(host);
   controller.setLanguageServices(languageServices);
@@ -90,7 +92,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     normalizeCommandThemes,
     state,
     presentation,
-    filePath,
+    bufferTitle: presentation.bufferTitle,
     theme,
     languageServices,
     availableCommandThemes: normalizeCommandThemes(options.commandThemes, options.theme ?? defaultTheme),
@@ -168,7 +170,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     getState: () => context.state,
     getPresentation: () => presentation,
     getUiState: () => presentation.ui,
-    getFilePath: () => context.filePath,
+    getBufferTitle: () => context.bufferTitle,
     getMetrics: () => context.metrics,
     getRenderedLayout: runtime.getRenderedLayout,
     getDiagnosticsSummary() {

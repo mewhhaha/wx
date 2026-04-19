@@ -24,7 +24,9 @@ import type {
 
 interface WorkspaceBufferSession {
   id: string;
-  filePath: string;
+  kind: "file" | "scratch";
+  filePath: string | null;
+  displayName: string;
   dirty: boolean;
   buffer: EditorBufferDocumentState;
   language: EditorLanguagePresentationState;
@@ -50,16 +52,19 @@ export interface WorkspaceRuntime {
   getActiveBufferId(): string;
   getPaneIds(): readonly string[];
   getLayoutTree(): EditorPaneTreeNode;
-  getBuffers(): Array<{ id: string; filePath: string; dirty: boolean }>;
+  getBuffers(): Array<{ id: string; kind: "file" | "scratch"; filePath: string | null; displayName: string; dirty: boolean }>;
   getBufferById(bufferId: string): WorkspaceBufferSession | null;
   findBufferByFilePath(filePath: string): WorkspaceBufferSession | null;
   getBufferState(filePath: string): EditorState | null;
-  syncActiveFilePath(filePath: string): void;
-  markActiveSaved(filePath?: string): void;
+  syncActiveFilePath(filePath: string | null): void;
+  markActiveSaved(filePath?: string | null): void;
   createStateForText(text: string, template: EditorState): EditorState;
   storeBufferState(filePath: string, state: EditorState, dirty?: boolean): WorkspaceBufferSession;
+  createScratchBuffer(templateState: EditorState): WorkspaceBufferSession;
   bindActivePaneToBuffer(bufferId: string): boolean;
+  bindActivePaneToNewScratch(): WorkspaceBufferSession | null;
   splitActivePane(axis: EditorWorkspaceSplitAxis): boolean;
+  splitActivePaneWithScratch(axis: EditorWorkspaceSplitAxis): WorkspaceBufferSession | null;
   closeActivePane(): { changed: boolean; nextActivePaneId: string | null };
   onlyActivePane(): boolean;
   swapActivePane(direction: "left" | "right" | "up" | "down"): boolean;
@@ -335,17 +340,26 @@ function chooseFocusedPane(
 export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): WorkspaceRuntime {
   let nextBufferId = 2;
   let nextPaneId = 2;
+  let nextScratchIndex = 1;
   const split = splitEditorState(options.state);
   const buffers = new Map<string, WorkspaceBufferSession>();
   const panes = new Map<string, WorkspacePaneSession>();
+  const initialBufferKind: WorkspaceBufferSession["kind"] = options.presentation.filePath ? "file" : "scratch";
+  const initialDisplayName =
+    initialBufferKind === "file" ? options.presentation.filePath ?? "" : `[scratch${nextScratchIndex === 1 ? "" : ` ${nextScratchIndex}`}]`;
   const initialBuffer: WorkspaceBufferSession = {
     id: "buffer-1",
+    kind: initialBufferKind,
     filePath: options.presentation.filePath,
+    displayName: initialDisplayName,
     dirty: false,
     buffer: cloneBufferState(split.buffer),
     language: cloneLanguageState(options.presentation.language),
     viewTemplate: cloneViewState(split.view)
   };
+  if (initialBufferKind === "scratch") {
+    nextScratchIndex += 1;
+  }
   const initialPane: WorkspacePaneSession = {
     id: "pane-1",
     bufferId: initialBuffer.id,
@@ -360,6 +374,12 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
   let activeBufferId = initialBuffer.id;
   let activePaneId = initialPane.id;
   let layoutTree: EditorPaneTreeNode = { kind: "pane", paneId: initialPane.id };
+
+  const createScratchDisplayName = () => {
+    const label = `[scratch${nextScratchIndex === 1 ? "" : ` ${nextScratchIndex}`}]`;
+    nextScratchIndex += 1;
+    return label;
+  };
 
   const findBufferByFilePath = (filePath: string) => {
     for (const entry of buffers.values()) {
@@ -390,6 +410,7 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
     const panePresentation: EditorPresentationState = {
       ...presentation,
       filePath: buffer.filePath,
+      bufferTitle: buffer.displayName,
       viewport: cloneViewportState(pane.viewport),
       language: cloneLanguageState(buffer.language),
       ui: {
@@ -468,6 +489,7 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       bufferId: buffer.id,
       active,
       filePath: buffer.filePath,
+      bufferTitle: buffer.displayName,
       buffer: cloneBufferState(buffer.buffer),
       view: cloneViewState(pane.view),
       state,
@@ -489,7 +511,13 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       return cloneTree(layoutTree);
     },
     getBuffers() {
-      return [...buffers.values()].map(({ id, filePath, dirty }) => ({ id, filePath, dirty }));
+      return [...buffers.values()].map(({ id, kind, filePath, displayName, dirty }) => ({
+        id,
+        kind,
+        filePath,
+        displayName,
+        dirty
+      }));
     },
     getBufferById(bufferId) {
       return buffers.get(bufferId) ?? null;
@@ -506,11 +534,15 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
     syncActiveFilePath(filePath) {
       const buffer = getActiveBuffer();
       buffer.filePath = filePath;
+      buffer.kind = filePath ? "file" : "scratch";
+      buffer.displayName = filePath ?? buffer.displayName;
     },
     markActiveSaved(filePath) {
       const buffer = getActiveBuffer();
       if (filePath) {
         buffer.filePath = filePath;
+        buffer.kind = "file";
+        buffer.displayName = filePath;
       }
       buffer.dirty = false;
     },
@@ -526,7 +558,9 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       const existing = findBufferByFilePath(filePath);
 
       if (existing) {
+        existing.kind = "file";
         existing.filePath = filePath;
+        existing.displayName = filePath;
         existing.dirty = dirty;
         existing.buffer = cloneBufferState(splitState.buffer);
         existing.viewTemplate = cloneViewState(splitState.view);
@@ -546,8 +580,25 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
 
       const entry: WorkspaceBufferSession = {
         id: `buffer-${nextBufferId++}`,
+        kind: "file",
         filePath,
+        displayName: filePath,
         dirty,
+        buffer: cloneBufferState(splitState.buffer),
+        language: cloneLanguageState(options.presentation.language),
+        viewTemplate: cloneViewState(splitState.view)
+      };
+      buffers.set(entry.id, entry);
+      return entry;
+    },
+    createScratchBuffer(templateState) {
+      const splitState = splitEditorState(templateState);
+      const entry: WorkspaceBufferSession = {
+        id: `buffer-${nextBufferId++}`,
+        kind: "scratch",
+        filePath: null,
+        displayName: createScratchDisplayName(),
+        dirty: false,
         buffer: cloneBufferState(splitState.buffer),
         language: cloneLanguageState(options.presentation.language),
         viewTemplate: cloneViewState(splitState.view)
@@ -567,6 +618,15 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       pane.view = cloneViewState(buffer.viewTemplate);
       activeBufferId = bufferId;
       return true;
+    },
+    bindActivePaneToNewScratch() {
+      const scratch = this.createScratchBuffer(createEditorState({
+        value: "",
+        mode: getActivePane().view.mode,
+        language: getActiveBuffer().buffer.language,
+        theme: getActiveBuffer().buffer.theme
+      }));
+      return this.bindActivePaneToBuffer(scratch.id) ? scratch : null;
     },
     splitActivePane(axis) {
       const currentPane = getActivePane();
@@ -593,6 +653,19 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       activePaneId = nextPane.id;
       activeBufferId = nextPane.bufferId;
       return true;
+    },
+    splitActivePaneWithScratch(axis) {
+      if (!this.splitActivePane(axis)) {
+        return null;
+      }
+
+      const scratch = this.createScratchBuffer(createEditorState({
+        value: "",
+        mode: getActivePane().view.mode,
+        language: getActiveBuffer().buffer.language,
+        theme: getActiveBuffer().buffer.theme
+      }));
+      return this.bindActivePaneToBuffer(scratch.id) ? scratch : null;
     },
     closeActivePane() {
       if (panes.size <= 1) {
@@ -675,6 +748,8 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       pane.hover = cloneHoverState(presentation.ui.hover);
 
       buffer.filePath = presentation.filePath;
+      buffer.displayName = presentation.bufferTitle;
+      buffer.kind = presentation.filePath ? "file" : "scratch";
       buffer.buffer = cloneBufferState(splitState.buffer);
       buffer.viewTemplate = cloneViewState(splitState.view);
       if (runtimeOptions.docChanged) {
@@ -687,6 +762,7 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       const { pane, buffer } = ensureActivePair();
       const nextState = combineEditorState(buffer.buffer, pane.view);
       presentation.filePath = buffer.filePath;
+      presentation.bufferTitle = buffer.displayName;
       mutateViewportState(presentation.viewport, pane.viewport);
       mutateLanguageState(presentation.language, buffer.language);
       presentation.ui.completion = cloneCompletionState(pane.completion);

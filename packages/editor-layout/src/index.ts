@@ -271,7 +271,8 @@ export type EditorLayoutPendingAction =
   | { kind: "register-select"; insert: boolean };
 
 export interface EditorLayoutPresentationState {
-  filePath: string;
+  filePath: string | null;
+  bufferTitle: string;
   viewport: {
     topVisualRow: number;
     visibleRowCapacity: number;
@@ -1350,12 +1351,12 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
     },
     {
       col: statusModeText.length,
-      text: ` ${input.presentation.filePath}`,
+      text: ` ${input.presentation.bufferTitle}`,
       token: "status",
       part: "status-file"
     },
     {
-      col: statusModeText.length + input.presentation.filePath.length + 4,
+      col: statusModeText.length + input.presentation.bufferTitle.length + 4,
       text: [
         input.state.selection.ranges.length === 1 ? "1 sel" : `${input.state.selection.ranges.length} sels`,
         errors > 0 ? `E${errors}` : "",

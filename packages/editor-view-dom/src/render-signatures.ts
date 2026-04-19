@@ -58,7 +58,7 @@ export function getEffectiveThemeName(
 export function readStatusSignature(options: {
   state: EditorState;
   presentation: EditorPresentationState;
-  filePath: string;
+  bufferTitle: string;
   diagnosticsSummary: { errors: number; warnings: number };
 }): string {
   const cursorOffset =
@@ -71,7 +71,7 @@ export function readStatusSignature(options: {
     options.state.mode,
     options.presentation.ui.flash.active ? "flash" : "",
     serializePendingAction(options.presentation.ui.pendingAction),
-    options.filePath,
+    options.bufferTitle,
     options.diagnosticsSummary.errors,
     options.diagnosticsSummary.warnings,
     cursorPosition.line,

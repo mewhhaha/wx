@@ -166,7 +166,9 @@ function getContentCols(cols: number, lineCount: number): { gutterCols: number; 
 }
 
 export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): AnsiEditorMirror {
-  const controller = options.controller ?? createEditorController({ value: options.value ?? "" });
+  const controller =
+    options.controller ??
+    createEditorController({ value: options.value ?? "", filePath: options.filePath });
   const write = options.write;
   const indentGuides = normalizeIndentGuides(options.indentGuides);
   let theme = options.theme ?? defaultTheme;
@@ -291,7 +293,9 @@ export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): 
 }
 
 export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOptions): AnsiEditorTerminal {
-  const controller = options.controller ?? createEditorController({ value: options.value ?? "" });
+  const controller =
+    options.controller ??
+    createEditorController({ value: options.value ?? "", filePath: options.filePath });
   const mirror = createAnsiEditorMirror({
     ...options,
     controller

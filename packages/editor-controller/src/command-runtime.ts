@@ -361,6 +361,10 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
 
       if (value === "w" || value === "write") {
         const targetPath = commandArgument || presentation.filePath;
+        if (!targetPath) {
+          context.setBottomMessage({ tone: "warning", text: "Scratch buffer has no file path" });
+          return { handled: true };
+        }
         const didSave = await controller.saveDocument(targetPath);
         context.setBottomMessage({
           tone: didSave ? "info" : "error",
@@ -399,6 +403,16 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
 
       if (value === "completion") {
         await controller.requestCompletion();
+        return { handled: true };
+      }
+
+      if (value === "new") {
+        controller.newScratchBuffer();
+        return { handled: true };
+      }
+
+      if (value === "vnew") {
+        controller.newScratchSplit("vertical");
         return { handled: true };
       }
 

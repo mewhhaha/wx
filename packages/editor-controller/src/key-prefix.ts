@@ -132,6 +132,11 @@ export async function handlePendingActionKey(
       return { handled: true };
     }
 
+    if (key === "n" || ctrlChord === "n") {
+      controller.newScratchSplit("horizontal");
+      return { handled: true };
+    }
+
     if (key === "f" || ctrlChord === "f") {
       await controller.openSelectionInPane("horizontal");
       return { handled: true };

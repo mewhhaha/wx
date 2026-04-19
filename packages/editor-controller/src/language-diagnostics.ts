@@ -112,7 +112,7 @@ export function createLanguageDiagnosticsRuntime(
     const getLineChanges = options.getHostServices(presentation)?.getLineChanges;
     const requestId = ++presentation.language.lineChangesRequestId;
 
-    if (!getLineChanges) {
+    if (!getLineChanges || !presentation.filePath) {
       if (presentation.language.lineChangesByLine.size > 0) {
         presentation.language.lineChangesByLine.clear();
         options.syncVisibleLanguageDecorations();

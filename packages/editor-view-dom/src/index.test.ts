@@ -151,6 +151,16 @@ describe("createEditor", () => {
     expect(container.querySelector('[data-wx-editor-gutter="1"] .wx-editor__gutter-number')?.getAttribute("data-active")).toBe("true");
   });
 
+  it("renders scratch title by default instead of fake untitled path", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "alpha" });
+
+    expect(editor.controller.getPresentationState().filePath).toBeNull();
+    expect(container.querySelector("[data-wx-editor-status-file='true']")?.textContent).toBe(" [scratch]");
+  });
+
   it("renders split workspace panes from controller workspace state", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -178,6 +188,12 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "v", bubbles: true }));
     await flushAsyncWork();
     expect(editor.controller.getWorkspacePresentationState().panes).toHaveLength(2);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "w", ctrlKey: true, bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
+    await flushAsyncWork();
+    expect(editor.controller.getWorkspacePresentationState().panes).toHaveLength(3);
+    expect(editor.controller.getPresentationState().bufferTitle).toBe("[scratch]");
 
     await editor.controller.openBuffer("src/one.ts");
     await editor.controller.openBuffer("src/two.ts");
@@ -2125,6 +2141,7 @@ describe("createEditor", () => {
 
     createEditor(container, {
       value: "one\ntwo\nthree",
+      filePath: "examples/demo.ts",
       host: {
         async getLineChanges() {
           return [
