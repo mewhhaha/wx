@@ -162,6 +162,41 @@ describe("createEditor", () => {
     expect(container.querySelector(".wx-editor__workspace-pane[data-active='true']")).not.toBeNull();
   });
 
+  it("routes Ctrl-w pane commands and g n/g p through shared controller input", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "alpha", filePath: "src/current.ts" });
+    editor.controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `opened:${filePath}` };
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "w", ctrlKey: true, bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "v", bubbles: true }));
+    await flushAsyncWork();
+    expect(editor.controller.getWorkspacePresentationState().panes).toHaveLength(2);
+
+    await editor.controller.openBuffer("src/one.ts");
+    await editor.controller.openBuffer("src/two.ts");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "p", bubbles: true }));
+    await flushAsyncWork();
+    expect(editor.controller.getPresentationState().filePath).toBe("src/one.ts");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
+    await flushAsyncWork();
+    expect(editor.controller.getPresentationState().filePath).toBe("src/two.ts");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "w", ctrlKey: true, bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "o", bubbles: true }));
+    await flushAsyncWork();
+    expect(editor.controller.getWorkspacePresentationState().panes).toHaveLength(1);
+  });
+
   it("moves the cursor with hjkl and arrow keys", () => {
     const container = document.createElement("div");
     document.body.append(container);

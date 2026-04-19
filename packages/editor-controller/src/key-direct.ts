@@ -122,6 +122,11 @@ export async function handleDirectKey(
     return { handled: true };
   }
 
+  if (input.ctrl && !input.meta && !input.alt && (state.mode === "normal" || state.mode === "visual") && input.key === "w") {
+    context.setPendingActionState({ kind: "ctrl-w" });
+    return { handled: true };
+  }
+
   if (
     input.ctrl &&
     !input.meta &&

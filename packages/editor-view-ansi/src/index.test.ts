@@ -817,6 +817,13 @@ describe("@wx/editor-view-ansi", () => {
     expect(parseAnsiInput("\u001br")).toEqual(["Alt+r"]);
   });
 
+  it("decodes Ctrl-w window chords from ANSI control input", () => {
+    expect(parseAnsiInput("\u0017")).toEqual(["Ctrl+w"]);
+    expect(parseAnsiInput("\u0013")).toEqual(["Ctrl+s"]);
+    expect(parseAnsiInput("\u0011")).toEqual(["Ctrl+q"]);
+    expect(parseAnsiInput("\u0008")).toEqual(["Ctrl+h"]);
+  });
+
   it("routes Ctrl+Space through ANSI completion requests", async () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
     controller.setLanguageServices([
@@ -897,6 +904,49 @@ describe("@wx/editor-view-ansi", () => {
     input.emit("\u001br");
     await flushAsyncWork(64);
     expect(controller.getPresentationState().ui.commandLine.value).toBe("rename ");
+    terminal.destroy();
+  });
+
+  it("routes Ctrl-w pane commands and g n/g p through shared ANSI input", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `opened:${filePath}` };
+      }
+    });
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      cols: 80,
+      rows: 12,
+      write: vi.fn(),
+      enterAltScreen: false
+    });
+
+    terminal.mount();
+    input.emit("\u0017");
+    input.emit("v");
+    await flushAsyncWork();
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(2);
+
+    await controller.openBuffer("src/one.ts");
+    await controller.openBuffer("src/two.ts");
+
+    input.emit("g");
+    input.emit("p");
+    await flushAsyncWork();
+    expect(controller.getPresentationState().filePath).toBe("src/one.ts");
+
+    input.emit("g");
+    input.emit("n");
+    await flushAsyncWork();
+    expect(controller.getPresentationState().filePath).toBe("src/two.ts");
+
+    input.emit("\u0017");
+    input.emit("o");
+    await flushAsyncWork();
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(1);
     terminal.destroy();
   });
 

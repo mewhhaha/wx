@@ -62,6 +62,26 @@ export async function handlePendingActionKey(
   }
 
   if (nextPending.kind === "g") {
+    if (input.key === "n") {
+      const buffers = controller.getBuffers();
+      const workspace = controller.getWorkspacePresentationState();
+      const currentIndex = buffers.findIndex((entry) => entry.id === workspace.activeBufferId);
+      if (buffers.length > 1 && currentIndex >= 0) {
+        controller.switchBuffer(buffers[(currentIndex + 1) % buffers.length]!.id);
+      }
+      return { handled: true };
+    }
+
+    if (input.key === "p") {
+      const buffers = controller.getBuffers();
+      const workspace = controller.getWorkspacePresentationState();
+      const currentIndex = buffers.findIndex((entry) => entry.id === workspace.activeBufferId);
+      if (buffers.length > 1 && currentIndex >= 0) {
+        controller.switchBuffer(buffers[(currentIndex - 1 + buffers.length) % buffers.length]!.id);
+      }
+      return { handled: true };
+    }
+
     if (input.key === "c") {
       await context.toggleComments("line");
       return { handled: true };
@@ -70,6 +90,60 @@ export async function handlePendingActionKey(
     const chordCommand = commandForGotoPrefix(input.key);
     if (chordCommand) {
       context.executeCommandWithCountSync(chordCommand);
+      return { handled: true };
+    }
+  }
+
+  if (nextPending.kind === "ctrl-w") {
+    const ctrlChord = input.ctrl ? input.key.toLowerCase() : null;
+    const key = input.key.length === 1 ? input.key.toLowerCase() : input.key;
+
+    if (key === "Escape") {
+      return { handled: true };
+    }
+
+    if (key === "v" || ctrlChord === "v") {
+      controller.splitPane("vertical");
+      return { handled: true };
+    }
+
+    if (key === "s" || ctrlChord === "s") {
+      controller.splitPane("horizontal");
+      return { handled: true };
+    }
+
+    if (key === "q" || ctrlChord === "q") {
+      controller.closePane();
+      return { handled: true };
+    }
+
+    if (key === "o" || ctrlChord === "o") {
+      controller.onlyPane();
+      return { handled: true };
+    }
+
+    if (key === "w" || ctrlChord === "w") {
+      controller.focusNextPane();
+      return { handled: true };
+    }
+
+    if (key === "h" || ctrlChord === "h" || key === "ArrowLeft") {
+      controller.focusPane("left");
+      return { handled: true };
+    }
+
+    if (key === "j" || ctrlChord === "j" || key === "ArrowDown") {
+      controller.focusPane("down");
+      return { handled: true };
+    }
+
+    if (key === "k" || ctrlChord === "k" || key === "ArrowUp") {
+      controller.focusPane("up");
+      return { handled: true };
+    }
+
+    if (key === "l" || ctrlChord === "l" || key === "ArrowRight") {
+      controller.focusPane("right");
       return { handled: true };
     }
   }

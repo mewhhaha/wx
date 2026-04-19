@@ -165,6 +165,7 @@ export interface EditorFlashState {
 export type EditorPendingAction =
   | null
   | { kind: "g" }
+  | { kind: "ctrl-w" }
   | { kind: "[" | "]" }
   | { kind: "m" }
   | { kind: "?" }
@@ -365,6 +366,8 @@ export interface EditorController {
   openBuffer(filePath: string): Promise<boolean>;
   splitPane(axis: EditorWorkspaceSplitAxis): boolean;
   closePane(): boolean;
+  onlyPane(): boolean;
+  focusNextPane(): boolean;
   focusPane(direction: "left" | "right" | "up" | "down"): boolean;
   setActivePane(paneId: string): boolean;
   searchFiles(scope: "repo" | "folder", query?: string): Promise<readonly EditorFileSearchResult[]>;

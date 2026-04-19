@@ -418,14 +418,7 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
       }
 
       if (value === "only") {
-        const workspace = controller.getWorkspacePresentationState();
-        for (const pane of workspace.panes) {
-          if (!pane.active) {
-            controller.setActivePane(pane.paneId);
-            controller.closePane();
-          }
-        }
-        controller.setActivePane(workspace.activePaneId);
+        controller.onlyPane();
         return { handled: true };
       }
 

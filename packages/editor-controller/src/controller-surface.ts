@@ -109,7 +109,9 @@ interface CreateControllerSurfaceOptions {
     createStateForText(text: string, template: EditorState): EditorState;
     splitActivePane(axis: "horizontal" | "vertical"): boolean;
     closeActivePane(): { changed: boolean; nextActivePaneId: string | null };
+    onlyActivePane(): boolean;
     focusPane(direction: "left" | "right" | "up" | "down"): string | null;
+    focusNextPane(): string | null;
     setActivePane(paneId: string): boolean;
     loadActivePaneInto(state: EditorState, presentation: EditorPresentationState): EditorState;
   };
@@ -293,6 +295,23 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       }
 
       loadActivePaneState("pane.close", { clearHistory: false, resetLanguage: false });
+      return true;
+    },
+    onlyPane() {
+      if (!options.workspaceRuntime.onlyActivePane()) {
+        return false;
+      }
+
+      loadActivePaneState("pane.only", { clearHistory: false, resetLanguage: false });
+      return true;
+    },
+    focusNextPane() {
+      const paneId = options.workspaceRuntime.focusNextPane();
+      if (!paneId || !options.workspaceRuntime.setActivePane(paneId)) {
+        return false;
+      }
+
+      loadActivePaneState("pane.focus-next", { clearHistory: false, resetLanguage: false });
       return true;
     },
     focusPane(direction) {

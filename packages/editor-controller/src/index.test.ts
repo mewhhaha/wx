@@ -1016,6 +1016,95 @@ describe("editor controller", () => {
     expect(controller.getPresentationState().ui.bottomMessage?.text).toBe("Cannot close the last pane");
   });
 
+  it("cycles buffers through g n and g p on the active pane only", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `opened:${filePath}` };
+      }
+    });
+
+    controller.splitPane("vertical");
+    const siblingPaneId = controller.getWorkspacePresentationState().panes.find((pane) => !pane.active)!.paneId;
+
+    await controller.openBuffer("src/one.ts");
+    await controller.openBuffer("src/two.ts");
+    expect(controller.getPresentationState().filePath).toBe("src/two.ts");
+
+    await controller.handleKeyInput({ key: "g" });
+    await controller.handleKeyInput({ key: "p" });
+    expect(controller.getPresentationState().filePath).toBe("src/one.ts");
+
+    await controller.handleKeyInput({ key: "g" });
+    await controller.handleKeyInput({ key: "n" });
+    expect(controller.getPresentationState().filePath).toBe("src/two.ts");
+
+    const workspace = controller.getWorkspacePresentationState();
+    expect(workspace.activePaneId).not.toBe(siblingPaneId);
+    expect(workspace.panes.find((pane) => pane.paneId === siblingPaneId)?.filePath).toBe("src/current.ts");
+  });
+
+  it("focuses next pane and keeps only active pane through workspace helpers", () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    controller.splitPane("vertical");
+    controller.splitPane("horizontal");
+    const initialActivePaneId = controller.getWorkspacePresentationState().activePaneId;
+
+    expect(controller.focusNextPane()).toBe(true);
+    expect(controller.getWorkspacePresentationState().activePaneId).not.toBe(initialActivePaneId);
+    expect(controller.onlyPane()).toBe(true);
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(1);
+    expect(controller.onlyPane()).toBe(false);
+  });
+
+  it("routes Ctrl-w pane commands through controller key input", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "v" });
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(2);
+
+    const activePaneId = controller.getWorkspacePresentationState().activePaneId;
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "h" });
+    expect(controller.getWorkspacePresentationState().activePaneId).not.toBe(activePaneId);
+
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "w" });
+    expect(controller.getWorkspacePresentationState().activePaneId).toBe(activePaneId);
+
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "o" });
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(1);
+  });
+
+  it("cancels Ctrl-w mode on Escape and keeps plain Ctrl-s/Ctrl-o jumplist behavior", async () => {
+    const controller = createEditorController({ value: "one\ntwo\nthree" });
+
+    await controller.handleKeyInput({ key: "l" });
+    await controller.handleKeyInput({ key: "s", ctrl: true });
+    await controller.handleKeyInput({ key: "j" });
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "Escape" });
+    await controller.handleKeyInput({ key: "o", ctrl: true });
+
+    expect(controller.getState().selection.ranges[0]?.head).toBe(1);
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(1);
+  });
+
+  it("uses Ctrl-w Ctrl-s and Ctrl-w Ctrl-o for pane actions instead of jumplist actions", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "s", ctrl: true });
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(2);
+
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "o", ctrl: true });
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(1);
+  });
+
   it("keeps modal search results visible while a new query is loading", async () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
     let resolveSearch: ((value: readonly { filePath: string }[]) => void) | null = null;

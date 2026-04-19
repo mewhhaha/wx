@@ -61,7 +61,9 @@ export interface WorkspaceRuntime {
   bindActivePaneToBuffer(bufferId: string): boolean;
   splitActivePane(axis: EditorWorkspaceSplitAxis): boolean;
   closeActivePane(): { changed: boolean; nextActivePaneId: string | null };
+  onlyActivePane(): boolean;
   focusPane(direction: "left" | "right" | "up" | "down"): string | null;
+  focusNextPane(): string | null;
   setActivePane(paneId: string): boolean;
   syncFromActiveState(state: EditorState, presentation: EditorPresentationState, options?: { docChanged?: boolean }): void;
   loadActivePaneInto(state: EditorState, presentation: EditorPresentationState): EditorState;
@@ -245,6 +247,16 @@ function collectPaneRects(
   const firstHeight = height * node.ratio;
   collectPaneRects(node.first, x, y, width, firstHeight, output);
   collectPaneRects(node.second, x, y + firstHeight, width, height - firstHeight, output);
+}
+
+function collectPaneIds(node: EditorPaneTreeNode, output: string[]): void {
+  if (node.kind === "pane") {
+    output.push(node.paneId);
+    return;
+  }
+
+  collectPaneIds(node.first, output);
+  collectPaneIds(node.second, output);
 }
 
 function chooseFocusedPane(
@@ -583,10 +595,37 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       activeBufferId = panes.get(nextPaneId)?.bufferId ?? activeBufferId;
       return { changed: true, nextActivePaneId: nextPaneId };
     },
+    onlyActivePane() {
+      if (panes.size <= 1) {
+        return false;
+      }
+
+      const currentPane = getActivePane();
+      panes.clear();
+      panes.set(currentPane.id, currentPane);
+      layoutTree = { kind: "pane", paneId: currentPane.id };
+      activePaneId = currentPane.id;
+      activeBufferId = currentPane.bufferId;
+      return true;
+    },
     focusPane(direction) {
       const rects: Array<{ paneId: string; x: number; y: number; width: number; height: number }> = [];
       collectPaneRects(layoutTree, 0, 0, 1, 1, rects);
       return chooseFocusedPane(rects, activePaneId, direction);
+    },
+    focusNextPane() {
+      const paneIds: string[] = [];
+      collectPaneIds(layoutTree, paneIds);
+      if (paneIds.length <= 1) {
+        return null;
+      }
+
+      const currentIndex = paneIds.indexOf(activePaneId);
+      if (currentIndex < 0) {
+        return paneIds[0] ?? null;
+      }
+
+      return paneIds[(currentIndex + 1) % paneIds.length] ?? null;
     },
     setActivePane(paneId) {
       if (!panes.has(paneId)) {
