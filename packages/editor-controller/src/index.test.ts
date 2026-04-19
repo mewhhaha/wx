@@ -6,11 +6,16 @@ import { createSelectionSet, enterInsertMode, enterNormalMode, insertText, moveR
 import type { EditorLanguageServices } from "@wx/editor-language";
 
 import { createEditorController, normalizeLanguageServices } from "./index";
+import type { EditorPaneTreeNode } from "./types";
 
 async function flushAsyncWork(times = 4): Promise<void> {
   for (let index = 0; index < times; index += 1) {
     await Promise.resolve();
   }
+}
+
+function collectPaneIds(node: EditorPaneTreeNode): string[] {
+  return node.kind === "pane" ? [node.paneId] : [...collectPaneIds(node.first), ...collectPaneIds(node.second)];
 }
 
 function createDeferred<T>() {
@@ -1103,6 +1108,64 @@ describe("editor controller", () => {
     await controller.handleKeyInput({ key: "w", ctrl: true });
     await controller.handleKeyInput({ key: "o", ctrl: true });
     expect(controller.getWorkspacePresentationState().panes).toHaveLength(1);
+  });
+
+  it("opens selected file paths into horizontal and vertical splits with Ctrl-w f/F", async () => {
+    const controller = createEditorController({
+      value: 'import "./other.ts:2:3";',
+      filePath: "src/current.ts",
+      selection: createSelectionSet([{ anchor: 8, head: 22, preferredColumn: null }])
+    });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `opened:${filePath}\nsecond line` };
+      }
+    });
+
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "f" });
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(2);
+    expect(controller.getPresentationState().filePath).toBe("src/other.ts");
+    expect(controller.getState().doc.text).toBe("opened:src/other.ts\nsecond line");
+    expect(controller.getState().doc.positionAt(controller.getState().selection.ranges[0]?.head ?? 0)).toEqual({
+      line: 1,
+      column: 2
+    });
+
+    const verticalController = createEditorController({
+      value: 'import "./other.ts";',
+      filePath: "src/current.ts",
+      selection: createSelectionSet([{ anchor: 8, head: 18, preferredColumn: null }])
+    });
+    verticalController.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `opened:${filePath}` };
+      }
+    });
+
+    await verticalController.handleKeyInput({ key: "w", ctrl: true });
+    await verticalController.handleKeyInput({ key: "F", shift: true });
+    expect(verticalController.getWorkspacePresentationState().panes).toHaveLength(2);
+    expect(verticalController.getPresentationState().filePath).toBe("src/other.ts");
+  });
+
+  it("swaps pane positions through Ctrl-w H/L", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "v" });
+    const before = collectPaneIds(controller.getWorkspacePresentationState().layoutTree);
+    expect(before).toHaveLength(2);
+
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "H", shift: true });
+    const afterLeftSwap = collectPaneIds(controller.getWorkspacePresentationState().layoutTree);
+    expect(afterLeftSwap).toEqual([before[1]!, before[0]!]);
+
+    await controller.handleKeyInput({ key: "w", ctrl: true });
+    await controller.handleKeyInput({ key: "L", shift: true });
+    const afterRightSwap = collectPaneIds(controller.getWorkspacePresentationState().layoutTree);
+    expect(afterRightSwap).toEqual(before);
   });
 
   it("keeps modal search results visible while a new query is loading", async () => {

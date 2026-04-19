@@ -950,6 +950,42 @@ describe("@wx/editor-view-ansi", () => {
     terminal.destroy();
   });
 
+  it("routes Ctrl-w f/F and Ctrl-w H through shared ANSI input", async () => {
+    const controller = createEditorController({
+      value: 'import "./other.ts:2:3";',
+      filePath: "src/current.ts",
+      selection: createSelection(8, 22)
+    });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `opened:${filePath}` };
+      }
+    });
+    const input = new FakeInput();
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      cols: 80,
+      rows: 12,
+      write: vi.fn(),
+      enterAltScreen: false
+    });
+
+    terminal.mount();
+    input.emit("\u0017");
+    input.emit("F");
+    await flushAsyncWork();
+    expect(controller.getWorkspacePresentationState().panes).toHaveLength(2);
+    expect(controller.getPresentationState().filePath).toBe("src/other.ts");
+
+    const beforeTree = controller.getWorkspacePresentationState().layoutTree;
+    input.emit("\u0017");
+    input.emit("H");
+    await flushAsyncWork();
+    expect(controller.getWorkspacePresentationState().layoutTree).not.toEqual(beforeTree);
+    terminal.destroy();
+  });
+
   it("keeps completion navigation parity between DOM and ANSI", async () => {
     const domController = createEditorController({ value: "al", selection: createSelection(0, 1) });
     const ansiController = createEditorController({ value: "al", selection: createSelection(0, 1) });

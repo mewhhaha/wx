@@ -197,6 +197,44 @@ describe("createEditor", () => {
     expect(editor.controller.getWorkspacePresentationState().panes).toHaveLength(1);
   });
 
+  it("routes Ctrl-w F and Ctrl-w H through DOM keyboard input", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const controller = createEditorController({
+      value: 'import "./other.ts";',
+      filePath: "src/current.ts",
+      selection: createSelection(8, 19)
+    });
+    controller.setHostServices({
+      async readFile({ filePath }) {
+        return { text: `opened:${filePath}` };
+      }
+    });
+    const editor = createEditor(container, { controller });
+    const handleKeyInput = vi.spyOn(controller, "handleKeyInput");
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "w", ctrlKey: true, bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "F", shiftKey: true, bubbles: true }));
+    await flushAsyncWork(8);
+    expect(handleKeyInput).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "w", ctrl: true, source: "dom" }),
+      expect.anything()
+    );
+    expect(handleKeyInput).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "F", shift: true, source: "dom" }),
+      expect.anything()
+    );
+
+    editor.controller.splitPane("vertical");
+    const beforeTree = editor.controller.getWorkspacePresentationState().layoutTree;
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "w", ctrlKey: true, bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "H", ctrlKey: true, shiftKey: true, bubbles: true }));
+    await flushAsyncWork(8);
+    expect(editor.controller.getWorkspacePresentationState().layoutTree).not.toEqual(beforeTree);
+  });
+
   it("moves the cursor with hjkl and arrow keys", () => {
     const container = document.createElement("div");
     document.body.append(container);

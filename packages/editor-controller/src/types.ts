@@ -368,6 +368,8 @@ export interface EditorController {
   closePane(): boolean;
   onlyPane(): boolean;
   focusNextPane(): boolean;
+  swapPane(direction: "left" | "right" | "up" | "down"): boolean;
+  openSelectionInPane(axis: EditorWorkspaceSplitAxis): Promise<boolean>;
   focusPane(direction: "left" | "right" | "up" | "down"): boolean;
   setActivePane(paneId: string): boolean;
   searchFiles(scope: "repo" | "folder", query?: string): Promise<readonly EditorFileSearchResult[]>;

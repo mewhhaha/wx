@@ -102,8 +102,38 @@ export async function handlePendingActionKey(
       return { handled: true };
     }
 
+    if (input.key === "F") {
+      await controller.openSelectionInPane("vertical");
+      return { handled: true };
+    }
+
+    if (input.key === "H") {
+      controller.swapPane("left");
+      return { handled: true };
+    }
+
+    if (input.key === "J") {
+      controller.swapPane("down");
+      return { handled: true };
+    }
+
+    if (input.key === "K") {
+      controller.swapPane("up");
+      return { handled: true };
+    }
+
+    if (input.key === "L") {
+      controller.swapPane("right");
+      return { handled: true };
+    }
+
     if (key === "v" || ctrlChord === "v") {
       controller.splitPane("vertical");
+      return { handled: true };
+    }
+
+    if (key === "f" || ctrlChord === "f") {
+      await controller.openSelectionInPane("horizontal");
       return { handled: true };
     }
 

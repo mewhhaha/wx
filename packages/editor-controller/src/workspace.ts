@@ -62,6 +62,7 @@ export interface WorkspaceRuntime {
   splitActivePane(axis: EditorWorkspaceSplitAxis): boolean;
   closeActivePane(): { changed: boolean; nextActivePaneId: string | null };
   onlyActivePane(): boolean;
+  swapActivePane(direction: "left" | "right" | "up" | "down"): boolean;
   focusPane(direction: "left" | "right" | "up" | "down"): string | null;
   focusNextPane(): string | null;
   setActivePane(paneId: string): boolean;
@@ -221,6 +222,26 @@ function removePaneNode(node: EditorPaneTreeNode, targetPaneId: string): EditorP
     ...node,
     first: nextFirst,
     second: nextSecond
+  };
+}
+
+function swapPaneIds(node: EditorPaneTreeNode, firstPaneId: string, secondPaneId: string): EditorPaneTreeNode {
+  if (node.kind === "pane") {
+    if (node.paneId === firstPaneId) {
+      return { kind: "pane", paneId: secondPaneId };
+    }
+
+    if (node.paneId === secondPaneId) {
+      return { kind: "pane", paneId: firstPaneId };
+    }
+
+    return node;
+  }
+
+  return {
+    ...node,
+    first: swapPaneIds(node.first, firstPaneId, secondPaneId),
+    second: swapPaneIds(node.second, firstPaneId, secondPaneId)
   };
 }
 
@@ -606,6 +627,15 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       layoutTree = { kind: "pane", paneId: currentPane.id };
       activePaneId = currentPane.id;
       activeBufferId = currentPane.bufferId;
+      return true;
+    },
+    swapActivePane(direction) {
+      const targetPaneId = this.focusPane(direction);
+      if (!targetPaneId || targetPaneId === activePaneId) {
+        return false;
+      }
+
+      layoutTree = swapPaneIds(layoutTree, activePaneId, targetPaneId);
       return true;
     },
     focusPane(direction) {

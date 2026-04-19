@@ -1,4 +1,4 @@
-import { type CommandContext, type EditorState, type Transaction } from "@wx/editor-core";
+import { createCharacterSelection, getSelectionOffsets, type CommandContext, type EditorState, type Transaction } from "@wx/editor-core";
 import type { EditorCodeAction, EditorDiagnostic, EditorHover, EditorLanguageServiceInput } from "@wx/editor-language";
 
 import { normalizeLanguageServices } from "./normalize";
@@ -110,6 +110,7 @@ interface CreateControllerSurfaceOptions {
     splitActivePane(axis: "horizontal" | "vertical"): boolean;
     closeActivePane(): { changed: boolean; nextActivePaneId: string | null };
     onlyActivePane(): boolean;
+    swapActivePane(direction: "left" | "right" | "up" | "down"): boolean;
     focusPane(direction: "left" | "right" | "up" | "down"): string | null;
     focusNextPane(): string | null;
     setActivePane(paneId: string): boolean;
@@ -130,8 +131,90 @@ interface CreateControllerSurfaceOptions {
   createJumpEntry(): EditorJumpEntry;
 }
 
+function normalizePathLikeText(rawValue: string): {
+  filePath: string;
+  line: number | null;
+  column: number | null;
+} | null {
+  const trimmed = rawValue.trim().replace(/^["'`(<\[{]+|[>"'`)\]}]+$/g, "");
+  if (!trimmed || /^https?:\/\//i.test(trimmed)) {
+    return null;
+  }
+
+  const match = /^(.*?)(?::(\d+))?(?::(\d+))?$/.exec(trimmed);
+  const candidate = (match?.[1] ?? trimmed).trim();
+  if (!candidate || !/[./\\]|[A-Za-z0-9_-]/.test(candidate)) {
+    return null;
+  }
+
+  return {
+    filePath: candidate,
+    line: match?.[2] ? Number(match[2]) : null,
+    column: match?.[3] ? Number(match[3]) : null
+  };
+}
+
+function normalizeRelativePath(path: string): string {
+  const isAbsolute = path.startsWith("/");
+  const segments = path.split("/").filter((segment) => segment.length > 0 && segment !== ".");
+  const next: string[] = [];
+
+  for (const segment of segments) {
+    if (segment === "..") {
+      if (next.length > 0 && next[next.length - 1] !== "..") {
+        next.pop();
+      } else if (!isAbsolute) {
+        next.push(segment);
+      }
+      continue;
+    }
+
+    next.push(segment);
+  }
+
+  const joined = next.join("/");
+  if (isAbsolute) {
+    return `/${joined}`;
+  }
+
+  return joined || ".";
+}
+
+function resolvePathLikeReference(filePath: string, selectedPath: string): string {
+  if (selectedPath.startsWith("/")) {
+    return normalizeRelativePath(selectedPath);
+  }
+
+  const baseSegments = filePath.split("/");
+  baseSegments.pop();
+  return normalizeRelativePath([...baseSegments, selectedPath].join("/"));
+}
+
+function extractSelectionTarget(state: EditorState, activeOffset: number): string | null {
+  const selection = getSelectionOffsets(state);
+  if (selection.to > selection.from) {
+    return state.doc.slice(selection.from, selection.to);
+  }
+
+  const text = state.doc.text;
+  const isPathChar = (char: string) => /[A-Za-z0-9._\-\/]/.test(char);
+  let start = activeOffset;
+  let end = activeOffset;
+
+  while (start > 0 && isPathChar(text[start - 1] ?? "")) {
+    start -= 1;
+  }
+
+  while (end < text.length && isPathChar(text[end] ?? "")) {
+    end += 1;
+  }
+
+  return end > start ? text.slice(start, end) : null;
+}
+
 export function createControllerSurface(options: CreateControllerSurfaceOptions): EditorController {
   const presentation = options.getPresentation();
+  let surface!: EditorController;
   const loadActivePaneState = (
     effectType: string,
     runtimeOptions: { clearHistory?: boolean; resetLanguage?: boolean } = {}
@@ -172,8 +255,40 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     loadActivePaneState("buffer.switch", { clearHistory: true, resetLanguage: true });
     return true;
   };
+  const openSelectionInPane = async (axis: "horizontal" | "vertical") => {
+    const selectedText = extractSelectionTarget(options.getState(), options.getActiveOffset());
+    const target = selectedText ? normalizePathLikeText(selectedText) : null;
+    if (!target) {
+      options.sessionRuntime.setBottomMessage({ tone: "warning", text: "No file path in selection" });
+      return false;
+    }
 
-  return {
+    const resolvedPath = resolvePathLikeReference(presentation.filePath, target.filePath);
+    if (!options.workspaceRuntime.splitActivePane(axis)) {
+      return false;
+    }
+
+    loadActivePaneState(`pane.split.${axis}`, { clearHistory: false, resetLanguage: false });
+    const opened = await surface.openBuffer(resolvedPath);
+    if (!opened) {
+      surface.closePane();
+      return false;
+    }
+
+    if (target.line !== null) {
+      const nextState = options.getState();
+      const lineIndex = Math.max(0, target.line - 1);
+      const column = Math.max(0, (target.column ?? 1) - 1);
+      const offset = nextState.doc.offsetAt({ line: lineIndex, column });
+      options.lifecycleRuntime.dispatch({
+        selection: createCharacterSelection(nextState.doc, offset, column)
+      });
+    }
+
+    return true;
+  };
+
+  surface = {
     getState() {
       return options.getState();
     },
@@ -313,6 +428,17 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
 
       loadActivePaneState("pane.focus-next", { clearHistory: false, resetLanguage: false });
       return true;
+    },
+    swapPane(direction) {
+      if (!options.workspaceRuntime.swapActivePane(direction)) {
+        return false;
+      }
+
+      loadActivePaneState("pane.swap", { clearHistory: false, resetLanguage: false });
+      return true;
+    },
+    openSelectionInPane(axis) {
+      return openSelectionInPane(axis);
     },
     focusPane(direction) {
       const paneId = options.workspaceRuntime.focusPane(direction);
@@ -543,4 +669,6 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       });
     }
   };
+
+  return surface;
 }
