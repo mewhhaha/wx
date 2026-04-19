@@ -161,6 +161,28 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-status-file='true']")?.textContent).toBe(" [scratch]");
   });
 
+  it("runs :new through DOM keyboard input", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const editor = createEditor(container, { value: "alpha" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", shiftKey: true, bubbles: true }));
+    await flushAsyncWork(16);
+    expect(editor.controller.getPresentationState().ui.commandLine.active).toBe(true);
+    for (const key of "new") {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+    await flushAsyncWork(16);
+    expect(editor.controller.getPresentationState().ui.commandLine.value).toBe("new");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushAsyncWork(64);
+
+    expect(editor.controller.getState().doc.text).toBe("");
+    expect(editor.controller.getPresentationState().bufferTitle).toBe("[scratch 2]");
+  });
+
   it("renders split workspace panes from controller workspace state", () => {
     const container = document.createElement("div");
     document.body.append(container);

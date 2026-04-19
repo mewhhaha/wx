@@ -143,6 +143,8 @@ export function createDomEventRuntime(context: DomEditorContext, runtime: DomEdi
       void context.controller.handleTextInput(pastedText, {
         themeNames: context.availableCommandThemes.map((entry) => entry.name),
         readClipboardText: readSystemClipboard
+      }).then((result) => {
+        syncAfterControllerInput(result.themeName);
       });
     },
     handleMouseMove(event) {

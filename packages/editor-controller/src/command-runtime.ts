@@ -1,5 +1,5 @@
 import { getActiveCharacterOffset, getSelectionOffsets, type EditorState, type SelectionSet } from "@wx/editor-core";
-import { getCommandCompletionItems, resolveCommandPreviewTheme } from "./command-line";
+import { getCommandCompletionItems, hasRunnableCommandLineValue, resolveCommandPreviewTheme } from "./command-line";
 import { escapeRegex } from "./search";
 import type {
   EditorBottomMessageState,
@@ -586,31 +586,7 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
       }
 
       if (selectedCompletion) {
-        const trimmed = nextValue.trim();
-        const [commandName = "", ...argumentParts] = trimmed.split(/\s+/);
-        const commandArgument = argumentParts.join(" ").trim();
-        const isRunnable =
-          commandName.toLowerCase() === "theme"
-            ? !!commandArgument
-            : [
-                "format",
-                "fmt",
-                "w",
-                "write",
-                "code-actions",
-                "codeaction",
-                "ca",
-                "q",
-                "quit",
-                "select-next",
-                "select-prev",
-                "select-all",
-                "split-lines",
-                "collapse-selections",
-                "remove-selection"
-              ].includes(commandName.toLowerCase());
-
-        if (!isRunnable) {
+        if (!hasRunnableCommandLineValue(nextValue, options.themeNames ?? [])) {
           const result = await applyCommandCompletion(options.themeNames ?? []);
           return result ?? { handled: true, themeName: presentation.themeName };
         }
