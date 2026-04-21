@@ -9,4 +9,5 @@ test-results
 .DS_Store
 pnpm-debug.log*
 target
+.codex
 .codex/
