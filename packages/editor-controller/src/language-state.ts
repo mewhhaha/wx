@@ -1,5 +1,5 @@
-import { mapOffsetThroughChanges, type EditorState, type TextChange } from "@wx/editor-core";
-import type { EditorDiagnostic, HighlightSpan } from "@wx/editor-language";
+import { mapOffsetThroughChanges, type EditorState, type TextChange } from "@mewhhaha/wx-core";
+import type { EditorDiagnostic, HighlightSpan } from "@mewhhaha/wx-language";
 import type { EditorLineChange, EditorLineChangeState } from "./types";
 
 export function buildHighlightCache(doc: EditorState["doc"], spans: readonly HighlightSpan[]): Map<number, HighlightSpan[]> {

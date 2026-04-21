@@ -1,4 +1,4 @@
-import type { EditorHover } from "@wx/editor-language";
+import type { EditorHover } from "@mewhhaha/wx-language";
 import type {
   EditorCommandLineKeyOptions,
   EditorCommandLineKeyResult,

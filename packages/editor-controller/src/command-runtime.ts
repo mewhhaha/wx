@@ -1,4 +1,4 @@
-import { getActiveCharacterOffset, getSelectionOffsets, type EditorState, type SelectionSet } from "@wx/editor-core";
+import { getActiveCharacterOffset, getSelectionOffsets, type EditorState, type SelectionSet } from "@mewhhaha/wx-core";
 import { getCommandCompletionItems, hasRunnableCommandLineValue, resolveCommandPreviewTheme } from "./command-line";
 import { escapeRegex } from "./search";
 import type {

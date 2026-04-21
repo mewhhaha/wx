@@ -1,9 +1,9 @@
 import treeSitterWasmUrl from "./assets/web-tree-sitter.wasm?url";
 import typescriptWasmUrl from "./assets/tree-sitter-typescript.wasm?url";
 
-import { phTheme } from "@wx/editor-theme";
+import { phTheme } from "@mewhhaha/wx-theme";
 import { createTreeSitterLanguageServices, typescriptHighlightQuery } from "@wx/editor-tree-sitter";
-import { createEditor, type EditorHandle } from "@wx/editor-view-dom";
+import { createEditor, type EditorHandle } from "@mewhhaha/wx-dom";
 
 declare global {
   interface Window {

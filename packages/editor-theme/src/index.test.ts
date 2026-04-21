@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { defaultTheme, graphiteTheme, mintTheme, normalizeCommandThemes, phTheme, playgroundThemes } from "./index";
 
-describe("@wx/editor-theme", () => {
+describe("@mewhhaha/wx-theme", () => {
   it("dedupes command themes and keeps active theme first", () => {
     expect(normalizeCommandThemes([defaultTheme, phTheme, mintTheme, phTheme], phTheme)).toEqual([
       phTheme,

@@ -2,10 +2,10 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createEditorController } from "@wx/editor-controller";
+import { createEditorController } from "@mewhhaha/wx-controller";
 import { typescriptHighlightQuery } from "@wx/editor-tree-sitter";
 import { createNodeTreeSitterLanguageServices } from "@wx/editor-tree-sitter/node";
-import { graphiteTheme, mintTheme, phTheme } from "@wx/editor-theme";
+import { graphiteTheme, mintTheme, phTheme } from "@mewhhaha/wx-theme";
 
 import { createAnsiEditorTerminal } from "./terminal";
 

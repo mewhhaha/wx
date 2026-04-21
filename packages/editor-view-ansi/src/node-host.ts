@@ -1,4 +1,4 @@
-import type { EditorHostServices } from "@wx/editor-controller";
+import type { EditorHostServices } from "@mewhhaha/wx-controller";
 
 const DEFAULT_IGNORED_DIRECTORIES = new Set([
   ".git",

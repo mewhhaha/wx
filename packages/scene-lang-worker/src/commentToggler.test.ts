@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createTextDocument } from "@wx/editor-core";
+import { createTextDocument } from "@mewhhaha/wx-core";
 
 import { __internal } from "./commentToggler";
 

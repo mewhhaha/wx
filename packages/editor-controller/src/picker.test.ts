@@ -1,5 +1,5 @@
-import { createEditorState } from "@wx/editor-core";
-import type { EditorCodeAction, EditorDiagnostic } from "@wx/editor-language";
+import { createEditorState } from "@mewhhaha/wx-core";
+import type { EditorCodeAction, EditorDiagnostic } from "@mewhhaha/wx-language";
 import { describe, expect, it, vi } from "vitest";
 
 import { createPickerRuntime } from "./picker";

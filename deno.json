@@ -1,0 +1,11 @@
+{
+  "workspace": [
+    "./packages/editor-core",
+    "./packages/editor-language",
+    "./packages/editor-layout",
+    "./packages/editor-theme",
+    "./packages/editor-controller",
+    "./packages/editor-view-dom",
+    "./packages/editor-element"
+  ]
+}

@@ -5,7 +5,7 @@ import {
   getCursorOffset,
   type EditorState,
   type Transaction
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 
 import type { EditorPresentationState } from "./types";
 

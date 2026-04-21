@@ -1,4 +1,4 @@
-import type { EditorLanguageServices, LanguageProvider } from "@wx/editor-language";
+import type { EditorLanguageServices, LanguageProvider } from "@mewhhaha/wx-language";
 
 import {
   createTreeSitterLanguageProvider as createTreeSitterLanguageProviderWithHost,

@@ -29,8 +29,8 @@ import {
   type EditorState,
   type TextChange,
   type Transaction
-} from "@wx/editor-core";
-import type { SyntaxTextobjectMode } from "@wx/editor-language";
+} from "@mewhhaha/wx-core";
+import type { SyntaxTextobjectMode } from "@mewhhaha/wx-language";
 import { buildFlashLabels } from "./flash-labels";
 import type {
   EditorBottomMessageState,

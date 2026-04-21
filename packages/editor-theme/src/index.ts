@@ -1,4 +1,4 @@
-import type { HighlightRole } from "@wx/editor-language";
+import type { HighlightRole } from "@mewhhaha/wx-language";
 
 export type ThemeRole =
   | HighlightRole

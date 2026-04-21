@@ -32,24 +32,24 @@ importers:
 
   apps/playground:
     dependencies:
-      '@wx/editor-controller':
+      '@mewhhaha/wx-controller':
         specifier: workspace:*
         version: link:../../packages/editor-controller
-      '@wx/editor-core':
+      '@mewhhaha/wx-core':
         specifier: workspace:*
         version: link:../../packages/editor-core
-      '@wx/editor-element':
+      '@mewhhaha/wx-dom':
+        specifier: workspace:*
+        version: link:../../packages/editor-view-dom
+      '@mewhhaha/wx-element':
         specifier: workspace:*
         version: link:../../packages/editor-element
-      '@wx/editor-theme':
+      '@mewhhaha/wx-theme':
         specifier: workspace:*
         version: link:../../packages/editor-theme
       '@wx/editor-tree-sitter':
         specifier: workspace:*
         version: link:../../packages/editor-tree-sitter
-      '@wx/editor-view-dom':
-        specifier: workspace:*
-        version: link:../../packages/editor-view-dom
       '@wx/scene-lang-wasm':
         specifier: workspace:*
         version: link:../../packages/scene-lang-wasm
@@ -65,13 +65,13 @@ importers:
 
   packages/editor-controller:
     dependencies:
-      '@wx/editor-core':
+      '@mewhhaha/wx-core':
         specifier: workspace:*
         version: link:../editor-core
-      '@wx/editor-language':
+      '@mewhhaha/wx-language':
         specifier: workspace:*
         version: link:../editor-language
-      '@wx/editor-layout':
+      '@mewhhaha/wx-layout':
         specifier: workspace:*
         version: link:../editor-layout
 
@@ -79,46 +79,46 @@ importers:
 
   packages/editor-element:
     dependencies:
-      '@wx/editor-controller':
+      '@mewhhaha/wx-controller':
         specifier: workspace:*
         version: link:../editor-controller
-      '@wx/editor-language':
-        specifier: workspace:*
-        version: link:../editor-language
-      '@wx/editor-theme':
-        specifier: workspace:*
-        version: link:../editor-theme
-      '@wx/editor-view-dom':
+      '@mewhhaha/wx-dom':
         specifier: workspace:*
         version: link:../editor-view-dom
+      '@mewhhaha/wx-language':
+        specifier: workspace:*
+        version: link:../editor-language
+      '@mewhhaha/wx-theme':
+        specifier: workspace:*
+        version: link:../editor-theme
 
   packages/editor-language:
     dependencies:
-      '@wx/editor-core':
+      '@mewhhaha/wx-core':
         specifier: workspace:*
         version: link:../editor-core
 
   packages/editor-layout:
     dependencies:
-      '@wx/editor-core':
+      '@mewhhaha/wx-core':
         specifier: workspace:*
         version: link:../editor-core
-      '@wx/editor-language':
+      '@mewhhaha/wx-language':
         specifier: workspace:*
         version: link:../editor-language
 
   packages/editor-theme:
     dependencies:
-      '@wx/editor-language':
+      '@mewhhaha/wx-language':
         specifier: workspace:*
         version: link:../editor-language
 
   packages/editor-tree-sitter:
     dependencies:
-      '@wx/editor-core':
+      '@mewhhaha/wx-core':
         specifier: workspace:*
         version: link:../editor-core
-      '@wx/editor-language':
+      '@mewhhaha/wx-language':
         specifier: workspace:*
         version: link:../editor-language
       web-tree-sitter:
@@ -127,19 +127,19 @@ importers:
 
   packages/editor-view-ansi:
     dependencies:
-      '@wx/editor-controller':
+      '@mewhhaha/wx-controller':
         specifier: workspace:*
         version: link:../editor-controller
-      '@wx/editor-core':
+      '@mewhhaha/wx-core':
         specifier: workspace:*
         version: link:../editor-core
-      '@wx/editor-language':
+      '@mewhhaha/wx-language':
         specifier: workspace:*
         version: link:../editor-language
-      '@wx/editor-layout':
+      '@mewhhaha/wx-layout':
         specifier: workspace:*
         version: link:../editor-layout
-      '@wx/editor-theme':
+      '@mewhhaha/wx-theme':
         specifier: workspace:*
         version: link:../editor-theme
       '@wx/editor-tree-sitter':
@@ -152,25 +152,25 @@ importers:
         specifier: ^0.26.8
         version: 0.26.8
     devDependencies:
-      '@wx/editor-view-dom':
+      '@mewhhaha/wx-dom':
         specifier: workspace:*
         version: link:../editor-view-dom
 
   packages/editor-view-dom:
     dependencies:
-      '@wx/editor-controller':
+      '@mewhhaha/wx-controller':
         specifier: workspace:*
         version: link:../editor-controller
-      '@wx/editor-core':
+      '@mewhhaha/wx-core':
         specifier: workspace:*
         version: link:../editor-core
-      '@wx/editor-language':
+      '@mewhhaha/wx-language':
         specifier: workspace:*
         version: link:../editor-language
-      '@wx/editor-layout':
+      '@mewhhaha/wx-layout':
         specifier: workspace:*
         version: link:../editor-layout
-      '@wx/editor-theme':
+      '@mewhhaha/wx-theme':
         specifier: workspace:*
         version: link:../editor-theme
 
@@ -178,10 +178,10 @@ importers:
 
   packages/scene-lang-worker:
     dependencies:
-      '@wx/editor-core':
+      '@mewhhaha/wx-core':
         specifier: workspace:*
         version: link:../editor-core
-      '@wx/editor-language':
+      '@mewhhaha/wx-language':
         specifier: workspace:*
         version: link:../editor-language
       '@wx/scene-lang-wasm':

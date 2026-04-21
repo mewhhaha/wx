@@ -1,4 +1,4 @@
-import { createEditorState, type EditorState } from "@wx/editor-core";
+import { createEditorState, type EditorState } from "@mewhhaha/wx-core";
 
 import { createCommandRuntime, type CommandRuntime } from "./command-runtime";
 import { createCommandsRuntime, type CommandsRuntime } from "./commands";

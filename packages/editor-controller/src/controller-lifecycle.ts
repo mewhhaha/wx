@@ -1,4 +1,4 @@
-import { applyTransaction, type CommandContext, type EditorState, type Transaction } from "@wx/editor-core";
+import { applyTransaction, type CommandContext, type EditorState, type TextChange, type Transaction } from "@mewhhaha/wx-core";
 
 import { restoreEditorState } from "./history";
 import { selectionEquals, transactionRequiresFullDocumentLanguageSync } from "./session";
@@ -21,14 +21,14 @@ interface CreateControllerLifecycleRuntimeOptions {
   clearFlashOnDocChange(): void;
   clearHoverOnDocChange(): void;
   refreshSearchMatchCache(targetState?: EditorState): void;
-  handleLanguageDocumentChange(prevState: EditorState, nextState: EditorState, changes: readonly Transaction["changes"][number][]): void;
+  handleLanguageDocumentChange(prevState: EditorState, nextState: EditorState, changes: readonly TextChange[]): void;
   syncVisibleLanguageDecorations(): void;
   ensureVisibleHighlightCoverage(): Promise<void>;
   rebuildViewportModel(): void;
   revealSelectionWithinViewport(): boolean;
   syncVisibleViewportRows(): boolean;
   syncLanguage(options: {
-    changes?: readonly Transaction["changes"][number][];
+    changes?: readonly TextChange[];
     forceDocumentSync?: boolean;
     refreshHighlights?: boolean;
     refreshDiagnostics?: boolean;

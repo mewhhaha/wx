@@ -1,4 +1,4 @@
-import type { EditorState, TextChange, Transaction } from "@wx/editor-core";
+import type { EditorState, TextChange, Transaction } from "@mewhhaha/wx-core";
 import type {
   EditorCodeAction,
   EditorCompletionItem,
@@ -9,7 +9,7 @@ import type {
   EditorRenameChangeSet,
   EditorSymbol,
   HighlightSpan
-} from "@wx/editor-language";
+} from "@mewhhaha/wx-language";
 
 import type {
   EditorFileSearchResult,
@@ -111,7 +111,7 @@ export interface LanguageRuntime {
   renameSymbol(nextName: string): Promise<boolean>;
   openSymbols(kind: "document" | "workspace"): Promise<boolean>;
   formatDocument(): Promise<boolean>;
-  saveDocument(targetPath?: string): Promise<boolean>;
+  saveDocument(targetPath?: string | null): Promise<boolean>;
 }
 
 export interface LanguageHighlightsRuntime {
@@ -141,7 +141,7 @@ export interface LanguageActionsRuntime {
   requestCodeActions(): Promise<readonly EditorCodeAction[]>;
   applyCodeAction(action: EditorCodeAction): Promise<boolean>;
   formatDocument(): Promise<boolean>;
-  saveDocument(targetPath?: string): Promise<boolean>;
+  saveDocument(targetPath?: string | null): Promise<boolean>;
   resetActionTracking(): void;
 }
 

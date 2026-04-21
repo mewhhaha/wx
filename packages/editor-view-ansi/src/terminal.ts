@@ -1,9 +1,9 @@
-import { createEditorController, normalizeLanguageServices } from "@wx/editor-controller";
+import { createEditorController, normalizeLanguageServices } from "@mewhhaha/wx-controller";
 import {
   languageProviderToServices,
   type EditorLanguageServiceInput
-} from "@wx/editor-language";
-import { defaultTheme, normalizeCommandThemes, type ThemeSpec } from "@wx/editor-theme";
+} from "@mewhhaha/wx-language";
+import { defaultTheme, normalizeCommandThemes, type ThemeSpec } from "@mewhhaha/wx-theme";
 
 import { renderEditorAnsiFrame, renderEditorAnsiWorkspaceFrame } from "./frame";
 import { createNodeHostServices } from "./node-host";

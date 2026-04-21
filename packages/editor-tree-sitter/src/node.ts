@@ -1,6 +1,6 @@
 import { Worker as NodeWorker } from "node:worker_threads";
 
-import type { EditorLanguageServices } from "@wx/editor-language";
+import type { EditorLanguageServices } from "@mewhhaha/wx-language";
 
 import {
   createTreeSitterLanguageServices,

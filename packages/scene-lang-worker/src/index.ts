@@ -1,4 +1,4 @@
-import type { TextChange, TextDocument } from "@wx/editor-core";
+import type { TextChange, TextDocument } from "@mewhhaha/wx-core";
 import type {
   CodeActionContext,
   CommentToggler,
@@ -11,7 +11,7 @@ import type {
   HighlightSpan,
   Highlighter,
   HoverSource
-} from "@wx/editor-language";
+} from "@mewhhaha/wx-language";
 
 import { createWgslCommentToggler } from "./commentToggler";
 

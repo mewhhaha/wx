@@ -1,4 +1,4 @@
-import type { EditorLanguageServiceInput, EditorLanguageServices } from "@wx/editor-language";
+import type { EditorLanguageServiceInput, EditorLanguageServices } from "@mewhhaha/wx-language";
 
 export function normalizeLanguageServices(
   input: EditorLanguageServiceInput | readonly EditorLanguageServices[] | null | undefined

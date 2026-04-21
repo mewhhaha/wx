@@ -1,6 +1,6 @@
 import { createSceneLangWasm, type SceneLangWasm } from "@wx/scene-lang-wasm";
 
-import type { TextChange } from "@wx/editor-core";
+import type { TextChange } from "@mewhhaha/wx-core";
 
 type SceneWorkerRequest =
   | { type: "init"; wasmUrl: string }

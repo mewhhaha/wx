@@ -1,17 +1,17 @@
-import type { EditorState } from "@wx/editor-core";
+import type { EditorState } from "@mewhhaha/wx-core";
 import type {
   EditorCodeAction,
   EditorLanguageServiceInput,
   LanguageProvider
-} from "@wx/editor-language";
+} from "@mewhhaha/wx-language";
 import type {
   EditorController,
   EditorHostServices,
   EditorLineChange,
   EditorLineChangeKind,
   EditorUpdate
-} from "@wx/editor-controller";
-import type { ThemeSpec } from "@wx/editor-theme";
+} from "@mewhhaha/wx-controller";
+import type { ThemeSpec } from "@mewhhaha/wx-theme";
 
 export interface CreateEditorOptions {
   controller?: EditorController;

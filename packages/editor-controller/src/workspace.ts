@@ -8,7 +8,7 @@ import {
   type EditorState,
   type EditorViewState,
   type TextChange
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 
 import type {
   EditorCompletionState,

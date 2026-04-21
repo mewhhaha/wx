@@ -1,5 +1,5 @@
-import { getCursorOffset, type EditorState } from "@wx/editor-core";
-import type { EditorCodeAction } from "@wx/editor-language";
+import { getCursorOffset, type EditorState } from "@mewhhaha/wx-core";
+import type { EditorCodeAction } from "@mewhhaha/wx-language";
 import type {
   EditorBufferState,
   EditorBottomMessageState,

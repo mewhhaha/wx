@@ -2,11 +2,11 @@ import {
   getActiveCharacterOffset,
   getCursorOffset,
   getSelectionOffsets
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 import type {
   EditorCodeAction,
   EditorDiagnostic
-} from "@wx/editor-language";
+} from "@mewhhaha/wx-language";
 
 import type {
   LanguageActionsRuntime,

@@ -1,5 +1,5 @@
-import type { Command, EditorState } from "@wx/editor-core";
-import type { SyntaxTextobjectMode } from "@wx/editor-language";
+import type { Command, EditorState } from "@mewhhaha/wx-core";
+import type { SyntaxTextobjectMode } from "@mewhhaha/wx-language";
 
 import type {
   EditorBottomMessageState,

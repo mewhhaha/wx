@@ -1,4 +1,4 @@
-import type { TextChange, TextDocument } from "@wx/editor-core";
+import type { TextChange, TextDocument } from "@mewhhaha/wx-core";
 
 export type HighlightRole =
   | "text"

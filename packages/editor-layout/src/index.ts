@@ -5,8 +5,8 @@ import {
   getSelectionOffsets,
   getSelectionRanges,
   type EditorState
-} from "@wx/editor-core";
-import type { DiagnosticSeverity, EditorDiagnostic, HighlightRole, HighlightSpan } from "@wx/editor-language";
+} from "@mewhhaha/wx-core";
+import type { DiagnosticSeverity, EditorDiagnostic, HighlightRole, HighlightSpan } from "@mewhhaha/wx-language";
 
 export type EditorLayoutToken =
   | "text"
@@ -177,6 +177,12 @@ export interface EditorLineVisualRange {
   to: number;
 }
 
+export interface EditorVisualRowPosition {
+  rowIndex: number;
+  column: number;
+  row: EditorVisualRow;
+}
+
 export interface EditorVisualRowsInput {
   state: EditorState;
   viewport: EditorLayoutViewport;
@@ -260,7 +266,7 @@ export interface EditorLayoutFlashState {
 
 export type EditorLayoutPendingAction =
   | null
-  | { kind: "g" | "[" | "]" | "m" | "?" | "space" | "flash-target" }
+  | { kind: "g" | "ctrl-w" | "[" | "]" | "m" | "?" | "space" | "flash-target" }
   | { kind: "z"; sticky: boolean }
   | { kind: "find"; variant: "f" | "F" | "t" | "T" }
   | { kind: "textobject"; mode: "around" | "inside" }
@@ -738,7 +744,7 @@ export function getVisualRowForOffset(
   offset: number,
   softWrap: boolean,
   cols: number
-) {
+): EditorVisualRowPosition {
   const fallback = visualRows[0] ?? {
     docLine: 0,
     visualRowIndex: 0,

@@ -1,8 +1,8 @@
-import type { EditorController, EditorUpdate } from "@wx/editor-controller";
-import type { EditorLanguageServiceInput, LanguageProvider } from "@wx/editor-language";
-import { languageProviderToServices } from "@wx/editor-language";
-import { defaultTheme, type ThemeSpec } from "@wx/editor-theme";
-import { createEditor, type EditorHandle } from "@wx/editor-view-dom";
+import type { EditorController, EditorUpdate } from "@mewhhaha/wx-controller";
+import type { EditorLanguageServiceInput, LanguageProvider } from "@mewhhaha/wx-language";
+import { languageProviderToServices } from "@mewhhaha/wx-language";
+import { defaultTheme, type ThemeSpec } from "@mewhhaha/wx-theme";
+import { createEditor, type EditorHandle } from "@mewhhaha/wx-dom";
 
 export class WxEditorElement extends HTMLElement {
   private readonly mountPoint: HTMLDivElement;

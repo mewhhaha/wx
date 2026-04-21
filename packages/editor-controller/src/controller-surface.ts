@@ -1,17 +1,16 @@
-import { createCharacterSelection, getSelectionOffsets, type CommandContext, type EditorState, type Transaction } from "@wx/editor-core";
-import type { EditorCodeAction, EditorDiagnostic, EditorHover, EditorLanguageServiceInput } from "@wx/editor-language";
+import { createCharacterSelection, getSelectionOffsets, type CommandContext, type EditorState, type Transaction } from "@mewhhaha/wx-core";
+import type { EditorCodeAction, EditorDiagnostic, EditorHover, EditorLanguageServiceInput } from "@mewhhaha/wx-language";
 
 import { normalizeLanguageServices } from "./normalize";
 import { alignSelectionTopVisualRow } from "./viewport";
+import type { WorkspaceRuntime } from "./workspace";
 import type {
-  EditorBufferState,
   EditorController,
   EditorFileSearchResult,
   EditorJumpEntry,
   EditorPresentationState,
   EditorSearchState,
-  EditorUpdateListener,
-  EditorWorkspacePresentationState
+  EditorUpdateListener
 } from "./types";
 
 interface CreateControllerSurfaceOptions {
@@ -93,40 +92,7 @@ interface CreateControllerSurfaceOptions {
     selectRegister(name: string | null): void;
     getSelectedRegister(): string | null;
   };
-  workspaceRuntime: {
-    getWorkspacePresentationState(state: EditorState, presentation: EditorPresentationState): EditorWorkspacePresentationState;
-    getBuffers(): readonly EditorBufferState[];
-    getBufferById(bufferId: string): EditorBufferState | null;
-    findBufferByFilePath(filePath: string): EditorBufferState | null;
-    syncActiveFilePath(filePath: string | null): void;
-    markActiveSaved(filePath?: string | null): void;
-    storeBufferState(filePath: string, state: EditorState, dirty?: boolean): {
-      id: string;
-      kind: "file";
-      filePath: string;
-      displayName: string;
-      dirty: boolean;
-    };
-    createScratchBuffer(state: EditorState): {
-      id: string;
-      kind: "scratch";
-      filePath: null;
-      displayName: string;
-      dirty: boolean;
-    };
-    bindActivePaneToBuffer(bufferId: string): boolean;
-    bindActivePaneToNewScratch(): { id: string } | null;
-    createStateForText(text: string, template: EditorState): EditorState;
-    splitActivePane(axis: "horizontal" | "vertical"): boolean;
-    splitActivePaneWithScratch(axis: "horizontal" | "vertical"): { id: string } | null;
-    closeActivePane(): { changed: boolean; nextActivePaneId: string | null };
-    onlyActivePane(): boolean;
-    swapActivePane(direction: "left" | "right" | "up" | "down"): boolean;
-    focusPane(direction: "left" | "right" | "up" | "down"): string | null;
-    focusNextPane(): string | null;
-    setActivePane(paneId: string): boolean;
-    loadActivePaneInto(state: EditorState, presentation: EditorPresentationState): EditorState;
-  };
+  workspaceRuntime: WorkspaceRuntime;
   keyRuntime: {
     handleKeyInput: EditorController["handleKeyInput"];
     handleTextInput: EditorController["handleTextInput"];
@@ -701,9 +667,10 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       return options.languageRuntime.formatDocument();
     },
     saveDocument(targetPath = presentation.filePath) {
-      return options.languageRuntime.saveDocument(targetPath).then((saved) => {
-        if (saved) {
-          options.workspaceRuntime.markActiveSaved(targetPath);
+      const nextPath = targetPath ?? presentation.filePath;
+      return options.languageRuntime.saveDocument(nextPath).then((saved) => {
+        if (saved && nextPath) {
+          options.workspaceRuntime.markActiveSaved(nextPath);
         }
         return saved;
       });

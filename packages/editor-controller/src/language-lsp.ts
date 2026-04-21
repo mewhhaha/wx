@@ -4,13 +4,13 @@ import {
   getSelectionOffsets,
   type EditorState,
   type TextChange
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 import type {
   EditorCompletionItem,
   EditorLocationTarget,
   EditorRenameChangeSet,
   EditorSymbol
-} from "@wx/editor-language";
+} from "@mewhhaha/wx-language";
 
 import type { PickerActionItem, PickerSearchSource } from "./picker";
 import type {
@@ -148,7 +148,7 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
     const nextPath = target.filePath ?? presentation.filePath;
     options.pushJump();
 
-    if (nextPath !== presentation.filePath) {
+    if (nextPath && nextPath !== presentation.filePath) {
       const opened = await options.openBuffer(nextPath);
       if (!opened) {
         return false;
@@ -575,6 +575,11 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
 
     for (const changeSet of changeSets) {
       const targetPath = changeSet.filePath ?? activeFilePath;
+      if (!targetPath) {
+        currentChanges = changeSet.changes;
+        continue;
+      }
+
       if (targetPath === activeFilePath) {
         currentChanges = changeSet.changes;
         continue;

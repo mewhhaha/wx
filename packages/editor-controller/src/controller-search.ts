@@ -1,6 +1,6 @@
-import type { EditorState } from "@wx/editor-core";
+import type { EditorState } from "@mewhhaha/wx-core";
 
-import { collectSearchMatches } from "@wx/editor-core";
+import { collectSearchMatches } from "@mewhhaha/wx-core";
 import type { EditorPresentationState, EditorSearchState } from "./types";
 
 interface CreateControllerSearchRuntimeOptions {

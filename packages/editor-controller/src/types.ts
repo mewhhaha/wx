@@ -8,7 +8,7 @@ import type {
   SelectionSet,
   TextChange,
   Transaction
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 import type {
   EditorCodeAction,
   EditorDiagnostic,
@@ -17,8 +17,8 @@ import type {
   EditorLanguageServices,
   EditorLineRange,
   HighlightSpan
-} from "@wx/editor-language";
-import type { EditorLineVisualRange, EditorVisualRow } from "@wx/editor-layout";
+} from "@mewhhaha/wx-language";
+import type { EditorLineVisualRange, EditorVisualRow } from "@mewhhaha/wx-layout";
 
 export interface HistoryEntry {
   doc: EditorState["doc"];
@@ -430,7 +430,7 @@ export interface EditorController {
   requestCodeActions(): Promise<readonly EditorCodeAction[]>;
   applyCodeAction(action: EditorCodeAction): Promise<boolean>;
   formatDocument(): Promise<boolean>;
-  saveDocument(targetPath?: string): Promise<boolean>;
+  saveDocument(targetPath?: string | null): Promise<boolean>;
 }
 
 export interface CreateEditorControllerOptions {

@@ -1,5 +1,5 @@
 {
-  "name": "@wx/editor-controller",
+  "name": "@mewhhaha/wx-controller",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -16,8 +16,8 @@
     "build": "tsup src/index.ts --format esm --out-dir dist"
   },
   "dependencies": {
-    "@wx/editor-core": "workspace:*",
-    "@wx/editor-language": "workspace:*",
-    "@wx/editor-layout": "workspace:*"
+    "@mewhhaha/wx-core": "workspace:*",
+    "@mewhhaha/wx-language": "workspace:*",
+    "@mewhhaha/wx-layout": "workspace:*"
   }
 }

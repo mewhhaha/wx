@@ -1,5 +1,5 @@
-import type { EditorState, SelectionSet, Transaction } from "@wx/editor-core";
-import type { EditorDiagnostic } from "@wx/editor-language";
+import type { EditorState, SelectionSet, Transaction } from "@mewhhaha/wx-core";
+import type { EditorDiagnostic } from "@mewhhaha/wx-language";
 
 import type {
   EditorBottomMessageState,

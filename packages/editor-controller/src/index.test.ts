@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { createSelectionSet, enterInsertMode, enterNormalMode, insertText, moveRight } from "@wx/editor-core";
-import type { EditorLanguageServices } from "@wx/editor-language";
+import { createSelectionSet, enterInsertMode, enterNormalMode, insertText, moveRight } from "@mewhhaha/wx-core";
+import type { EditorLanguageServices } from "@mewhhaha/wx-language";
 
 import { createEditorController, normalizeLanguageServices } from "./index";
 import type { EditorPaneTreeNode } from "./types";

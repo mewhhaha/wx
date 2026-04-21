@@ -17,16 +17,16 @@
     "demo": "pnpm build && node dist/demo.js"
   },
   "dependencies": {
-    "@wx/editor-controller": "workspace:*",
-    "@wx/editor-core": "workspace:*",
-    "@wx/editor-language": "workspace:*",
-    "@wx/editor-layout": "workspace:*",
-    "@wx/editor-theme": "workspace:*",
+    "@mewhhaha/wx-controller": "workspace:*",
+    "@mewhhaha/wx-core": "workspace:*",
+    "@mewhhaha/wx-language": "workspace:*",
+    "@mewhhaha/wx-layout": "workspace:*",
+    "@mewhhaha/wx-theme": "workspace:*",
     "@wx/editor-tree-sitter": "workspace:*",
     "tree-sitter-typescript": "^0.23.2",
     "web-tree-sitter": "^0.26.8"
   },
   "devDependencies": {
-    "@wx/editor-view-dom": "workspace:*"
+    "@mewhhaha/wx-dom": "workspace:*"
   }
 }

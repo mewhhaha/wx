@@ -1,5 +1,5 @@
-import type { TextChange, TextDocument } from "@wx/editor-core";
-import type { CommentToggler, LanguageDocumentSnapshot, SyntaxSelectionRange } from "@wx/editor-language";
+import type { TextChange, TextDocument } from "@mewhhaha/wx-core";
+import type { CommentToggler, LanguageDocumentSnapshot, SyntaxSelectionRange } from "@mewhhaha/wx-language";
 
 const LINE_COMMENT_PREFIX = "// ";
 const BLOCK_COMMENT_OPEN = "/* ";

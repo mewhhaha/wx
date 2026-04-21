@@ -1,6 +1,6 @@
-import { getActiveCharacterOffset, getCursorOffset, type EditorState } from "@wx/editor-core";
-import type { EditorPresentationState } from "@wx/editor-controller";
-import type { ThemeSpec } from "@wx/editor-theme";
+import { getActiveCharacterOffset, getCursorOffset, type EditorState } from "@mewhhaha/wx-core";
+import type { EditorPresentationState } from "@mewhhaha/wx-controller";
+import type { ThemeSpec } from "@mewhhaha/wx-theme";
 
 function serializePendingAction(pendingAction: EditorPresentationState["ui"]["pendingAction"]): string {
   if (!pendingAction) {

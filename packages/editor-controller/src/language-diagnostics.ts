@@ -2,8 +2,8 @@ import {
   mapOffsetThroughChanges,
   type EditorState,
   type TextChange
-} from "@wx/editor-core";
-import type { EditorDiagnostic } from "@wx/editor-language";
+} from "@mewhhaha/wx-core";
+import type { EditorDiagnostic } from "@mewhhaha/wx-language";
 
 import { buildDiagnosticsCache, buildLineChangesMap } from "./language-state";
 import type {

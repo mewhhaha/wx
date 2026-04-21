@@ -8,7 +8,7 @@ import {
   gotoMatchingBracket,
   insertText,
   replaceSurround
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 
 import {
   commandForBracketPrefix,

@@ -1,4 +1,4 @@
-import { createEditorState, type EditorState } from "@wx/editor-core";
+import { createEditorState, type EditorState } from "@mewhhaha/wx-core";
 
 import type { EditorBufferState } from "./types";
 

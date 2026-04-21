@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { createCharacterSelection, createSelection, createTextDocument, getSelectionOffsets } from "@wx/editor-core";
-import { createEditorController } from "@wx/editor-controller";
-import type { HighlightSpan, LanguageProvider } from "@wx/editor-language";
+import { createCharacterSelection, createSelection, createTextDocument, getSelectionOffsets } from "@mewhhaha/wx-core";
+import { createEditorController } from "@mewhhaha/wx-controller";
+import type { HighlightSpan, LanguageProvider } from "@mewhhaha/wx-language";
 import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
 import { createEditor } from "./index";
@@ -48,7 +48,7 @@ describe("createEditor", () => {
     expect(indexSource).toContain('from "./dom-bootstrap"');
     expect(indexSource).toContain('from "./dom-styles"');
     expect(indexSource).not.toContain("interface EditorHostServices");
-    expect(typeSource).toContain('from "@wx/editor-controller"');
+    expect(typeSource).toContain('from "@mewhhaha/wx-controller"');
     expect(eventSource).toContain("controller.handleKeyInput");
     expect(eventSource).toContain("controller.handleTextInput");
     expect(eventSource).not.toContain("controller.openCommandLine(");

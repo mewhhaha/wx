@@ -1,13 +1,13 @@
-import { createEditorState, createSelection, type EditorState } from "@wx/editor-core";
-import type { EditorController, EditorUpdate } from "@wx/editor-controller";
+import { createEditorState, createSelection, type EditorState } from "@mewhhaha/wx-core";
+import type { EditorController, EditorUpdate } from "@mewhhaha/wx-controller";
 import {
   languageProviderToServices,
   type EditorCodeAction,
   type EditorLanguageServiceInput,
   type EditorLanguageServices,
   type LanguageProvider
-} from "@wx/editor-language";
-import type { ThemeSpec } from "@wx/editor-theme";
+} from "@mewhhaha/wx-language";
+import type { ThemeSpec } from "@mewhhaha/wx-theme";
 
 import type { DomEditorContext, DomEditorRuntime } from "./dom-runtime";
 

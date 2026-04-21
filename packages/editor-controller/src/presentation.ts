@@ -1,4 +1,4 @@
-import type { EditorState } from "@wx/editor-core";
+import type { EditorState } from "@mewhhaha/wx-core";
 import type { CreateEditorControllerOptions, EditorPresentationState } from "./types";
 
 export function createPresentationState(

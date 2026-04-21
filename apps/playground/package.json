@@ -9,12 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@wx/editor-core": "workspace:*",
-    "@wx/editor-controller": "workspace:*",
-    "@wx/editor-element": "workspace:*",
-    "@wx/editor-theme": "workspace:*",
+    "@mewhhaha/wx-core": "workspace:*",
+    "@mewhhaha/wx-controller": "workspace:*",
+    "@mewhhaha/wx-element": "workspace:*",
+    "@mewhhaha/wx-theme": "workspace:*",
     "@wx/editor-tree-sitter": "workspace:*",
-    "@wx/editor-view-dom": "workspace:*",
+    "@mewhhaha/wx-dom": "workspace:*",
     "@wx/scene-lang-wasm": "workspace:*",
     "@wx/scene-lang-worker": "workspace:*",
     "tree-sitter-typescript": "^0.23.2",

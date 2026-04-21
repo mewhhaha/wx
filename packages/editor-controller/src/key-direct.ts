@@ -5,7 +5,7 @@ import {
   pageUp,
   pasteAfter,
   type Command
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 
 import {
   commandForInsertMode,

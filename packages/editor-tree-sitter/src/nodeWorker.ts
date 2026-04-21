@@ -3,8 +3,8 @@ import { dirname, resolve } from "node:path";
 import { parentPort } from "node:worker_threads";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import type { TextChange } from "@wx/editor-core";
-import type { HighlightSpan, SyntaxSelectionRange } from "@wx/editor-language";
+import type { TextChange } from "@mewhhaha/wx-core";
+import type { HighlightSpan, SyntaxSelectionRange } from "@mewhhaha/wx-language";
 
 import { mapCaptureNameToRole } from "./highlightMapping";
 import { applyTextChange, buildTreeEdit, rebaseTextChanges } from "./incrementalEdits";

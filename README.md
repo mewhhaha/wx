@@ -2,19 +2,45 @@
 
 `wx` is a browser editor stack with a DOM renderer, controller-owned editor session, theming, and pluggable language services.
 
-This repo currently uses workspace-private packages, so the examples below assume you are consuming `wx` from this monorepo or from a local workspace that can resolve the `@wx/*` packages. The plain HTML examples are "no React" examples, not copy-paste CDN snippets.
+This repo currently uses workspace-private packages, so the examples below assume you are consuming `wx` from this monorepo or from a local workspace that can resolve the `@mewhhaha/wx-*` packages. The plain HTML examples are "no React" examples, not copy-paste CDN snippets.
+
+## JSR Publish Status
+
+Base editor packages now have package-local `deno.json` publish config for JSR:
+
+- `@mewhhaha/wx-core`
+- `@mewhhaha/wx-language`
+- `@mewhhaha/wx-layout`
+- `@mewhhaha/wx-theme`
+- `@mewhhaha/wx-controller`
+- `@mewhhaha/wx-dom`
+- `@mewhhaha/wx-element`
+
+Run dry-run validation with:
+
+```bash
+pnpm run jsr:check:editor
+```
+
+Assumptions in current config:
+
+- JSR scope: `@mewhhaha`
+- Initial publish version: `0.1.0`
+- License: `MIT`
+
+If any of those should differ, update package-local `deno.json` files before first publish.
 
 ## Packages
 
-- `@wx/editor-view-dom`
+- `@mewhhaha/wx-dom`
   Imperative DOM editor setup with `createEditor(...)`.
-- `@wx/editor-element`
+- `@mewhhaha/wx-element`
   A custom element wrapper for declarative host pages.
-- `@wx/editor-controller`
+- `@mewhhaha/wx-controller`
   Editor session, viewport, search, registers, jumps, and language orchestration.
-- `@wx/editor-language`
+- `@mewhhaha/wx-language`
   Highlighting, diagnostics, hover, formatting, code actions, comments, and syntax helpers.
-- `@wx/editor-theme`
+- `@mewhhaha/wx-theme`
   Theme shape and CSS variable generation.
 
 ## Quick Start
@@ -48,8 +74,8 @@ pnpm dev
 Use `createEditor(...)` when you want the lowest-level integration surface.
 
 ```ts
-import { createEditor } from "@wx/editor-view-dom";
-import { defaultTheme } from "@wx/editor-theme";
+import { createEditor } from "@mewhhaha/wx-dom";
+import { defaultTheme } from "@mewhhaha/wx-theme";
 
 const mount = document.getElementById("editor");
 
@@ -116,7 +142,7 @@ If you want a non-React page, pair a simple HTML file with a small module script
 `main.ts`
 
 ```ts
-import { createEditor } from "@wx/editor-view-dom";
+import { createEditor } from "@mewhhaha/wx-dom";
 
 const mount = document.getElementById("editor");
 
@@ -134,7 +160,7 @@ createEditor(mount, {
 Use the element wrapper when you want a declarative host surface.
 
 ```ts
-import { defineWxEditorElement } from "@wx/editor-element";
+import { defineWxEditorElement } from "@mewhhaha/wx-element";
 
 defineWxEditorElement();
 ```
@@ -160,7 +186,7 @@ if (!(element instanceof HTMLElement) || !("value" in element)) {
 If you want stronger typing in app code:
 
 ```ts
-import { WxEditorElement } from "@wx/editor-element";
+import { WxEditorElement } from "@mewhhaha/wx-element";
 
 const element = document.querySelector("wx-editor");
 
@@ -177,8 +203,8 @@ Use a ref plus `useEffect`, and destroy the editor on unmount.
 
 ```tsx
 import { useEffect, useRef } from "react";
-import { createEditor, type EditorHandle } from "@wx/editor-view-dom";
-import { defaultTheme } from "@wx/editor-theme";
+import { createEditor, type EditorHandle } from "@mewhhaha/wx-dom";
+import { defaultTheme } from "@mewhhaha/wx-theme";
 
 export function WxEditor() {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -223,7 +249,7 @@ useEffect(() => {
 Pass `languageServices` when you want syntax highlighting and editor intelligence.
 
 ```ts
-import type { EditorLanguageServices } from "@wx/editor-language";
+import type { EditorLanguageServices } from "@mewhhaha/wx-language";
 
 const languageServices: EditorLanguageServices = {
   highlighter: {
@@ -297,7 +323,7 @@ createEditor(mount, {
 Themes are plain objects:
 
 ```ts
-import type { ThemeSpec } from "@wx/editor-theme";
+import type { ThemeSpec } from "@mewhhaha/wx-theme";
 
 const graphite: ThemeSpec = {
   name: "graphite",
@@ -359,9 +385,9 @@ If you want a slightly more complete pattern:
 
 ```tsx
 import { useEffect, useRef } from "react";
-import { createEditor, type EditorHandle } from "@wx/editor-view-dom";
-import type { EditorLanguageServiceInput } from "@wx/editor-language";
-import type { ThemeSpec } from "@wx/editor-theme";
+import { createEditor, type EditorHandle } from "@mewhhaha/wx-dom";
+import type { EditorLanguageServiceInput } from "@mewhhaha/wx-language";
+import type { ThemeSpec } from "@mewhhaha/wx-theme";
 
 interface WxEditorProps {
   value: string;

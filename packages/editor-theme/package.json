@@ -1,5 +1,5 @@
 {
-  "name": "@wx/editor-theme",
+  "name": "@mewhhaha/wx-theme",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -16,6 +16,6 @@
     "build": "tsup src/index.ts --format esm --out-dir dist"
   },
   "dependencies": {
-    "@wx/editor-language": "workspace:*"
+    "@mewhhaha/wx-language": "workspace:*"
   }
 }

@@ -1,4 +1,4 @@
-import type { EditorState, TextChange } from "@wx/editor-core";
+import type { EditorState, TextChange } from "@mewhhaha/wx-core";
 
 import { createLanguageActionsRuntime } from "./language-actions";
 import { createLanguageDiagnosticsRuntime } from "./language-diagnostics";

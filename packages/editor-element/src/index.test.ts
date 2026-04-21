@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createEditorController, type EditorUpdate } from "@wx/editor-controller";
+import { createEditorController, type EditorUpdate } from "@mewhhaha/wx-controller";
 
 import { WxEditorElement, defineWxEditorElement } from "./index";
 

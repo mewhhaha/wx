@@ -1,7 +1,7 @@
 import {
   createEditorController,
   normalizeLanguageServices
-} from "@wx/editor-controller";
+} from "@mewhhaha/wx-controller";
 import { createEditorDom } from "./dom-bootstrap";
 import { createDomChromeRuntime } from "./dom-chrome";
 import { createDomEventRuntime } from "./dom-events";
@@ -12,9 +12,9 @@ import { createDomEditorRuntime, type DomEditorContext } from "./dom-runtime";
 import { applyThemeVariables, mountStyles } from "./dom-styles";
 import type { CreateEditorOptions, EditorHandle } from "./types";
 import { measureMetrics } from "./dom-viewport";
-import type { EditorLanguageServices } from "@wx/editor-language";
-import { languageProviderToServices } from "@wx/editor-language";
-import { defaultTheme, normalizeCommandThemes } from "@wx/editor-theme";
+import type { EditorLanguageServices } from "@mewhhaha/wx-language";
+import { languageProviderToServices } from "@mewhhaha/wx-language";
+import { defaultTheme, normalizeCommandThemes } from "@mewhhaha/wx-theme";
 
 export type {
   CreateEditorOptions,

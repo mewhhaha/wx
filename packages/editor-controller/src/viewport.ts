@@ -1,10 +1,10 @@
-import type { EditorState } from "@wx/editor-core";
-import type { EditorDiagnostic, EditorLineRange, HighlightSpan } from "@wx/editor-language";
+import type { EditorState } from "@mewhhaha/wx-core";
+import type { EditorDiagnostic, EditorLineRange, HighlightSpan } from "@mewhhaha/wx-language";
 import {
   buildVisualRows,
   getVisualRowForOffset,
   type EditorVisualRow
-} from "@wx/editor-layout";
+} from "@mewhhaha/wx-layout";
 import type { EditorLineChange, EditorPendingAction, EditorPresentationState } from "./types";
 
 function getLayoutPendingAction(pendingAction: EditorPendingAction): EditorPendingAction {

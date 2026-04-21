@@ -1,16 +1,16 @@
 import sceneLangWasmUrl from "./assets/scene-lang.wasm?url";
 import { installBenchmarkHarness } from "./benchmarkHarness";
 
-import { createCharacterSelection, createTextDocument } from "@wx/editor-core";
-import { createEditorController } from "@wx/editor-controller";
-import { phTheme, playgroundThemes } from "@wx/editor-theme";
+import { createCharacterSelection, createTextDocument } from "@mewhhaha/wx-core";
+import { createEditorController } from "@mewhhaha/wx-controller";
+import { phTheme, playgroundThemes } from "@mewhhaha/wx-theme";
 import {
   createSceneLangWasm,
   type SceneLangWasm,
   type ShaderCompileResult
 } from "@wx/scene-lang-wasm";
 import { createSceneLangLanguageServices } from "@wx/scene-lang-worker";
-import { createEditor } from "@wx/editor-view-dom";
+import { createEditor } from "@mewhhaha/wx-dom";
 
 import "./style.css";
 

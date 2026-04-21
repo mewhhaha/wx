@@ -2,12 +2,12 @@ import {
   mapOffsetThroughChanges,
   type EditorState,
   type TextChange
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 import type {
   EditorDiagnostic,
   EditorLineRange,
   HighlightSpan
-} from "@wx/editor-language";
+} from "@mewhhaha/wx-language";
 
 import {
   buildHighlightCache,

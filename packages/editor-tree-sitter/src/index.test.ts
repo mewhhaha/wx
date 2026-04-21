@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createTextDocument } from "@wx/editor-core";
-import type { HighlightSpan } from "@wx/editor-language";
+import { createTextDocument } from "@mewhhaha/wx-core";
+import type { HighlightSpan } from "@mewhhaha/wx-language";
 
 import { createTreeSitterLanguageServices, type TreeSitterWorkerHost } from "./index";
 import { typescriptHighlightQuery } from "./highlightQuery";

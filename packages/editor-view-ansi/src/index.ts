@@ -1,7 +1,7 @@
-import type { EditorState } from "@wx/editor-core";
-import type { EditorController, EditorHostServices, EditorPresentationState } from "@wx/editor-controller";
-import type { EditorLanguageServiceInput, LanguageProvider } from "@wx/editor-language";
-import type { ThemeSpec } from "@wx/editor-theme";
+import type { EditorState } from "@mewhhaha/wx-core";
+import type { EditorController, EditorHostServices, EditorPresentationState } from "@mewhhaha/wx-controller";
+import type { EditorLanguageServiceInput, LanguageProvider } from "@mewhhaha/wx-language";
+import type { ThemeSpec } from "@mewhhaha/wx-theme";
 
 export interface RenderEditorAnsiFrameInput {
   state: EditorState;

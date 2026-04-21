@@ -1,5 +1,5 @@
-import type { EditorState } from "@wx/editor-core";
-import type { EditorWorkspacePresentationState } from "@wx/editor-controller";
+import type { EditorState } from "@mewhhaha/wx-core";
+import type { EditorWorkspacePresentationState } from "@mewhhaha/wx-controller";
 import {
   buildEditorLayout,
   buildEditorWorkspaceLayout,
@@ -8,8 +8,8 @@ import {
   type EditorLayoutRow,
   type EditorLayoutRun,
   type EditorWorkspaceLayoutPane
-} from "@wx/editor-layout";
-import { defaultTheme, resolveThemeColor, type ThemeSpec } from "@wx/editor-theme";
+} from "@mewhhaha/wx-layout";
+import { defaultTheme, resolveThemeColor, type ThemeSpec } from "@mewhhaha/wx-theme";
 
 import type { RenderEditorAnsiFrameInput } from "./index";
 import {

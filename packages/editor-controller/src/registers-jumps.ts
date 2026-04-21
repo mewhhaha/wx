@@ -1,4 +1,4 @@
-import type { EditorState } from "@wx/editor-core";
+import type { EditorState } from "@mewhhaha/wx-core";
 
 import { createJumpEntry, jumpEntryEquals, normalizeRegisterName } from "./session";
 import type { EditorJumpEntry, EditorPresentationState } from "./types";

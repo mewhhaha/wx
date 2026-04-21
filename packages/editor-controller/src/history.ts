@@ -5,7 +5,7 @@ import {
   getCursorOffset,
   normalizeSelection,
   type EditorState
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 import type { HistoryEntry, HistoryPlugin } from "./types";
 
 function createHistoryEntry(state: EditorState): HistoryEntry {

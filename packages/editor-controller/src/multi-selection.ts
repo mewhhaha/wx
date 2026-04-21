@@ -6,7 +6,7 @@ import {
   type EditorState,
   type SelectionRange,
   type Transaction
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 
 import { escapeRegex } from "./search";
 import type { EditorSearchState } from "./types";

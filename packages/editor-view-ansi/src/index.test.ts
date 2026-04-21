@@ -12,9 +12,9 @@ import {
   createSelection,
   enterInsertMode,
   moveRight
-} from "@wx/editor-core";
-import { createEditorController } from "@wx/editor-controller";
-import { createEditor } from "@wx/editor-view-dom";
+} from "@mewhhaha/wx-core";
+import { createEditorController } from "@mewhhaha/wx-controller";
+import { createEditor } from "@mewhhaha/wx-dom";
 import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
 import { createAnsiEditorMirror, createNodeHostServices, parseAnsiInput, renderEditorAnsiFrame } from "./index";
@@ -117,7 +117,7 @@ describe("@wx/editor-view-ansi", () => {
     const configSource = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/tsup.config.ts"), "utf8");
 
     expect(source).toContain('@wx/editor-tree-sitter/node');
-    expect(source).toContain('@wx/editor-theme');
+    expect(source).toContain('@mewhhaha/wx-theme');
     expect(source).not.toContain("apps/playground/src/phTheme");
     expect(configSource).not.toContain("../editor-tree-sitter/src/nodeWorker.ts");
     expect(source).not.toContain("treeSitter.worker");
@@ -129,7 +129,7 @@ describe("@wx/editor-view-ansi", () => {
     const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/terminal.ts"), "utf8");
     const indexSource = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/index.ts"), "utf8");
 
-    expect(indexSource).toContain('from "@wx/editor-controller"');
+    expect(indexSource).toContain('from "@mewhhaha/wx-controller"');
     expect(source).toContain("controller.handleKeyInput");
     expect(source).toContain("normalizeLanguageServices");
     expect(source).not.toContain("controller.openCommandLine(");

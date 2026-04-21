@@ -44,7 +44,7 @@ import {
   undo,
   yankSelection,
   type Command
-} from "@wx/editor-core";
+} from "@mewhhaha/wx-core";
 
 export function commandForNormalMode(key: string): Command | null {
   switch (key) {

@@ -1,4 +1,4 @@
-import type { TextChange, TextDocument } from "@wx/editor-core";
+import type { TextChange, TextDocument } from "@mewhhaha/wx-core";
 import type {
   EditorLanguageServices,
   EditorLineRange,
@@ -7,7 +7,7 @@ import type {
   LanguageProvider,
   SyntaxSelectionRange,
   SyntaxSelector
-} from "@wx/editor-language";
+} from "@mewhhaha/wx-language";
 
 import type { TreeSitterWorkerResponse } from "./messages";
 

@@ -4,19 +4,19 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { collectSearchMatches, createEditorState, createSelection } from "@wx/editor-core";
+import { collectSearchMatches, createEditorState, createSelection } from "@mewhhaha/wx-core";
 import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
 import { buildEditorLayout, buildEditorWorkspaceLayout, buildFlashLabels, buildVisualRows } from "./index";
 
-describe("@wx/editor-layout boundaries", () => {
+describe("@mewhhaha/wx-layout boundaries", () => {
   it("keeps layout runtime modules on public package surfaces only", () => {
     expect(collectCrossPackageSrcLeaks("packages/editor-layout/src")).toEqual([]);
   });
 
   it("keeps layout renderer-agnostic and free of controller imports", () => {
     const source = readFileSync(resolve(process.cwd(), "packages/editor-layout/src/index.ts"), "utf8");
-    expect(source).not.toContain("@wx/editor-controller");
+    expect(source).not.toContain("@mewhhaha/wx-controller");
   });
 });
 
@@ -104,6 +104,7 @@ function createInput(value: string) {
     state,
     presentation: {
       filePath: "examples/test.ts",
+      bufferTitle: "examples/test.ts",
       themeName: null,
       viewport: {
         ...viewport,
