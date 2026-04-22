@@ -5,7 +5,8 @@ import {
   type EditorCodeAction,
   type EditorLanguageServiceInput,
   type EditorLanguageServices,
-  type LanguageProvider
+  type LanguageProvider,
+  type LanguageRegistry
 } from "@mewhhaha/wx-language";
 import type { ThemeSpec } from "@mewhhaha/wx-theme";
 
@@ -31,15 +32,25 @@ export interface DomHandleRuntime {
   getState(): EditorState;
   setFilePath(filePath: string): void;
   setLanguageServices(languageServices: EditorLanguageServiceInput | null): Promise<void>;
+  setLanguageRegistry(registry: LanguageRegistry | null): Promise<void>;
+  resetLanguageServices(): Promise<void>;
   setLanguage(language: LanguageProvider | null): Promise<void>;
   setTheme(theme: ThemeSpec): void;
   setValue(value: string): Promise<void>;
 }
 
 export function createDomHandleRuntime(options: CreateDomHandleRuntimeOptions): DomHandleRuntime {
-  const destroyLanguageServices = () => {
-    for (const services of options.context.languageServices) {
+  const destroyLanguageServices = (languageServices = options.context.languageServices) => {
+    for (const services of languageServices) {
       services.highlighter?.destroy?.();
+    }
+  };
+  const destroyRemovedLanguageServices = (previous: readonly EditorLanguageServices[]) => {
+    const nextServices = new Set(options.context.languageServices);
+    for (const services of previous) {
+      if (!nextServices.has(services)) {
+        services.highlighter?.destroy?.();
+      }
     }
   };
 
@@ -89,14 +100,34 @@ export function createDomHandleRuntime(options: CreateDomHandleRuntimeOptions): 
     },
     setFilePath(filePath) {
       options.context.bufferTitle = filePath;
+      const previousLanguageServices = [...options.context.languageServices];
       options.controller.setFilePath(filePath);
+      options.runtime.syncPresentationMirrors();
+      destroyRemovedLanguageServices(previousLanguageServices);
       options.runtime.patchStatus();
     },
     async setLanguageServices(languageServices) {
-      destroyLanguageServices();
+      const previousLanguageServices = [...options.context.languageServices];
       options.context.languageServices = options.normalizeLanguageServices(languageServices);
       options.controller.setLanguageServices(options.context.languageServices);
+      options.runtime.syncPresentationMirrors();
+      destroyRemovedLanguageServices(previousLanguageServices);
+      options.context.languageServices = [...options.controller.getPresentationState().language.services];
       options.runtime.syncLanguageMirrors();
+      options.runtime.renderSurfaceSnapshot({ forceRows: true });
+    },
+    async setLanguageRegistry(registry) {
+      const previousLanguageServices = [...options.context.languageServices];
+      options.controller.setLanguageRegistry(registry);
+      options.runtime.syncPresentationMirrors();
+      destroyRemovedLanguageServices(previousLanguageServices);
+      options.runtime.renderSurfaceSnapshot({ forceRows: true });
+    },
+    async resetLanguageServices() {
+      const previousLanguageServices = [...options.context.languageServices];
+      options.controller.resetLanguageServices();
+      options.runtime.syncPresentationMirrors();
+      destroyRemovedLanguageServices(previousLanguageServices);
       options.runtime.renderSurfaceSnapshot({ forceRows: true });
     },
     async setLanguage(language) {

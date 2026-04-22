@@ -1,5 +1,12 @@
 import { createCharacterSelection, getSelectionOffsets, type CommandContext, type EditorState, type Transaction } from "@mewhhaha/wx-core";
-import type { EditorCodeAction, EditorDiagnostic, EditorHover, EditorLanguageServiceInput } from "@mewhhaha/wx-language";
+import type {
+  EditorCodeAction,
+  EditorDiagnostic,
+  EditorHover,
+  EditorLanguageServiceInput,
+  EditorLanguageServices,
+  LanguageRegistry
+} from "@mewhhaha/wx-language";
 
 import { normalizeLanguageServices } from "./normalize";
 import { alignSelectionTopVisualRow } from "./viewport";
@@ -104,6 +111,10 @@ interface CreateControllerSurfaceOptions {
     EditorController,
     "selectNextOccurrence" | "selectAllOccurrences" | "splitSelectionsByLine" | "collapseSelections" | "removePrimarySelection"
   >;
+  getLanguageRegistry(): LanguageRegistry | null;
+  setLanguageRegistry(registry: LanguageRegistry | null): void;
+  getLanguageResolutionMode(): "auto" | "manual";
+  setLanguageResolutionMode(mode: "auto" | "manual"): void;
   getActiveOffset(): number;
   createJumpEntry(): EditorJumpEntry;
 }
@@ -192,6 +203,42 @@ function extractSelectionTarget(state: EditorState, activeOffset: number): strin
 export function createControllerSurface(options: CreateControllerSurfaceOptions): EditorController {
   const presentation = options.getPresentation();
   let surface!: EditorController;
+  const applyLanguageServices = (
+    languageServices: EditorLanguageServiceInput | readonly EditorLanguageServices[] | null,
+    effectType: string | null,
+    syncLanguageOptions: {
+      forceDocumentSync?: boolean;
+      refreshHighlights?: boolean;
+      refreshDiagnostics?: boolean;
+      refreshLineChanges?: boolean;
+    } = {
+      forceDocumentSync: true,
+      refreshHighlights: true,
+      refreshDiagnostics: true,
+      refreshLineChanges: true
+    }
+  ) => {
+    presentation.language.services = normalizeLanguageServices(languageServices);
+    options.languageRuntime.resetRequestTracking();
+    options.languageRuntime.clearLanguageState();
+    options.refreshSearchMatchCache(options.getState());
+    options.languageRuntime.syncVisibleLanguageDecorations();
+    options.workspaceRuntime.syncFromActiveState(options.getState(), presentation, { docChanged: false });
+    if (effectType) {
+      options.lifecycleRuntime.emitPresentationUpdate(effectType);
+    }
+    void options.languageRuntime.syncLanguage(syncLanguageOptions);
+  };
+  const resolveLanguageServicesForFilePath = (filePath: string | null): EditorLanguageServices[] => {
+    if (!filePath) {
+      return [];
+    }
+
+    return normalizeLanguageServices(options.getLanguageRegistry()?.resolveForFilePath(filePath)?.services ?? null);
+  };
+  const applyResolvedLanguageServices = (effectType: string | null) => {
+    applyLanguageServices(resolveLanguageServicesForFilePath(presentation.filePath), effectType);
+  };
   const loadActivePaneState = (
     effectType: string,
     runtimeOptions: { clearHistory?: boolean; resetLanguage?: boolean } = {}
@@ -204,6 +251,10 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     }
     options.refreshSearchMatchCache(options.getState());
     if (runtimeOptions.resetLanguage) {
+      if (options.getLanguageResolutionMode() === "auto") {
+        presentation.language.services = resolveLanguageServicesForFilePath(presentation.filePath);
+        options.workspaceRuntime.syncFromActiveState(options.getState(), presentation, { docChanged: false });
+      }
       options.languageRuntime.resetRequestTracking();
       options.languageRuntime.clearLanguageState();
     }
@@ -536,18 +587,22 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       options.viewportRuntime.revealSelection();
     },
     setLanguageServices(languageServices: EditorLanguageServiceInput | null) {
-      presentation.language.services = normalizeLanguageServices(languageServices);
-      options.languageRuntime.resetRequestTracking();
-      options.languageRuntime.clearLanguageState();
-      options.refreshSearchMatchCache(options.getState());
-      options.languageRuntime.syncVisibleLanguageDecorations();
-      options.lifecycleRuntime.emitPresentationUpdate("language.services");
-      void options.languageRuntime.syncLanguage({
-        forceDocumentSync: true,
-        refreshHighlights: true,
-        refreshDiagnostics: true,
-        refreshLineChanges: true
-      });
+      options.setLanguageResolutionMode("manual");
+      applyLanguageServices(languageServices, "language.services");
+    },
+    setLanguageRegistry(registry) {
+      if (options.getLanguageRegistry() === registry) {
+        return;
+      }
+
+      options.setLanguageRegistry(registry);
+      if (options.getLanguageResolutionMode() === "auto") {
+        applyResolvedLanguageServices("language.registry");
+      }
+    },
+    resetLanguageServices() {
+      options.setLanguageResolutionMode("auto");
+      applyResolvedLanguageServices("language.services.reset");
     },
     setHostServices(host) {
       if (presentation.language.host === host) {
@@ -570,6 +625,11 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       presentation.filePath = filePath;
       presentation.bufferTitle = filePath ?? presentation.bufferTitle;
       options.workspaceRuntime.syncActiveFilePath(filePath);
+      if (options.getLanguageResolutionMode() === "auto") {
+        applyResolvedLanguageServices("presentation.file-path");
+        return;
+      }
+
       options.lifecycleRuntime.emitPresentationUpdate("presentation.file-path");
       void options.languageRuntime.syncLanguage({
         refreshHighlights: false,

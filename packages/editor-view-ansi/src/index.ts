@@ -1,6 +1,6 @@
 import type { EditorState } from "@mewhhaha/wx-core";
 import type { EditorController, EditorHostServices, EditorPresentationState } from "@mewhhaha/wx-controller";
-import type { EditorLanguageServiceInput, LanguageProvider } from "@mewhhaha/wx-language";
+import type { EditorLanguageServiceInput, LanguageProvider, LanguageRegistry } from "@mewhhaha/wx-language";
 import type { ThemeSpec } from "@mewhhaha/wx-theme";
 
 export interface RenderEditorAnsiFrameInput {
@@ -24,6 +24,7 @@ export interface CreateAnsiEditorMirrorOptions {
   value?: string;
   language?: LanguageProvider | null;
   languageServices?: EditorLanguageServiceInput | null;
+  languageRegistry?: LanguageRegistry | null;
   write(text: string): void;
   theme?: ThemeSpec;
   cols: number;

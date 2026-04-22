@@ -34,6 +34,60 @@ describe("language registry", () => {
     expect(registry.get("typescript")).toBeNull();
   });
 
+  it("resolves exact filenames before extensions", () => {
+    const dockerServices = {};
+    const registry = createLanguageRegistry([
+      {
+        id: "dockerfile",
+        filenames: ["Dockerfile"],
+        services: dockerServices
+      },
+      {
+        id: "text",
+        extensions: [".txt"],
+        services: {}
+      }
+    ]);
+
+    expect(registry.resolveForFilePath("/repo/Dockerfile")?.id).toBe("dockerfile");
+    expect(registry.resolveForFilePath("/repo/Dockerfile")?.services).toBe(dockerServices);
+  });
+
+  it("prefers longest matching extension", () => {
+    const declarationServices = {};
+    const scriptServices = {};
+    const registry = createLanguageRegistry([
+      {
+        id: "typescript",
+        extensions: [".ts"],
+        services: scriptServices
+      },
+      {
+        id: "typescript-declaration",
+        extensions: [".d.ts"],
+        services: declarationServices
+      }
+    ]);
+
+    expect(registry.resolveForFilePath("types/index.d.ts")?.id).toBe("typescript-declaration");
+    expect(registry.resolveForFilePath("src/index.ts")?.id).toBe("typescript");
+  });
+
+  it("falls back to matchDocumentKind and returns null when unmatched", () => {
+    const registry = createLanguageRegistry([
+      {
+        id: "scene",
+        matchDocumentKind(kind) {
+          return kind.endsWith(".scene");
+        },
+        services: {}
+      }
+    ]);
+
+    expect(registry.resolveForFilePath("levels/intro.scene")?.id).toBe("scene");
+    expect(registry.resolveForFilePath("notes/readme.md")).toBeNull();
+  });
+
   it("wraps a legacy language provider into split services", async () => {
     const provider: LanguageProvider = {
       async open() {},

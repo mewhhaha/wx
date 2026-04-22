@@ -272,6 +272,7 @@ export function createDomEditorRuntime(context: DomEditorContext): DomEditorRunt
   };
 
   const syncLanguageMirrors = () => {
+    context.languageServices = [...languageState.services];
     context.diagnostics = languageState.diagnostics;
     context.diagnosticsByLine = languageState.diagnosticsByLine;
     context.lineChangesByLine = languageState.lineChangesByLine as Map<number, LineChangeState>;

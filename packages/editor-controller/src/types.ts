@@ -16,7 +16,8 @@ import type {
   EditorLanguageServiceInput,
   EditorLanguageServices,
   EditorLineRange,
-  HighlightSpan
+  HighlightSpan,
+  LanguageRegistry
 } from "@mewhhaha/wx-language";
 import type { EditorLineVisualRange, EditorVisualRow } from "@mewhhaha/wx-layout";
 
@@ -403,6 +404,8 @@ export interface EditorController {
   alignViewportToSelection(position: "top" | "center" | "bottom"): boolean;
   revealSelection(): void;
   setLanguageServices(languageServices: EditorLanguageServiceInput | readonly EditorLanguageServices[] | null): void;
+  setLanguageRegistry(registry: LanguageRegistry | null): void;
+  resetLanguageServices(): void;
   setHostServices(host: EditorHostServices | null): void;
   setFilePath(filePath: string | null): void;
   setThemeName(themeName: string | null): void;
@@ -441,5 +444,6 @@ export interface CreateEditorControllerOptions {
   language?: string;
   theme?: string;
   filePath?: string;
+  languageRegistry?: LanguageRegistry | null;
   history?: HistoryPlugin | false;
 }

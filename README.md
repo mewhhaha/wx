@@ -106,7 +106,51 @@ Notes:
 
 - `createEditor(...)` mounts immediately into the container you pass in.
 - Call `editor.destroy()` when the host page tears down the mount.
-- Call `editor.setValue(...)`, `editor.setTheme(...)`, `editor.setLanguageServices(...)`, or `editor.setFilePath(...)` to update the instance later.
+- Call `editor.setValue(...)`, `editor.setTheme(...)`, `editor.setLanguageServices(...)`, `editor.resetLanguageServices()`, `editor.setLanguageRegistry(...)`, or `editor.setFilePath(...)` later.
+
+## Declarative Language Config
+
+Use `createLanguageRegistry([...])` for Helix-style file matching without a separate config file.
+
+```ts
+import { createEditor } from "@mewhhaha/wx-dom";
+import { createLanguageRegistry } from "@mewhhaha/wx-language";
+
+const languageRegistry = createLanguageRegistry([
+  {
+    id: "typescript",
+    extensions: [".ts", ".tsx"],
+    services: createTypeScriptServices()
+  },
+  {
+    id: "scene",
+    extensions: [".scene"],
+    services: createSceneLanguageServices()
+  },
+  {
+    id: "dockerfile",
+    filenames: ["Dockerfile"],
+    services: createDockerfileServices()
+  }
+]);
+
+createEditor(document.getElementById("editor")!, {
+  filePath: "src/main.ts",
+  languageRegistry
+});
+```
+
+Resolution order:
+
+- exact basename from `filenames`
+- longest matching suffix from `extensions`
+- fallback `matchDocumentKind(filePath)`
+
+Precedence:
+
+- registry auto-resolution runs only when no manual override is active
+- `editor.setLanguage(...)` and `editor.setLanguageServices(...)` switch to manual mode
+- `editor.resetLanguageServices()` returns to registry-driven auto mode
 
 ## Plain HTML With a Small Module Entry
 
@@ -375,6 +419,8 @@ The playground has working examples in:
 - `subscribe(listener)`
 - `setFilePath(filePath)`
 - `setLanguageServices(languageServices)`
+- `setLanguageRegistry(languageRegistry)`
+- `resetLanguageServices()`
 - `setLanguage(languageProvider)`
 - `setTheme(theme)`
 - `setValue(value)`

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { createSelectionSet, enterInsertMode, enterNormalMode, insertText, moveRight } from "@mewhhaha/wx-core";
-import type { EditorLanguageServices } from "@mewhhaha/wx-language";
+import { createLanguageRegistry, type EditorLanguageServices } from "@mewhhaha/wx-language";
 
 import { createEditorController, normalizeLanguageServices } from "./index";
 import type { EditorPaneTreeNode } from "./types";
@@ -84,6 +84,115 @@ describe("editor controller", () => {
     expect(normalizeLanguageServices(undefined)).toEqual([]);
     expect(normalizeLanguageServices(first)).toEqual([first]);
     expect(normalizeLanguageServices([first, second])).toEqual([first, second]);
+  });
+
+  it("auto resolves language services from file path registry", () => {
+    const tsServices: EditorLanguageServices = {};
+    const registry = createLanguageRegistry([
+      {
+        id: "typescript",
+        extensions: [".ts"],
+        services: tsServices
+      }
+    ]);
+
+    const controller = createEditorController({
+      value: "const value = 1;\n",
+      filePath: "src/example.ts",
+      languageRegistry: registry
+    });
+
+    expect(controller.getPresentationState().language.services).toEqual([tsServices]);
+  });
+
+  it("re-resolves file path changes in auto mode and clears unmatched paths", () => {
+    const tsServices: EditorLanguageServices = {};
+    const sceneServices: EditorLanguageServices = {};
+    const registry = createLanguageRegistry([
+      {
+        id: "typescript",
+        extensions: [".ts"],
+        services: tsServices
+      },
+      {
+        id: "scene",
+        extensions: [".scene"],
+        services: sceneServices
+      }
+    ]);
+    const controller = createEditorController({
+      value: "alpha",
+      filePath: "src/example.ts",
+      languageRegistry: registry
+    });
+
+    controller.setFilePath("levels/intro.scene");
+    expect(controller.getPresentationState().language.services).toEqual([sceneServices]);
+
+    controller.setFilePath("notes/readme.md");
+    expect(controller.getPresentationState().language.services).toEqual([]);
+  });
+
+  it("keeps manual language services until reset restores auto mode", () => {
+    const tsServices: EditorLanguageServices = {};
+    const sceneServices: EditorLanguageServices = {};
+    const manualServices: EditorLanguageServices = {};
+    const registry = createLanguageRegistry([
+      {
+        id: "typescript",
+        extensions: [".ts"],
+        services: tsServices
+      },
+      {
+        id: "scene",
+        extensions: [".scene"],
+        services: sceneServices
+      }
+    ]);
+    const controller = createEditorController({
+      value: "alpha",
+      filePath: "src/example.ts",
+      languageRegistry: registry
+    });
+
+    controller.setLanguageServices([manualServices]);
+    controller.setFilePath("levels/intro.scene");
+    expect(controller.getPresentationState().language.services).toEqual([manualServices]);
+
+    controller.resetLanguageServices();
+    expect(controller.getPresentationState().language.services).toEqual([sceneServices]);
+  });
+
+  it("reapplies registry changes only while auto mode is active", () => {
+    const firstTsServices: EditorLanguageServices = {};
+    const secondTsServices: EditorLanguageServices = {};
+    const manualServices: EditorLanguageServices = {};
+    const firstRegistry = createLanguageRegistry([
+      {
+        id: "typescript",
+        extensions: [".ts"],
+        services: firstTsServices
+      }
+    ]);
+    const secondRegistry = createLanguageRegistry([
+      {
+        id: "typescript",
+        extensions: [".ts"],
+        services: secondTsServices
+      }
+    ]);
+    const controller = createEditorController({
+      value: "alpha",
+      filePath: "src/example.ts",
+      languageRegistry: firstRegistry
+    });
+
+    controller.setLanguageRegistry(secondRegistry);
+    expect(controller.getPresentationState().language.services).toEqual([secondTsServices]);
+
+    controller.setLanguageServices([manualServices]);
+    controller.setLanguageRegistry(firstRegistry);
+    expect(controller.getPresentationState().language.services).toEqual([manualServices]);
   });
 
   it("adds next occurrences without collapsing prior selections", () => {

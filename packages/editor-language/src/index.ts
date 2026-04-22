@@ -223,6 +223,8 @@ export interface EditorLanguageRegistration {
   id: string;
   services: EditorLanguageServices;
   aliases?: readonly string[];
+  extensions?: readonly string[];
+  filenames?: readonly string[];
   matchDocumentKind?: (kind: string) => boolean;
 }
 
@@ -231,6 +233,7 @@ export interface LanguageRegistry {
   unregister(id: string): void;
   get(id: string): EditorLanguageRegistration | null;
   resolve(kindOrId: string): EditorLanguageRegistration | null;
+  resolveForFilePath(filePath: string): EditorLanguageRegistration | null;
   entries(): readonly EditorLanguageRegistration[];
   clear(): void;
 }
@@ -281,8 +284,19 @@ export function languageProviderToServices(provider: LanguageProvider | null): E
   };
 }
 
-export function createLanguageRegistry(): LanguageRegistry {
+function getFileBasename(filePath: string): string {
+  const lastSlash = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return lastSlash >= 0 ? filePath.slice(lastSlash + 1) : filePath;
+}
+
+export function createLanguageRegistry(
+  initialRegistrations: readonly EditorLanguageRegistration[] = []
+): LanguageRegistry {
   const registrations = new Map<string, EditorLanguageRegistration>();
+
+  for (const registration of initialRegistrations) {
+    registrations.set(registration.id, registration);
+  }
 
   return {
     register(registration) {
@@ -303,6 +317,36 @@ export function createLanguageRegistry(): LanguageRegistry {
 
       for (const registration of registrations.values()) {
         if (registration.aliases?.includes(kindOrId) || registration.matchDocumentKind?.(kindOrId)) {
+          return registration;
+        }
+      }
+
+      return null;
+    },
+    resolveForFilePath(filePath) {
+      const basename = getFileBasename(filePath);
+      let matchedByExtension: EditorLanguageRegistration | null = null;
+      let matchedExtensionLength = -1;
+
+      for (const registration of registrations.values()) {
+        if (registration.filenames?.includes(basename)) {
+          return registration;
+        }
+
+        for (const extension of registration.extensions ?? []) {
+          if (filePath.endsWith(extension) && extension.length > matchedExtensionLength) {
+            matchedByExtension = registration;
+            matchedExtensionLength = extension.length;
+          }
+        }
+      }
+
+      if (matchedByExtension) {
+        return matchedByExtension;
+      }
+
+      for (const registration of registrations.values()) {
+        if (registration.matchDocumentKind?.(filePath)) {
           return registration;
         }
       }

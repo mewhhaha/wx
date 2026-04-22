@@ -168,7 +168,11 @@ function getContentCols(cols: number, lineCount: number): { gutterCols: number; 
 export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): AnsiEditorMirror {
   const controller =
     options.controller ??
-    createEditorController({ value: options.value ?? "", filePath: options.filePath });
+    createEditorController({
+      value: options.value ?? "",
+      filePath: options.filePath,
+      languageRegistry: options.languageRegistry
+    });
   const write = options.write;
   const indentGuides = normalizeIndentGuides(options.indentGuides);
   let theme = options.theme ?? defaultTheme;
@@ -177,9 +181,14 @@ export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): 
   let mounted = false;
   let pendingRender = false;
   let unsubscribe = () => {};
+  const hasExplicitLanguage = options.language !== undefined || options.languageServices !== undefined;
   const normalizedLanguageServices = normalizeLanguageServices(
     options.languageServices ?? languageProviderToServices(options.language ?? null)
   );
+
+  if (options.languageRegistry !== undefined) {
+    controller.setLanguageRegistry(options.languageRegistry);
+  }
 
   if (options.filePath !== undefined) {
     controller.setFilePath(options.filePath);
@@ -195,7 +204,7 @@ export function createAnsiEditorMirror(options: CreateAnsiEditorMirrorOptions): 
     controller.setThemeName(options.theme.name);
   }
 
-  if (options.language !== undefined || options.languageServices !== undefined) {
+  if (hasExplicitLanguage) {
     controller.setLanguageServices(normalizedLanguageServices);
   }
 

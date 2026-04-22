@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 import { createCharacterSelection, createSelection, createTextDocument, getSelectionOffsets } from "@mewhhaha/wx-core";
 import { createEditorController } from "@mewhhaha/wx-controller";
-import type { HighlightSpan, LanguageProvider } from "@mewhhaha/wx-language";
+import { createLanguageRegistry, type HighlightSpan, type LanguageProvider } from "@mewhhaha/wx-language";
 import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundaries";
 
 import { createEditor } from "./index";
@@ -159,6 +159,40 @@ describe("createEditor", () => {
 
     expect(editor.controller.getPresentationState().filePath).toBeNull();
     expect(container.querySelector("[data-wx-editor-status-file='true']")?.textContent).toBe(" [scratch]");
+  });
+
+  it("auto resolves registry services and reset restores them after manual override", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const tsServices = {};
+    const sceneServices = {};
+    const registry = createLanguageRegistry([
+      {
+        id: "typescript",
+        extensions: [".ts"],
+        services: tsServices
+      },
+      {
+        id: "scene",
+        extensions: [".scene"],
+        services: sceneServices
+      }
+    ]);
+    const editor = createEditor(container, {
+      value: "alpha",
+      filePath: "src/example.ts",
+      languageRegistry: registry
+    });
+    const manualLanguage = createStubLanguage([{ from: 0, to: 5, role: "keyword" }]);
+
+    expect(editor.controller.getPresentationState().language.services).toEqual([tsServices]);
+
+    await editor.setLanguage(manualLanguage);
+    editor.setFilePath("levels/intro.scene");
+    expect(editor.controller.getPresentationState().language.services).not.toEqual([sceneServices]);
+
+    await editor.resetLanguageServices();
+    expect(editor.controller.getPresentationState().language.services).toEqual([sceneServices]);
   });
 
   it("runs :new through DOM keyboard input", async () => {

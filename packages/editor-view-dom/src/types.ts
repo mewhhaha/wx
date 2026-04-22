@@ -2,7 +2,8 @@ import type { EditorState } from "@mewhhaha/wx-core";
 import type {
   EditorCodeAction,
   EditorLanguageServiceInput,
-  LanguageProvider
+  LanguageProvider,
+  LanguageRegistry
 } from "@mewhhaha/wx-language";
 import type {
   EditorController,
@@ -20,6 +21,7 @@ export interface CreateEditorOptions {
   value?: string;
   language?: LanguageProvider | null;
   languageServices?: EditorLanguageServiceInput | null;
+  languageRegistry?: LanguageRegistry | null;
   theme?: ThemeSpec;
   commandThemes?: readonly ThemeSpec[];
   softWrap?: boolean;
@@ -42,6 +44,8 @@ export interface EditorHandle {
   getState(): EditorState;
   setFilePath(filePath: string): void;
   setLanguageServices(languageServices: EditorLanguageServiceInput | null): Promise<void>;
+  setLanguageRegistry(registry: LanguageRegistry | null): Promise<void>;
+  resetLanguageServices(): Promise<void>;
   setLanguage(language: LanguageProvider | null): Promise<void>;
   setTheme(theme: ThemeSpec): void;
   setValue(value: string): Promise<void>;

@@ -1,4 +1,5 @@
 import { createEditorState, type EditorState } from "@mewhhaha/wx-core";
+import type { LanguageRegistry } from "@mewhhaha/wx-language";
 
 import { createCommandRuntime, type CommandRuntime } from "./command-runtime";
 import { createCommandsRuntime, type CommandsRuntime } from "./commands";
@@ -99,6 +100,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   const history = options.history === false ? null : options.history ?? createSnapshotHistory();
   const jumpList = presentation.jumps.items as EditorJumpEntry[];
   const registers = presentation.registers;
+  let languageRegistry = options.languageRegistry ?? null;
+  let languageResolutionMode: "auto" | "manual" = languageRegistry ? "auto" : "manual";
   let controller!: EditorController;
   let commandRuntime!: CommandRuntime;
   let commandsRuntime!: CommandsRuntime;
@@ -428,6 +431,14 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     workspaceRuntime,
     keyRuntime,
     multiSelectionRuntime,
+    getLanguageRegistry: () => languageRegistry,
+    setLanguageRegistry(nextRegistry: LanguageRegistry | null) {
+      languageRegistry = nextRegistry;
+    },
+    getLanguageResolutionMode: () => languageResolutionMode,
+    setLanguageResolutionMode(nextMode) {
+      languageResolutionMode = nextMode;
+    },
     getActiveOffset: contextRuntime.getActiveOffset,
     createJumpEntry: () => createJumpEntry(state)
   });
@@ -437,6 +448,10 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       workspaceRuntime.applyBufferChangesToSiblingPanes(update.transaction.changes);
     }
   });
+
+  if (languageResolutionMode === "auto") {
+    controller.resetLanguageServices();
+  }
 
   return controller;
 }

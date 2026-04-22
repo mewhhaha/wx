@@ -44,20 +44,26 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     createEditorController({
       value: options.value ?? "",
       theme: options.theme?.name,
-      filePath: options.filePath
+      filePath: options.filePath,
+      languageRegistry: options.languageRegistry
     });
   let state = controller.getState();
   const host = options.host ?? null;
-  let languageServices = normalizeLanguageServices(
-    options.languageServices ?? languageProviderToServices(options.language ?? null)
-  );
+  const hasExplicitLanguage = options.language !== undefined || options.languageServices !== undefined;
+  const initialLanguageServices = options.languageServices ?? languageProviderToServices(options.language ?? null);
   let theme = options.theme ?? defaultTheme;
+  if (options.languageRegistry !== undefined) {
+    controller.setLanguageRegistry(options.languageRegistry);
+  }
   if (options.filePath !== undefined) {
     controller.setFilePath(options.filePath);
   }
   controller.setThemeName(theme.name);
   controller.setHostServices(host);
-  controller.setLanguageServices(languageServices);
+  if (hasExplicitLanguage) {
+    controller.setLanguageServices(initialLanguageServices);
+  }
+  let languageServices = [...controller.getPresentationState().language.services] as EditorLanguageServices[];
   const presentation = controller.getPresentationState();
   const metrics = measureMetrics(container);
   const {
