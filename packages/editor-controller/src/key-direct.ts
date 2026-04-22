@@ -95,6 +95,12 @@ export async function handleDirectKey(
     return { handled: await context.openFileSearchPicker() };
   }
 
+  if (!input.ctrl && !input.meta && !input.alt && input.key === "F2") {
+    context.openCommandLine(":");
+    await context.getController().handleTextInput("rename ");
+    return { handled: true };
+  }
+
   if (input.ctrl && !input.meta && !input.alt && state.mode === "insert" && input.key === "s") {
     controller.execute((_state, _dispatch, commandContext) => commandContext.history?.checkpoint?.() ?? false);
     return { handled: true };

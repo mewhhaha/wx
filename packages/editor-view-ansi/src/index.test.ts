@@ -926,6 +926,8 @@ describe("@wx/editor-view-ansi", () => {
     expect(parseAnsiInput("\u0010")).toEqual(["Ctrl+p"]);
     expect(parseAnsiInput("\u0011")).toEqual(["Ctrl+q"]);
     expect(parseAnsiInput("\u0008")).toEqual(["Ctrl+h"]);
+    expect(parseAnsiInput("\u001bOQ")).toEqual(["F2"]);
+    expect(parseAnsiInput("\u001b[12~")).toEqual(["F2"]);
   });
 
   it("routes Ctrl+Space through ANSI completion requests", async () => {
@@ -1157,7 +1159,7 @@ describe("@wx/editor-view-ansi", () => {
     terminal.destroy();
   });
 
-  it("keeps ? workspace-symbol and rename parity between DOM and ANSI", async () => {
+  it("keeps ? workspace-symbol and F2 rename parity between DOM and ANSI", async () => {
     const services = {
       goto: {
         async references() {
@@ -1211,10 +1213,8 @@ describe("@wx/editor-view-ansi", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     input.emit("\u001b");
     await flushAsyncWork(64);
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
-    input.emit("?");
-    input.emit("n");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true }));
+    input.emit("\u001bOQ");
     await flushAsyncWork(64);
 
     expect(domController.getPresentationState().ui.commandLine.value).toBe("rename ");

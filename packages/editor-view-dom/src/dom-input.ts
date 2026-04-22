@@ -87,10 +87,12 @@ export function shouldRouteKeydown(
     options.stickyViewMode ||
     options.hoverActive;
   const plainEditorKey = !event.metaKey && !event.ctrlKey && !event.altKey;
+  const functionEditorKey = !event.metaKey && !event.ctrlKey && !event.altKey && event.key === "F2";
 
   return (
     hasCommandState ||
     plainEditorKey ||
+    functionEditorKey ||
     isControllerHandledModifierKey(event, {
       state: options.state,
       commandLineActive: options.commandLineActive,

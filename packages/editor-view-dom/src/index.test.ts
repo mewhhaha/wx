@@ -1822,7 +1822,7 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-command-text='true']")?.textContent).toBe("rename ");
   });
 
-  it("routes ? symbol, reference, and rename actions through controller-owned UI state", async () => {
+  it("routes ? symbol, reference, and F2 rename through controller-owned UI state", async () => {
     const container = document.createElement("div");
     document.body.append(container);
 
@@ -1878,8 +1878,7 @@ describe("createEditor", () => {
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await flushAsyncWork(64);
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true }));
     await flushAsyncWork(64);
     expect(container.querySelector("[data-wx-editor-command-text='true']")?.textContent).toBe("rename ");
   });

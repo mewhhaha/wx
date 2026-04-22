@@ -36,8 +36,7 @@ const QUESTION_ACTIONS: EditorCommandCompletionItem[] = [
   { label: "p", detail: "show panes (Ctrl-w window mode)" },
   { label: "s", detail: "show document symbols" },
   { label: "S", detail: "show workspace symbols" },
-  { label: "r", detail: "show references" },
-  { label: "n", detail: "rename current symbol" }
+  { label: "r", detail: "show references" }
 ];
 
 export function getQuestionActionItems(): EditorCommandCompletionItem[] {

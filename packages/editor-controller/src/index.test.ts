@@ -406,8 +406,7 @@ describe("editor controller", () => {
       "p",
       "s",
       "S",
-      "r",
-      "n"
+      "r"
     ]);
 
     await controller.handleKeyInput({ key: "b", text: "b" });
@@ -425,6 +424,24 @@ describe("editor controller", () => {
     await controller.handleKeyInput({ key: "?" });
     await controller.handleKeyInput({ key: "F", text: "F", shift: true });
     expect(controller.getPresentationState().ui.picker.active).toBe(false);
+  });
+
+  it("does not open rename from deprecated ?n chord", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    await controller.handleKeyInput({ key: "?" });
+    await controller.handleKeyInput({ key: "n", text: "n" });
+
+    expect(controller.getPresentationState().ui.commandLine.active).toBe(false);
+  });
+
+  it("opens rename from F2", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    await controller.handleKeyInput({ key: "F2" });
+
+    expect(controller.getPresentationState().ui.commandLine.active).toBe(true);
+    expect(controller.getPresentationState().ui.commandLine.value).toBe("rename ");
   });
 
   it("handles flash-target state in the controller", () => {

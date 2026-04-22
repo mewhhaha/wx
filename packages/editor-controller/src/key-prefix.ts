@@ -275,12 +275,6 @@ export async function handlePendingActionKey(
       await context.gotoTarget("references");
       return { handled: true };
     }
-
-    if (input.key === "n") {
-      context.openCommandLine(":");
-      await context.getController().handleTextInput("rename ");
-      return { handled: true };
-    }
   }
 
   if (nextPending.kind === "find") {

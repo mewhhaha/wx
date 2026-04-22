@@ -108,6 +108,12 @@ export function parseAnsiInput(chunk: Buffer | string): string[] {
       continue;
     }
 
+    if (slice.startsWith("\u001bOQ") || slice.startsWith("\u001b[12~")) {
+      keys.push("F2");
+      index += slice.startsWith("\u001bOQ") ? 2 : 4;
+      continue;
+    }
+
     const char = text[index] ?? "";
     const code = char.charCodeAt(0);
 
