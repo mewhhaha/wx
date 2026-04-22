@@ -3,7 +3,9 @@ import type { EditorWorkspacePresentationState } from "@mewhhaha/wx-controller";
 import {
   buildEditorLayout,
   buildEditorWorkspaceLayout,
+  getEditorFilePickerPresentation,
   type EditorLayoutModel,
+  type EditorLayoutPickerItemState,
   type EditorLayoutPanel,
   type EditorLayoutRow,
   type EditorLayoutRun,
@@ -79,6 +81,143 @@ function clearRange(row: Cell[], col: number, width: number, style: CellStyle): 
     }
     row[target] = { char: " ", style };
   }
+}
+
+function findLastPathSeparator(value: string): number {
+  return Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
+}
+
+function truncatePanelText(value: string, width: number): string {
+  const normalized = Array.from(value).join("");
+  if (normalized.length <= width) {
+    return normalized;
+  }
+
+  if (width <= 1) {
+    return normalized.slice(0, Math.max(0, width));
+  }
+
+  return `${normalized.slice(0, width - 1)}…`;
+}
+
+function paintPickerItemText(
+  row: Cell[],
+  startCol: number,
+  width: number,
+  text: string,
+  theme: ThemeSpec,
+  styles: {
+    base: CellStyle;
+    prefix: CellStyle;
+    directory: CellStyle;
+    detail: CellStyle;
+  }
+): void {
+  const normalized = text.slice(0, width).padEnd(width, " ");
+  const prefix = normalized.slice(0, 2);
+  const body = normalized.slice(2).replace(/\s+$/, "");
+  const detailMarkerIndex = body.indexOf("  ");
+  const label = detailMarkerIndex >= 0 ? body.slice(0, detailMarkerIndex) : body;
+  const detail = detailMarkerIndex >= 0 ? body.slice(detailMarkerIndex + 2) : "";
+  const pathSeparatorIndex = findLastPathSeparator(label);
+  const directoryPart = pathSeparatorIndex >= 0 ? label.slice(0, pathSeparatorIndex + 1) : "";
+  const filePart = pathSeparatorIndex >= 0 ? label.slice(pathSeparatorIndex + 1) : label;
+  const icon = "• ";
+
+  clearRange(row, startCol, width, styles.base);
+  writeText(row, startCol, prefix, styles.prefix);
+
+  let cursorCol = startCol + 2;
+  writeText(row, cursorCol, icon, styles.prefix);
+  cursorCol += Array.from(icon).length;
+
+  const remainingWidth = Math.max(0, width - (cursorCol - startCol));
+  const hasDirectory = directoryPart.length > 0;
+  const reservedTailWidth = hasDirectory ? Math.min(Math.max(10, Math.floor(remainingWidth * 0.4)), Math.max(0, remainingWidth - 8)) : 0;
+  const fileDisplay = truncatePanelText(filePart, Math.max(1, remainingWidth - reservedTailWidth - (hasDirectory ? 2 : 0)));
+
+  writeText(row, cursorCol, fileDisplay, styles.base);
+  cursorCol += Array.from(fileDisplay).length;
+
+  let tailRemainingWidth = Math.max(0, startCol + width - cursorCol);
+  if (directoryPart && tailRemainingWidth > 2) {
+    cursorCol += 2;
+    tailRemainingWidth = Math.max(0, startCol + width - cursorCol);
+    const detailReserve = detail ? Math.min(14, Math.max(0, tailRemainingWidth - 6)) : 0;
+    const directoryDisplay = truncatePanelText(directoryPart, Math.max(1, tailRemainingWidth - detailReserve - (detail ? 2 : 0)));
+    writeText(row, cursorCol, directoryDisplay, styles.directory);
+    cursorCol += Array.from(directoryDisplay).length;
+    tailRemainingWidth = Math.max(0, startCol + width - cursorCol);
+  }
+
+  if (detail && tailRemainingWidth > 2) {
+    cursorCol += 2;
+    const detailDisplay = truncatePanelText(detail, Math.max(1, startCol + width - cursorCol));
+    writeText(row, cursorCol, detailDisplay, styles.detail);
+  }
+}
+
+function paintFilePickerItem(
+  row: Cell[],
+  startCol: number,
+  width: number,
+  item: EditorLayoutPickerItemState,
+  styles: {
+    icon: CellStyle;
+    fileName: CellStyle;
+    directory: CellStyle;
+  }
+): void {
+  const presentation = getEditorFilePickerPresentation(item.filePath ?? item.label);
+  const prefix = item.selected ? "› " : "  ";
+  const iconText = `${presentation.icon} `;
+
+  clearRange(row, startCol, width, styles.fileName);
+  writeText(row, startCol, prefix, styles.icon);
+
+  let cursorCol = startCol + Array.from(prefix).length;
+  writeText(row, cursorCol, iconText, styles.icon);
+  cursorCol += Array.from(iconText).length;
+
+  const availableWidth = Math.max(0, startCol + width - cursorCol);
+  const directoryBudget = presentation.directory
+    ? Math.min(Math.max(14, Math.floor(availableWidth * 0.35)), Math.max(0, availableWidth - 18))
+    : 0;
+  const fileName = truncatePanelText(
+    presentation.fileName,
+    Math.max(8, availableWidth - directoryBudget - (presentation.directory ? 2 : 0))
+  );
+
+  writeText(row, cursorCol, fileName, styles.fileName);
+  cursorCol += Array.from(fileName).length;
+
+  if (presentation.directory) {
+    cursorCol += 2;
+    const directoryWidth = Math.max(0, startCol + width - cursorCol);
+    if (directoryWidth > 0) {
+      writeText(row, cursorCol, truncatePanelText(presentation.directory, directoryWidth), styles.directory);
+    }
+  }
+}
+
+function filePickerItemFromText(text: string, selected: boolean): EditorLayoutPickerItemState {
+  const normalized = text.replace(/\s+$/, "");
+  const prefixless = normalized.startsWith("› ") || normalized.startsWith("  ") ? normalized.slice(2) : normalized;
+  const detailMarkerIndex = prefixless.indexOf("  ");
+  const filePath = detailMarkerIndex >= 0 ? prefixless.slice(0, detailMarkerIndex) : prefixless;
+
+  return {
+    kind: "file",
+    label: filePath,
+    filePath,
+    selected
+  };
+}
+
+function formatPickerPreviewTitle(value: string): string {
+  const lastSeparator = findLastPathSeparator(value);
+  const basename = lastSeparator >= 0 ? value.slice(lastSeparator + 1) : value;
+  return basename ? `# ${basename}` : "# preview";
 }
 
 function serializeRow(row: Cell[]): string {
@@ -205,7 +344,10 @@ function writeBottomRow(row: Cell[], runs: readonly EditorLayoutRun[], theme: Th
 }
 
 function overlayPanel(buffer: Cell[][], panel: EditorLayoutPanel, theme: ThemeSpec, bodyRows: number): void {
-  const isPickerModal = panel.kind === "picker";
+  const isPickerPanel = panel.kind === "picker";
+  const isPickerModal = isPickerPanel && panel.variant === "modal";
+  const isPickerCombo = isPickerPanel && panel.variant === "combo";
+  const pickerModalBackground = "#000000";
   const modalMargin = 2;
   const modalInnerWidth = Math.max(2, buffer[0]!.length - modalMargin * 2 - 2);
   const modalLeftWidth = Math.max(24, Math.min(48, Math.floor(modalInnerWidth * 0.32)));
@@ -217,18 +359,33 @@ function overlayPanel(buffer: Cell[][], panel: EditorLayoutPanel, theme: ThemeSp
     return;
   }
 
-  const startCol = isPickerModal ? Math.max(0, Math.floor((buffer[0]!.length - totalWidth) / 2)) : Math.max(0, Math.min(buffer[0]!.length - totalWidth, panel.anchor.col));
-  const startRow = isPickerModal ? Math.max(0, Math.floor((bodyRows - totalHeight) / 2)) : Math.max(0, Math.min(bodyRows - totalHeight, panel.anchor.row));
-  const borderStyle = makeStyle(PANEL_BORDER, PANEL_BG, true);
+  const startCol = isPickerModal || isPickerCombo
+    ? Math.max(0, Math.floor((buffer[0]!.length - totalWidth) / 2))
+    : Math.max(0, Math.min(buffer[0]!.length - totalWidth, panel.anchor.col));
+  const startRow = isPickerModal || isPickerCombo
+    ? Math.max(0, Math.floor((bodyRows - totalHeight) / 2))
+    : Math.max(0, Math.min(bodyRows - totalHeight, panel.anchor.row));
+  const panelBackground = isPickerModal || isPickerCombo ? pickerModalBackground : PANEL_BG;
+  const borderStyle = makeStyle(PANEL_BORDER, panelBackground, true);
   const bodyStyle = panel.kind === "tooltip"
-    ? styleForToken(theme, "tooltip", PANEL_BG, {})
-    : styleForToken(theme, "picker", PANEL_BG, {});
-  const pickerListBackground = BOTTOM_BG;
-  const pickerPreviewBackground = PANEL_BG;
+    ? styleForToken(theme, "tooltip", panelBackground, {})
+    : styleForToken(theme, "picker", panelBackground, {});
+  const pickerListBackground = isPickerModal || isPickerCombo ? pickerModalBackground : BOTTOM_BG;
+  const pickerPreviewBackground = isPickerModal ? pickerModalBackground : PANEL_BG;
   const pickerListStyle = makeStyle(resolveThemeColor(theme, "text"), pickerListBackground);
   const pickerPreviewStyle = makeStyle(resolveThemeColor(theme, "text"), pickerPreviewBackground);
-  const pickerPreviewTitleStyle = makeStyle(resolveThemeColor(theme, "comment"), pickerPreviewBackground);
-  const pickerSelectedStyle = styleForToken(theme, "picker-selected", PANEL_BG, {});
+  const pickerPreviewTitleStyle = makeStyle(resolveThemeColor(theme, "keyword"), pickerPreviewBackground, true);
+  const pickerSelectedStyle = makeStyle(resolveThemeColor(theme, "text"), "#232323", true);
+  const pickerSelectedPrefixStyle = makeStyle(resolveThemeColor(theme, "keyword"), "#232323", true);
+  const pickerSelectedDirectoryStyle = makeStyle("#9ca3af", "#232323");
+  const pickerSelectedDetailStyle = makeStyle(resolveThemeColor(theme, "comment"), "#232323");
+  const pickerPrefixStyle = makeStyle(resolveThemeColor(theme, "gutter"), pickerListBackground);
+  const pickerDirectoryStyle = makeStyle("#5f6673", pickerListBackground);
+  const pickerDetailStyle = makeStyle(resolveThemeColor(theme, "comment"), pickerListBackground);
+  const pickerCountStyle = makeStyle(resolveThemeColor(theme, "keyword"), panelBackground, true);
+  const pickerQueryStyle = makeStyle(resolveThemeColor(theme, "text"), panelBackground);
+  const pickerQueryCursorStyle = makeStyle(resolveThemeColor(theme, "keyword"), panelBackground, true);
+  const pickerHeaderRuleStyle = makeStyle(resolveThemeColor(theme, "gutter"), panelBackground);
 
   writeText(buffer[startRow]!, startCol, `┌${"─".repeat(Math.max(0, totalWidth - 2))}┐`, borderStyle);
   writeText(buffer[startRow + totalHeight - 1]!, startCol, `└${"─".repeat(Math.max(0, totalWidth - 2))}┘`, borderStyle);
@@ -241,59 +398,173 @@ function overlayPanel(buffer: Cell[][], panel: EditorLayoutPanel, theme: ThemeSp
 
   if (isPickerModal) {
     const innerStartCol = startCol + 1;
-    const dividerCol = innerStartCol + modalLeftWidth + 1;
+    const dividerCol = innerStartCol + modalLeftWidth;
     const previewStartCol = dividerCol + 1;
+    const headerRow = buffer[startRow + 1]!;
+    const underlineRow = buffer[startRow + 2]!;
+    const listStartRow = startRow + 3;
+    const previewBodyStartRow = startRow + 2;
     const queryRuns = panel.rows[0] ?? [];
     const queryRun = queryRuns.find((run) => run.part === "picker-query");
     const countRun = queryRuns.find((run) => run.part === "picker-count");
+    const previewTitleRun = panel.rows[1]?.find((run) => run.part === "picker-preview-title");
 
-    for (let rowIndex = startRow + 2; rowIndex < startRow + totalHeight - 1; rowIndex += 1) {
+    for (let rowIndex = startRow + 1; rowIndex < startRow + totalHeight - 1; rowIndex += 1) {
       clearRange(buffer[rowIndex]!, innerStartCol, modalLeftWidth, pickerListStyle);
       writeText(buffer[rowIndex]!, dividerCol, "│", borderStyle);
       clearRange(buffer[rowIndex]!, previewStartCol, modalRightWidth, pickerPreviewStyle);
     }
 
     if (queryRun) {
-      writeText(buffer[startRow + 1]!, innerStartCol, queryRun.text, styleForToken(theme, "picker", PANEL_BG, {}));
+      writeText(headerRow, innerStartCol, queryRun.text, pickerQueryStyle);
+      writeText(
+        headerRow,
+        Math.min(innerStartCol + modalLeftWidth - 1, innerStartCol + Array.from(queryRun.text).length),
+        "│",
+        pickerQueryCursorStyle
+      );
     }
 
     if (countRun) {
       writeText(
-        buffer[startRow + 1]!,
+        headerRow,
         startCol + totalWidth - 1 - countRun.text.length,
         countRun.text,
-        styleForToken(theme, "picker", PANEL_BG, {})
+        pickerCountStyle
       );
     }
 
+    if (previewTitleRun) {
+      writeText(
+        headerRow,
+        previewStartCol,
+        truncatePanelText(formatPickerPreviewTitle(previewTitleRun.text.trim()), modalRightWidth).padEnd(modalRightWidth, " "),
+        pickerPreviewTitleStyle
+      );
+    }
+
+    writeText(underlineRow, innerStartCol, "─".repeat(Math.max(0, modalLeftWidth)), pickerHeaderRuleStyle);
+
     panel.rows.slice(1).forEach((rowRuns, index) => {
-      const targetRow = buffer[startRow + 2 + index];
-      if (!targetRow || startRow + 2 + index >= startRow + totalHeight - 1) {
+      const targetRow = buffer[listStartRow + index];
+      if (!targetRow || listStartRow + index >= startRow + totalHeight - 1) {
         return;
       }
 
       const itemRun = rowRuns.find((run) => run.part === "picker-item");
-      const titleRun = rowRuns.find((run) => run.part === "picker-preview-title");
       const bodyRun = rowRuns.find((run) => run.part === "picker-preview-body");
 
       if (itemRun) {
-        writeText(
+        paintPickerItemText(
           targetRow,
           innerStartCol,
-          itemRun.text.padEnd(modalLeftWidth, " ").slice(0, modalLeftWidth),
-          itemRun.selectedInPicker ? pickerSelectedStyle : pickerListStyle
+          modalLeftWidth,
+          itemRun.text,
+          theme,
+          itemRun.selectedInPicker
+            ? {
+                base: pickerSelectedStyle,
+                prefix: pickerSelectedPrefixStyle,
+                directory: pickerSelectedDirectoryStyle,
+                detail: pickerSelectedDetailStyle
+              }
+            : {
+                base: pickerListStyle,
+                prefix: pickerPrefixStyle,
+                directory: pickerDirectoryStyle,
+                detail: pickerDetailStyle
+              }
         );
       }
 
-      const previewRun = titleRun ?? bodyRun;
-      if (previewRun) {
+      const previewTargetRow = buffer[previewBodyStartRow + Math.max(0, index - 1)];
+      if (bodyRun && previewTargetRow) {
         writeText(
-          targetRow,
+          previewTargetRow,
           previewStartCol,
-          previewRun.text.padEnd(modalRightWidth, " ").slice(0, modalRightWidth),
-          titleRun ? pickerPreviewTitleStyle : pickerPreviewStyle
+          truncatePanelText(bodyRun.text, modalRightWidth).padEnd(modalRightWidth, " ").slice(0, modalRightWidth),
+          pickerPreviewStyle
         );
       }
+    });
+
+    return;
+  }
+
+  if (isPickerCombo) {
+    const innerStartCol = startCol + 1;
+    const headerRow = buffer[startRow + 1]!;
+    const underlineRow = buffer[startRow + 2]!;
+    const listStartRow = startRow + 3;
+    const queryRuns = panel.rows[0] ?? [];
+    const queryRun = queryRuns.find((run) => run.part === "picker-query");
+    const countRun = queryRuns.find((run) => run.part === "picker-count");
+
+    for (let rowIndex = startRow + 1; rowIndex < startRow + totalHeight - 1; rowIndex += 1) {
+      clearRange(buffer[rowIndex]!, innerStartCol, panel.width, pickerListStyle);
+    }
+
+    if (queryRun) {
+      const queryText = truncatePanelText(queryRun.text, Math.max(0, panel.width - (countRun?.text.length ?? 0) - 2));
+      writeText(headerRow, innerStartCol, queryText, pickerQueryStyle);
+      writeText(
+        headerRow,
+        Math.min(innerStartCol + panel.width - 1, innerStartCol + Array.from(queryText).length),
+        "│",
+        pickerQueryCursorStyle
+      );
+    }
+
+    if (countRun) {
+      writeText(
+        headerRow,
+        startCol + totalWidth - 1 - countRun.text.length,
+        countRun.text,
+        pickerCountStyle
+      );
+    }
+
+    writeText(underlineRow, innerStartCol, "─".repeat(Math.max(0, panel.width)), pickerHeaderRuleStyle);
+
+    panel.rows.slice(1).forEach((rowRuns, index) => {
+      const targetRow = buffer[listStartRow + index];
+      if (!targetRow || listStartRow + index >= startRow + totalHeight - 1) {
+        return;
+      }
+
+      const itemRun = rowRuns.find((run) => run.part === "picker-item");
+      if (!itemRun) {
+        writeRuns(targetRow, rowRuns, theme, panelBackground, innerStartCol);
+        return;
+      }
+
+      const pickerItem = panel.pickerItems?.[index];
+      const fileItem =
+        pickerItem?.kind === "file" && pickerItem.filePath
+          ? pickerItem
+          : filePickerItemFromText(itemRun.text, !!itemRun.selectedInPicker);
+      if (fileItem.filePath) {
+        paintFilePickerItem(targetRow, innerStartCol, panel.width, fileItem, {
+          icon: itemRun.selectedInPicker ? pickerSelectedPrefixStyle : pickerPrefixStyle,
+          fileName: itemRun.selectedInPicker ? pickerSelectedStyle : pickerListStyle,
+          directory: itemRun.selectedInPicker ? pickerSelectedDirectoryStyle : pickerDirectoryStyle
+        });
+        return;
+      }
+
+      paintPickerItemText(targetRow, innerStartCol, panel.width, itemRun.text, theme, itemRun.selectedInPicker
+        ? {
+            base: pickerSelectedStyle,
+            prefix: pickerSelectedPrefixStyle,
+            directory: pickerSelectedDirectoryStyle,
+            detail: pickerSelectedDetailStyle
+          }
+        : {
+            base: pickerListStyle,
+            prefix: pickerPrefixStyle,
+            directory: pickerDirectoryStyle,
+            detail: pickerDetailStyle
+          });
     });
 
     return;
@@ -536,7 +807,7 @@ export function renderEditorAnsiFrame(input: RenderEditorAnsiFrameInput): string
   writeBottomRow(buffer[rows - 1]!, layout.bottomBar.runs, theme);
 
   const terminalCursor =
-    input.presentation.ui.picker.active && input.presentation.ui.picker.variant === "modal"
+    input.presentation.ui.picker.active && input.presentation.ui.picker.variant !== "bar"
       ? null
       : findTerminalCursor(layout, input.state);
   const cursorSequence = terminalCursor

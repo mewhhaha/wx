@@ -2,7 +2,7 @@ import type { KeyRuntimeContext } from "./key-runtime-types";
 
 export async function handlePickerKey(context: KeyRuntimeContext, key: string): Promise<boolean> {
   const picker = context.getPresentation().ui.picker;
-  const modal = picker.variant === "modal";
+  const modal = picker.variant !== "bar";
 
   if (!picker.active) {
     return false;

@@ -160,7 +160,6 @@ export interface LineChangeHostServices {
   getLineChanges?(context: { filePath: string; text: string }): Promise<readonly EditorLineChange[]>;
   readFile?(context: { filePath: string }): Promise<{ text: string } | string>;
   searchFiles?(context: {
-    scope: "repo" | "folder";
     filePath: string;
     query: string;
   }): Promise<readonly EditorFileSearchResult[]>;

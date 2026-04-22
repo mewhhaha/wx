@@ -236,16 +236,6 @@ export async function handlePendingActionKey(
   }
 
   if (nextPending.kind === "?") {
-    if (input.key === "f") {
-      await context.openFileSearchPicker("repo");
-      return { handled: true };
-    }
-
-    if (input.key === "F") {
-      await context.openFileSearchPicker("folder");
-      return { handled: true };
-    }
-
     if (input.key === "b") {
       context.openBuffersPicker();
       return { handled: true };

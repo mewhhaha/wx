@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -20,6 +21,7 @@ import { collectCrossPackageSrcLeaks } from "../../../test-utils/package-boundar
 import { createAnsiEditorMirror, createNodeHostServices, parseAnsiInput, renderEditorAnsiFrame } from "./index";
 import { createAnsiEditorTerminal } from "./index";
 import { renderEditorAnsiWorkspaceFrame } from "./frame";
+import { resolveGitAwareProjectRoot } from "./node-host";
 
 function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
@@ -125,6 +127,18 @@ describe("@wx/editor-view-ansi", () => {
     expect(source).not.toContain("createNodeWorkerBridge");
   });
 
+  it("ships a global wx bin entry for terminal install flow", () => {
+    const packageSource = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/package.json"), "utf8");
+    const configSource = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/tsup.config.ts"), "utf8");
+    const cliSource = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/cli.ts"), "utf8");
+
+    expect(packageSource).toContain('"wx": "./dist/wx.js"');
+    expect(configSource).toContain('wx: "src/cli.ts"');
+    expect(configSource).toContain("#!/usr/bin/env node");
+    expect(cliSource).toContain("createAnsiEditorTerminal");
+    expect(cliSource).toContain("createNodeHostServices");
+  });
+
   it("routes ANSI runtime keyboard input through controller key APIs only", () => {
     const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/terminal.ts"), "utf8");
     const indexSource = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/index.ts"), "utf8");
@@ -142,7 +156,7 @@ describe("@wx/editor-view-ansi", () => {
     expect(collectCrossPackageSrcLeaks("packages/editor-view-ansi/src")).toEqual([]);
   });
 
-  it("searches repo and folder files through the default Node host helper", async () => {
+  it("searches repo files through the default Node host helper", async () => {
     const cwd = await mkdtemp(resolve(tmpdir(), "wx-ansi-host-"));
     await mkdir(resolve(cwd, "src", "nested"), { recursive: true });
     await mkdir(resolve(cwd, "pkg"), { recursive: true });
@@ -152,24 +166,54 @@ describe("@wx/editor-view-ansi", () => {
     const host = createNodeHostServices({ cwd });
 
     const repoMatches = await host.searchFiles?.({
-      scope: "repo",
-      filePath: "src/main.ts",
-      query: "ta"
-    });
-    const folderMatches = await host.searchFiles?.({
-      scope: "folder",
       filePath: "src/main.ts",
       query: "ta"
     });
 
     expect(repoMatches?.map((entry) => entry.filePath)).toEqual(["src/nested/beta.ts"]);
-    expect(folderMatches?.map((entry) => entry.filePath)).toEqual(["src/nested/beta.ts"]);
     await expect(host.readFile?.({ filePath: "pkg/gamma.ts" })).resolves.toEqual({
       text: "export const gamma = 3;\n"
     });
   });
 
-  it("searches root-folder files through Node host helper without adding a slash prefix", async () => {
+  it("writes files through the default Node host helper", async () => {
+    const cwd = await mkdtemp(resolve(tmpdir(), "wx-ansi-write-host-"));
+    const host = createNodeHostServices({ cwd });
+
+    await host.writeFile?.({
+      filePath: "src/new-file.ts",
+      text: "export const saved = true;\n"
+    });
+
+    await expect(host.readFile?.({ filePath: "src/new-file.ts" })).resolves.toEqual({
+      text: "export const saved = true;\n"
+    });
+  });
+
+  it("uses git root for repo search and respects .gitignore entries", async () => {
+    const repoRoot = await mkdtemp(resolve(tmpdir(), "wx-ansi-git-host-"));
+    const nestedCwd = resolve(repoRoot, "apps", "demo");
+    await mkdir(resolve(repoRoot, "src"), { recursive: true });
+    await mkdir(resolve(nestedCwd), { recursive: true });
+    await writeFile(resolve(repoRoot, ".gitignore"), "ignored.ts\n");
+    await writeFile(resolve(repoRoot, "src", "current.ts"), "export const current = 1;\n");
+    await writeFile(resolve(repoRoot, "src", "visible.ts"), "export const visible = 2;\n");
+    await writeFile(resolve(repoRoot, "ignored.ts"), "ignored\n");
+    execFileSync("git", ["init"], { cwd: repoRoot, stdio: "ignore" });
+
+    const projectRoot = await resolveGitAwareProjectRoot(nestedCwd);
+    const host = createNodeHostServices({ cwd: nestedCwd, projectRoot });
+    const repoMatches = await host.searchFiles?.({
+      filePath: "src/current.ts",
+      query: ""
+    });
+
+    expect(projectRoot).toBe(repoRoot);
+    expect(repoMatches?.map((entry) => entry.filePath)).toContain("src/visible.ts");
+    expect(repoMatches?.map((entry) => entry.filePath)).not.toContain("ignored.ts");
+  });
+
+  it("searches root files through Node host helper without adding a slash prefix", async () => {
     const cwd = await mkdtemp(resolve(tmpdir(), "wx-ansi-folder-root-"));
     await mkdir(resolve(cwd, "src"), { recursive: true });
     await writeFile(resolve(cwd, "package.json"), '{ "name": "wx-test" }\n');
@@ -178,7 +222,6 @@ describe("@wx/editor-view-ansi", () => {
     const host = createNodeHostServices({ cwd });
 
     const matches = await host.searchFiles?.({
-      scope: "folder",
       filePath: "package.json",
       query: ""
     });
@@ -314,8 +357,8 @@ describe("@wx/editor-view-ansi", () => {
       loading: false,
       title: "repo",
       items: [
-        { label: "src/main.ts", detail: "saved", selected: true },
-        { label: "src/beta.ts", detail: "saved", selected: false }
+        { kind: "file", label: "src/main.ts", filePath: "src/main.ts", detail: "saved", selected: true },
+        { kind: "file", label: "src/beta.ts", filePath: "src/beta.ts", detail: "saved", selected: false }
       ],
       selectedIndex: 0,
       error: null,
@@ -337,10 +380,51 @@ describe("@wx/editor-view-ansi", () => {
 
     expect(frame).toContain("ma");
     expect(frame).not.toContain("repo>ma");
-    expect(frame).toContain("src/main.ts");
+    expect(frame).toContain("main.ts");
+    expect(frame).toContain("src/");
     expect(frame).toContain("export const m");
     expect(frame).toContain("│");
-    expect(frame).not.toContain("1:src/main.ts 2:src/beta.ts");
+    expect(frame).not.toContain("src/main.ts");
+    expect(frame).not.toContain("\u001b[?25h");
+  });
+
+  it("renders combo picker search as centered input with result list", () => {
+    const { state, presentation } = createPresentation("alpha\nbeta");
+    presentation.ui.picker = {
+      active: true,
+      loading: false,
+      title: "repo",
+      items: [
+        { label: "src/main.ts", detail: "saved", selected: true },
+        { label: "src/beta.ts", detail: "saved", selected: false }
+      ],
+      selectedIndex: 0,
+      error: null,
+      query: "ma",
+      variant: "combo",
+      previewTitle: "",
+      previewContent: "",
+      previewLoading: false
+    };
+
+    const frame = stripAnsi(
+      renderEditorAnsiFrame({
+        state,
+        presentation,
+        cols: 90,
+        rows: 14
+      })
+    );
+
+    expect(frame).toContain("ma");
+    expect(frame).toContain("1/2");
+    expect(frame).toContain("");
+    expect(frame).toContain("main.ts");
+    expect(frame).toContain("beta.ts");
+    expect(frame).toContain("src/");
+    expect(frame).not.toContain("# src/main.ts");
+    expect(frame).not.toContain("export const m");
+    expect(frame).not.toContain("src/main.ts");
     expect(frame).not.toContain("\u001b[?25h");
   });
 
@@ -707,7 +791,7 @@ describe("@wx/editor-view-ansi", () => {
     });
   });
 
-  it("uses Node host fallback so ?f populates file results in terminal mode", async () => {
+  it("uses Node host fallback so Ctrl+p populates file results in terminal mode", async () => {
     const cwd = await mkdtemp(resolve(tmpdir(), "wx-ansi-terminal-"));
     await mkdir(resolve(cwd, "src"), { recursive: true });
     await writeFile(resolve(cwd, "src", "current.ts"), "export const current = 1;\n");
@@ -731,14 +815,14 @@ describe("@wx/editor-view-ansi", () => {
       });
 
       terminal.mount();
-      await expect(controller.searchFiles("repo", "b")).resolves.toEqual([{ filePath: "src/beta.ts" }]);
-      input.emit("?");
-      input.emit("f");
+      await expect(controller.searchFiles("b")).resolves.toEqual([{ filePath: "src/beta.ts" }]);
+      input.emit("\u0010");
       await flushAsyncWork(64);
       input.emit("b");
       await flushAsyncWork(64);
 
       expect(controller.getPresentationState().ui.picker.title).toBe("repo");
+      expect(controller.getPresentationState().ui.picker.variant).toBe("combo");
       expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toContain("src/beta.ts");
       terminal.destroy();
     } finally {
@@ -748,7 +832,7 @@ describe("@wx/editor-view-ansi", () => {
     expect(writes.length).toBeGreaterThan(0);
   });
 
-  it("keeps j and k as search characters in modal picker and uses arrows for movement", async () => {
+  it("keeps j and k as search characters in combo picker and uses arrows for movement", async () => {
     const controller = createEditorController({ value: "export const current = 1;\n", filePath: "src/current.ts" });
     controller.setHostServices({
       async searchFiles(context) {
@@ -770,8 +854,7 @@ describe("@wx/editor-view-ansi", () => {
     });
 
     terminal.mount();
-    input.emit("?");
-    input.emit("f");
+    input.emit("\u0010");
     await flushAsyncWork();
     input.emit("j");
     await flushAsyncWork();
@@ -840,6 +923,7 @@ describe("@wx/editor-view-ansi", () => {
   it("decodes Ctrl-w window chords from ANSI control input", () => {
     expect(parseAnsiInput("\u0017")).toEqual(["Ctrl+w"]);
     expect(parseAnsiInput("\u0013")).toEqual(["Ctrl+s"]);
+    expect(parseAnsiInput("\u0010")).toEqual(["Ctrl+p"]);
     expect(parseAnsiInput("\u0011")).toEqual(["Ctrl+q"]);
     expect(parseAnsiInput("\u0008")).toEqual(["Ctrl+h"]);
   });
@@ -1153,8 +1237,7 @@ describe("@wx/editor-view-ansi", () => {
     });
 
     terminal.mount();
-    input.emit("?");
-    input.emit("f");
+    input.emit("\u0010");
     await flushAsyncWork(64);
 
     expect(searchFiles).toHaveBeenCalled();

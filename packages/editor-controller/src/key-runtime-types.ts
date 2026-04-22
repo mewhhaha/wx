@@ -18,8 +18,10 @@ import type {
 } from "./types";
 
 export interface PickerActionItem {
+  kind?: "file";
   label: string;
   detail?: string;
+  filePath?: string;
   run: () => Promise<void> | void;
 }
 
@@ -76,7 +78,7 @@ export interface KeyRuntimeContext {
   openJumpListPicker(): boolean;
   openBuffersPicker(): boolean;
   openPanesPicker(): boolean;
-  openFileSearchPicker(scope: "repo" | "folder"): Promise<boolean>;
+  openFileSearchPicker(): Promise<boolean>;
   updatePickerQuery(query: string): Promise<boolean>;
   loadCodeActions(): Promise<boolean>;
   collectVisibleFlashHints(target: string): readonly EditorFlashHintState[];

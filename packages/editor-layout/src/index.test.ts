@@ -82,7 +82,7 @@ function withViewport<T extends ReturnType<typeof createInput>>(
   };
 }
 
-function createInput(value: string) {
+function createInput(value: string): import("./index").EditorLayoutInput {
   const state = createEditorState({ value });
   const viewport = {
     topVisualRow: 0,
@@ -479,6 +479,46 @@ describe("buildEditorLayout", () => {
     expect(pickerPanel?.rows[0]?.map((run) => run.text).join("")).toContain("ma");
     expect(panelText).toContain("src/main.ts");
     expect(panelText).toContain("export const m");
+  });
+
+  it("builds a combo picker panel for repo file search", () => {
+    const input = createInput("alpha\nbeta\ngamma");
+    const layout = buildEditorLayout(withViewport({
+      ...input,
+      presentation: {
+        ...input.presentation,
+        ui: {
+          ...input.presentation.ui,
+          picker: {
+            active: true,
+            loading: false,
+            title: "repo",
+            items: [
+              { kind: "file", label: "src/main.ts", filePath: "src/main.ts", detail: "saved", selected: true },
+              { kind: "file", label: "src/beta.ts", filePath: "src/beta.ts", detail: "saved", selected: false }
+            ],
+            selectedIndex: 0,
+            error: null,
+            query: "ma",
+            variant: "combo",
+            previewTitle: "",
+            previewContent: "",
+            previewLoading: false
+          }
+        }
+      }
+    }, { wrapColumns: 200 }));
+
+    const pickerPanel = layout.panels.find((panel) => panel.kind === "picker");
+    const panelText = pickerPanel?.rows.flat().map((run) => run.text).join("\n") ?? "";
+
+    expect(pickerPanel).toBeTruthy();
+    expect(pickerPanel?.variant).toBe("combo");
+    expect(pickerPanel?.width).toBe(108);
+    expect(pickerPanel?.height).toBe(10);
+    expect(pickerPanel?.rows[0]?.map((run) => run.text).join("")).toContain("ma");
+    expect(panelText).toContain("src/main.ts");
+    expect(panelText).not.toContain("export const m");
   });
 
   it("builds a completion panel from controller-owned completion state", () => {

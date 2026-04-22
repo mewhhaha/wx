@@ -73,7 +73,6 @@ export interface EditorHostServices {
   writeFile?(context: { filePath: string; text: string }): Promise<void>;
   readFile?(context: { filePath: string }): Promise<{ text: string } | string>;
   searchFiles?(context: {
-    scope: "repo" | "folder";
     filePath: string;
     query: string;
   }): Promise<readonly EditorFileSearchResult[]>;
@@ -98,8 +97,10 @@ export interface EditorBottomMessageState {
 }
 
 export interface EditorPickerItemState {
+  kind?: "file";
   label: string;
   detail?: string;
+  filePath?: string;
   selected?: boolean;
 }
 
@@ -111,7 +112,7 @@ export interface EditorPickerState {
   selectedIndex: number;
   error: string | null;
   query: string;
-  variant: "bar" | "modal";
+  variant: "bar" | "modal" | "combo";
   previewTitle: string;
   previewContent: string;
   previewLoading: boolean;
@@ -379,7 +380,7 @@ export interface EditorController {
   openSelectionInPane(axis: EditorWorkspaceSplitAxis): Promise<boolean>;
   focusPane(direction: "left" | "right" | "up" | "down"): boolean;
   setActivePane(paneId: string): boolean;
-  searchFiles(scope: "repo" | "folder", query?: string): Promise<readonly EditorFileSearchResult[]>;
+  searchFiles(query?: string): Promise<readonly EditorFileSearchResult[]>;
   selectNextOccurrence(reverse?: boolean): boolean;
   selectAllOccurrences(): boolean;
   splitSelectionsByLine(): boolean;

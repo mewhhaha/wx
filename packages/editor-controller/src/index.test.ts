@@ -399,8 +399,6 @@ describe("editor controller", () => {
 
     await controller.handleKeyInput({ key: "?" });
     expect(controller.getPresentationState().ui.commandCompletionItems.map((item) => item.label)).toEqual([
-      "f",
-      "F",
       "b",
       "B",
       "d",
@@ -415,6 +413,18 @@ describe("editor controller", () => {
     await controller.handleKeyInput({ key: "b", text: "b" });
     expect(controller.getPresentationState().ui.commandCompletionItems).toEqual([]);
     expect(controller.getPresentationState().ui.picker.active).toBe(true);
+  });
+
+  it("does not open file search from deprecated ?f and ?F chords", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    await controller.handleKeyInput({ key: "?" });
+    await controller.handleKeyInput({ key: "f", text: "f" });
+    expect(controller.getPresentationState().ui.picker.active).toBe(false);
+
+    await controller.handleKeyInput({ key: "?" });
+    await controller.handleKeyInput({ key: "F", text: "F", shift: true });
+    expect(controller.getPresentationState().ui.picker.active).toBe(false);
   });
 
   it("handles flash-target state in the controller", () => {
@@ -1050,13 +1060,13 @@ describe("editor controller", () => {
       }
     });
 
-    await controller.handleKeyInput({ key: "?" });
-    await controller.handleKeyInput({ key: "f", text: "f" });
+    await controller.handleKeyInput({ key: "p", ctrl: true });
     await flushAsyncWork();
     await controller.handleKeyInput({ key: "b", text: "b" });
     await flushAsyncWork();
 
     expect(controller.getPresentationState().ui.picker.title).toBe("repo");
+    expect(controller.getPresentationState().ui.picker.variant).toBe("combo");
     expect(controller.getPresentationState().ui.picker.query).toBe("b");
     expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual([
       "src/beta.ts",
@@ -1179,13 +1189,6 @@ describe("editor controller", () => {
         dirty: false
       })
     );
-  });
-
-  it("warns when folder search starts from scratch", async () => {
-    const controller = createEditorController({ value: "alpha" });
-
-    expect(await controller.searchFiles("folder", "a")).toEqual([]);
-    expect(controller.getPresentationState().ui.bottomMessage?.text).toBe("Scratch buffer has no folder context");
   });
 
   it("focuses and closes panes through workspace APIs", () => {
@@ -1351,7 +1354,7 @@ describe("editor controller", () => {
     expect(afterRightSwap).toEqual(before);
   });
 
-  it("keeps modal search results visible while a new query is loading", async () => {
+  it("keeps combo search results visible while a new query is loading", async () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
     let resolveSearch: ((value: readonly { filePath: string }[]) => void) | null = null;
 
@@ -1370,8 +1373,7 @@ describe("editor controller", () => {
       }
     });
 
-    await controller.handleKeyInput({ key: "?" });
-    await controller.handleKeyInput({ key: "f", text: "f" });
+    await controller.handleKeyInput({ key: "p", ctrl: true });
     await flushAsyncWork();
     await flushAsyncWork();
 
@@ -1394,7 +1396,7 @@ describe("editor controller", () => {
     expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual(["src/beta.ts"]);
   });
 
-  it("ignores stale modal search responses when a newer query finishes first", async () => {
+  it("ignores stale combo search responses when a newer query finishes first", async () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
     let resolveA: ((value: readonly { filePath: string }[]) => void) | null = null;
     let resolveAb: ((value: readonly { filePath: string }[]) => void) | null = null;
@@ -1417,8 +1419,7 @@ describe("editor controller", () => {
       }
     });
 
-    await controller.handleKeyInput({ key: "?" });
-    await controller.handleKeyInput({ key: "f", text: "f" });
+    await controller.handleKeyInput({ key: "p", ctrl: true });
     await flushAsyncWork();
 
     const firstQuery = controller.handleKeyInput({ key: "a", text: "a" });
@@ -1442,9 +1443,6 @@ describe("editor controller", () => {
     let resolveSecondPreview: ((value: { text: string }) => void) | null = null;
 
     controller.setHostServices({
-      async searchFiles() {
-        return [{ filePath: "src/alpha.ts" }, { filePath: "src/beta.ts" }];
-      },
       async readFile(context) {
         if (context.filePath === "src/alpha.ts") {
           return await new Promise<{ text: string }>((resolve) => {
@@ -1457,9 +1455,20 @@ describe("editor controller", () => {
         });
       }
     });
+    controller.setLanguageServices([
+      {
+        goto: {
+          async references() {
+            return [
+              { filePath: "src/alpha.ts", from: 0, to: 1 },
+              { filePath: "src/beta.ts", from: 0, to: 1 }
+            ];
+          }
+        }
+      }
+    ]);
 
-    await controller.handleKeyInput({ key: "?" });
-    await controller.handleKeyInput({ key: "f", text: "f" });
+    await controller.gotoTarget("references");
     await flushAsyncWork();
     await controller.handleKeyInput({ key: "ArrowDown" });
 
@@ -1483,14 +1492,22 @@ describe("editor controller", () => {
       updateCount += 1;
     });
     controller.setHostServices({
-      async searchFiles() {
-        return [{ filePath: "src/alpha.ts" }, { filePath: "src/beta.ts" }];
-      },
       readFile
     });
+    controller.setLanguageServices([
+      {
+        goto: {
+          async references() {
+            return [
+              { filePath: "src/alpha.ts", from: 0, to: 1 },
+              { filePath: "src/beta.ts", from: 0, to: 1 }
+            ];
+          }
+        }
+      }
+    ]);
 
-    await controller.handleKeyInput({ key: "?" });
-    await controller.handleKeyInput({ key: "f", text: "f" });
+    await controller.gotoTarget("references");
     await flushAsyncWork(8);
 
     const updatesBeforeNoopMove = updateCount;
@@ -1504,7 +1521,7 @@ describe("editor controller", () => {
     expect(readFile).toHaveBeenCalledTimes(readsBeforeNoopMove);
   });
 
-  it("treats j and k as query text inside modal search pickers", async () => {
+  it("treats j and k as query text inside combo search pickers", async () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
 
     controller.setHostServices({
@@ -1517,8 +1534,7 @@ describe("editor controller", () => {
       }
     });
 
-    await controller.handleKeyInput({ key: "?" });
-    await controller.handleKeyInput({ key: "f", text: "f" });
+    await controller.handleKeyInput({ key: "p", ctrl: true });
     await flushAsyncWork();
     await controller.handleKeyInput({ key: "j", text: "j" });
     await flushAsyncWork();
@@ -1527,6 +1543,29 @@ describe("editor controller", () => {
 
     expect(controller.getPresentationState().ui.picker.query).toBe("jk");
     expect(controller.getPresentationState().ui.picker.selectedIndex).toBe(0);
+  });
+
+  it("opens repo file search from Ctrl+P", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+
+    controller.setHostServices({
+      async searchFiles(context) {
+        return [
+          { filePath: "src/current.ts" },
+          { filePath: "src/beta.ts" }
+        ].filter((entry) => entry.filePath.toLowerCase().includes(context.query.toLowerCase()));
+      }
+    });
+
+    await controller.handleKeyInput({ key: "p", ctrl: true });
+    await flushAsyncWork();
+    await controller.handleKeyInput({ key: "b", text: "b" });
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.active).toBe(true);
+    expect(controller.getPresentationState().ui.picker.title).toBe("repo");
+    expect(controller.getPresentationState().ui.picker.variant).toBe("combo");
+    expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual(["src/beta.ts"]);
   });
 
   it("opens existing buffers through ?b without rereading host text", async () => {

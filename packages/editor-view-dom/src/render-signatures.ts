@@ -104,7 +104,7 @@ export function readBottomBarSignature(presentation: EditorPresentationState): s
     ui.picker.previewTitle,
     ui.picker.previewContent,
     ui.picker.previewLoading ? 1 : 0,
-    ui.picker.items.map((item) => `${item.label}:${item.detail ?? ""}:${item.selected ? 1 : 0}`).join(";"),
+    ui.picker.items.map((item) => `${item.kind ?? ""}:${item.filePath ?? ""}:${item.label}:${item.detail ?? ""}:${item.selected ? 1 : 0}`).join(";"),
     ui.bottomMessage?.tone ?? "",
     ui.bottomMessage?.text ?? "",
     ui.flash.active ? 1 : 0,

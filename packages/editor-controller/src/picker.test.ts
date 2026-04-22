@@ -13,7 +13,7 @@ async function flushAsyncWork(times = 8): Promise<void> {
 }
 
 function createPickerHarness(options: {
-  searchFiles?: (scope: "repo" | "folder", query?: string) => Promise<readonly { filePath: string; detail?: string }[]>;
+  searchFiles?: (query?: string) => Promise<readonly { filePath: string; detail?: string }[]>;
   requestCodeActions?: () => Promise<readonly EditorCodeAction[]>;
   diagnostics?: readonly EditorDiagnostic[];
 } = {}) {
@@ -58,7 +58,7 @@ describe("picker runtime", () => {
     let resolveSearch: ((value: readonly { filePath: string }[]) => void) | null = null;
     const harness = createPickerHarness({
       diagnostics: [{ from: 0, to: 1, severity: "warning", message: "warn" }],
-      searchFiles: async (_scope, query = "") => {
+      searchFiles: async (query = "") => {
         if (query === "a") {
           return await new Promise<readonly { filePath: string }[]>((resolve) => {
             resolveSearch = resolve;
@@ -69,7 +69,7 @@ describe("picker runtime", () => {
       }
     });
 
-    await harness.runtime.openFileSearchPicker("repo");
+    await harness.runtime.openFileSearchPicker();
     await flushAsyncWork();
 
     const pendingSearch = harness.runtime.updatePickerQuery("a");

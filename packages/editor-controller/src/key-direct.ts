@@ -91,6 +91,10 @@ export async function handleDirectKey(
     return { handled: await context.requestCompletion() };
   }
 
+  if (input.ctrl && !input.meta && !input.alt && input.key === "p") {
+    return { handled: await context.openFileSearchPicker() };
+  }
+
   if (input.ctrl && !input.meta && !input.alt && state.mode === "insert" && input.key === "s") {
     controller.execute((_state, _dispatch, commandContext) => commandContext.history?.checkpoint?.() ?? false);
     return { handled: true };

@@ -6,6 +6,9 @@
   "main": "./src/index.ts",
   "module": "./src/index.ts",
   "types": "./src/index.ts",
+  "bin": {
+    "wx": "./dist/wx.js"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -14,7 +17,8 @@
   },
   "scripts": {
     "build": "tsup",
-    "demo": "pnpm build && node dist/demo.js"
+    "demo": "pnpm build && node dist/demo.js",
+    "start": "pnpm build && node dist/wx.js"
   },
   "dependencies": {
     "@mewhhaha/wx-controller": "workspace:*",

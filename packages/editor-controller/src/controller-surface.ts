@@ -508,12 +508,7 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       loadActivePaneState("pane.active", { clearHistory: false, resetLanguage: false });
       return true;
     },
-    async searchFiles(scope, query = "") {
-      if (scope === "folder" && !presentation.filePath) {
-        options.sessionRuntime.setBottomMessage({ tone: "warning", text: "Scratch buffer has no folder context" });
-        return [];
-      }
-
+    async searchFiles(query = "") {
       const searchFiles = presentation.language.host?.searchFiles;
       if (!searchFiles) {
         return [];
@@ -521,7 +516,6 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
 
       try {
         return await searchFiles({
-          scope,
           filePath: presentation.filePath ?? "",
           query
         });

@@ -1,6 +1,6 @@
 import { getActiveCharacterOffset, getCursorOffset, type EditorState } from "@mewhhaha/wx-core";
 import type { EditorPresentationState } from "@mewhhaha/wx-controller";
-import type { EditorLayoutModel } from "@mewhhaha/wx-layout";
+import { getEditorFilePickerPresentation, type EditorLayoutModel } from "@mewhhaha/wx-layout";
 
 interface CreateDomChromeRuntimeOptions {
   bottomRow: HTMLDivElement;
@@ -50,6 +50,24 @@ export interface DomChromeRuntime {
   patchTooltip(): void;
 }
 
+function appendPickerFileRow(row: HTMLDivElement, item: EditorPresentationState["ui"]["picker"]["items"][number]): void {
+  const icon = document.createElement("span");
+  const fileName = document.createElement("span");
+  const directory = document.createElement("span");
+  const presentation = getEditorFilePickerPresentation(item.filePath ?? item.label);
+
+  icon.className = "wx-editor__picker-combo-item-icon";
+  icon.textContent = presentation.icon;
+
+  fileName.className = "wx-editor__picker-combo-item-name";
+  fileName.textContent = presentation.fileName;
+
+  directory.className = "wx-editor__picker-combo-item-directory";
+  directory.textContent = presentation.directory;
+
+  row.append(icon, fileName, directory);
+}
+
 export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): DomChromeRuntime {
   return {
     patchCommandPopover() {
@@ -57,6 +75,69 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
       const items = uiState.commandCompletionItems;
       const layout = options.getRenderedLayout();
       const completionPanel = layout.panels.find((panel) => panel.kind === "completion");
+
+      if (uiState.picker.active && uiState.picker.variant === "combo") {
+        options.commandPopover.hidden = false;
+        options.commandPopover.dataset.kind = "picker-combo";
+
+        const panel = document.createElement("div");
+        const queryRow = document.createElement("div");
+        const queryValue = document.createElement("span");
+        const queryCount = document.createElement("span");
+        const list = document.createElement("div");
+
+        panel.className = "wx-editor__picker-combo";
+        panel.dataset.wxEditorPickerCombo = "true";
+
+        queryRow.className = "wx-editor__picker-combo-query";
+        queryValue.className = "wx-editor__picker-combo-query-value";
+        queryValue.textContent = uiState.picker.query || " ";
+        queryCount.className = "wx-editor__picker-combo-query-count";
+        queryCount.textContent =
+          uiState.picker.items.length > 0 ? `${uiState.picker.selectedIndex + 1}/${uiState.picker.items.length}` : "0/0";
+        queryRow.append(queryValue, queryCount);
+
+        list.className = "wx-editor__picker-combo-list";
+
+        if (uiState.picker.loading) {
+          const loading = document.createElement("div");
+          loading.className = "wx-editor__picker-combo-item";
+          loading.textContent = `Loading ${uiState.picker.title}...`;
+          list.append(loading);
+        } else if (uiState.picker.error && uiState.picker.items.length === 0) {
+          const error = document.createElement("div");
+          error.className = "wx-editor__picker-combo-item";
+          error.dataset.selected = "false";
+          error.textContent = uiState.picker.error;
+          list.append(error);
+        } else {
+          uiState.picker.items.forEach((item, index) => {
+            const row = document.createElement("div");
+            row.className = "wx-editor__picker-combo-item";
+            row.dataset.selected = String(index === uiState.picker.selectedIndex);
+            row.dataset.wxEditorPickerItem = item.filePath ?? item.label;
+
+            if (item.kind === "file" && item.filePath) {
+              appendPickerFileRow(row, item);
+            } else {
+              const label = document.createElement("span");
+              const detail = document.createElement("span");
+
+              label.className = "wx-editor__picker-combo-item-name";
+              label.textContent = item.label;
+              detail.className = "wx-editor__picker-combo-item-directory";
+              detail.textContent = item.detail ?? "";
+              row.append(label, detail);
+            }
+
+            list.append(row);
+          });
+        }
+
+        panel.append(queryRow, list);
+        options.commandPopover.replaceChildren(panel);
+        return;
+      }
 
       if (uiState.picker.active && uiState.picker.variant === "modal") {
         options.commandPopover.hidden = false;
@@ -248,7 +329,7 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
         return;
       }
 
-      if (uiState.picker.active && uiState.picker.variant === "modal") {
+      if (uiState.picker.active && uiState.picker.variant !== "bar") {
         options.bottomRow.textContent = " ";
         options.setRenderedBottomBarSignature(options.getCurrentBottomBarSignature());
         return;

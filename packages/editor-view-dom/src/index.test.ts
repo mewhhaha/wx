@@ -1693,14 +1693,15 @@ describe("createEditor", () => {
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
 
-    expect(container.querySelector('[data-wx-editor-command-completion="f"]')?.textContent).toContain("search repo files");
+    expect(container.querySelector('[data-wx-editor-command-completion="f"]')).toBeNull();
+    expect(container.querySelector('[data-wx-editor-command-completion="F"]')).toBeNull();
     expect(container.querySelector('[data-wx-editor-command-completion="b"]')?.textContent).toContain("show buffers");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
     await flushAsyncWork();
 
-    expect(container.querySelector('[data-wx-editor-command-completion="f"]')).toBeNull();
-    expect(container.querySelector("[data-wx-editor-picker-modal='true']")).not.toBeNull();
+    expect(container.querySelector("[data-wx-editor-picker-modal='true']")).toBeNull();
+    expect(container.querySelector("[data-wx-editor-picker='true']")).not.toBeNull();
   });
 
   it("renders completion popup directly from controller snapshot state", async () => {
@@ -2606,14 +2607,14 @@ describe("createEditor", () => {
     });
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true, bubbles: true }));
     await flushAsyncWork();
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
     await flushAsyncWork(6);
 
-    expect(container.querySelector("[data-wx-editor-picker-modal='true']")?.textContent).toContain("src/beta.ts");
-    expect(container.querySelector(".wx-editor__picker-modal-preview-body")?.textContent).toContain("opened:src/beta.ts");
+    expect(container.querySelector("[data-wx-editor-picker-combo='true']")?.textContent).toContain("beta.ts");
+    expect(container.querySelector("[data-wx-editor-picker-combo='true']")?.textContent).toContain("src/");
+    expect(container.querySelector(".wx-editor__picker-modal-preview-body")).toBeNull();
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await flushAsyncWork();
@@ -2651,8 +2652,7 @@ describe("createEditor", () => {
     });
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true, bubbles: true }));
     await flushAsyncWork(8);
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
@@ -2666,8 +2666,8 @@ describe("createEditor", () => {
 
     expect(editor.controller.getPresentationState().ui.picker.query).toBe("ab");
     expect(editor.controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual(["src/ab.ts"]);
-    expect(container.querySelector("[data-wx-editor-picker-modal='true']")?.textContent ?? "").toContain("src/ab.ts");
-    expect(container.querySelector("[data-wx-editor-picker-modal='true']")?.textContent ?? "").not.toContain("src/a.ts");
+    expect(container.querySelector("[data-wx-editor-picker-combo='true']")?.textContent ?? "").toContain("ab.ts");
+    expect(container.querySelector("[data-wx-editor-picker-combo='true']")?.textContent ?? "").not.toContain("a.ts");
   });
 
   it("stores jumps and navigates them with Ctrl-o/Ctrl-i", () => {

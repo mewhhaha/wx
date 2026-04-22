@@ -486,6 +486,14 @@ const EDITOR_STYLE_TEXT = `
     padding: 16px;
   }
 
+  .wx-editor__command-popover[data-kind="picker-combo"] {
+    inset: 0;
+    bottom: calc(var(--wx-line-height, 24px) * 2);
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+
   .wx-editor__command-popover[hidden] {
     display: none;
   }
@@ -632,6 +640,89 @@ const EDITOR_STYLE_TEXT = `
     color: #dbe2f0;
     font: inherit;
     line-height: 1.45;
+  }
+
+  .wx-editor__picker-combo {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    width: min(108ch, calc(100% - 4ch));
+    min-height: calc(var(--wx-line-height, 24px) * 9 + 2px);
+    max-height: min(24rem, calc(100% - 32px));
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(7, 8, 11, 0.985);
+    box-shadow: 0 18px 40px rgba(2, 8, 23, 0.35);
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  .wx-editor__picker-combo-query {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 1ch;
+    min-height: var(--wx-line-height, 24px);
+    padding: 0 1ch;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    color: #eef2ff;
+  }
+
+  .wx-editor__picker-combo-query-value {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: pre;
+    color: #ffffff;
+  }
+
+  .wx-editor__picker-combo-query-count {
+    color: #ff6b6b;
+    white-space: nowrap;
+  }
+
+  .wx-editor__picker-combo-list {
+    min-width: 0;
+    min-height: calc(var(--wx-line-height, 24px) * 8);
+    overflow: hidden;
+  }
+
+  .wx-editor__picker-combo-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
+    gap: 1ch;
+    align-items: center;
+    min-height: var(--wx-line-height, 24px);
+    padding: 0 1ch;
+    color: #dbe2f0;
+  }
+
+  .wx-editor__picker-combo-item[data-selected="true"] {
+    background: color-mix(in srgb, var(--wx-color-selection) 80%, transparent);
+    color: #ffffff;
+  }
+
+  .wx-editor__picker-combo-item-icon {
+    color: #eab308;
+    font-family: "Symbols Nerd Font Mono", "Symbols Nerd Font", monospace;
+  }
+
+  .wx-editor__picker-combo-item-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
+  }
+
+  .wx-editor__picker-combo-item-directory {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #677081;
+  }
+
+  .wx-editor__picker-combo-item[data-selected="true"] .wx-editor__picker-combo-item-directory {
+    color: #aab3c4;
   }
 
   .wx-editor__bottom-row[data-active="false"] {

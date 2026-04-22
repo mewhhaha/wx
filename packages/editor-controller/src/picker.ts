@@ -11,8 +11,10 @@ import type {
 } from "./types";
 
 export interface PickerActionItem {
+  kind?: "file";
   label: string;
   detail?: string;
+  filePath?: string;
   run: () => Promise<void> | void;
   preview?: () => Promise<{ title: string; content: string } | null> | { title: string; content: string } | null;
 }
@@ -20,7 +22,7 @@ export interface PickerActionItem {
 export interface PickerSearchSource {
   title: string;
   query?: string;
-  variant?: "bar" | "modal";
+  variant?: "bar" | "modal" | "combo";
   load(query: string): Promise<readonly PickerActionItem[]>;
 }
 
@@ -52,11 +54,11 @@ export interface PickerRuntime {
     items: readonly PickerActionItem[];
     selectedIndex?: number;
     query?: string;
-    variant?: "bar" | "modal";
+    variant?: "bar" | "modal" | "combo";
     effectType?: string;
   }): boolean;
   openSearchPicker(source: PickerSearchSource): Promise<boolean>;
-  openFileSearchPicker(scope: "repo" | "folder"): Promise<boolean>;
+  openFileSearchPicker(): Promise<boolean>;
   updatePickerQuery(query: string): Promise<boolean>;
   loadCodeActions(): Promise<boolean>;
 }
@@ -66,7 +68,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   let previewRequestId = 0;
   let searchRequestId = 0;
   let pickerSessionId = 0;
-  let searchSource: (PickerSearchSource & { query: string; variant: "bar" | "modal" }) | null = null;
+  let searchSource: (PickerSearchSource & { query: string; variant: "bar" | "modal" | "combo" }) | null = null;
 
   const invalidateAsyncPickerRequests = () => {
     previewRequestId += 1;
@@ -83,7 +85,11 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     const itemsChanged =
       previous.items.length !== next.items.length ||
       previous.items.some(
-        (item, index) => item.label !== next.items[index]?.label || item.detail !== next.items[index]?.detail
+        (item, index) =>
+          item.kind !== next.items[index]?.kind ||
+          item.label !== next.items[index]?.label ||
+          item.detail !== next.items[index]?.detail ||
+          item.filePath !== next.items[index]?.filePath
       );
 
     if (
@@ -108,8 +114,10 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       loading: next.loading,
       title: next.title,
       items: next.items.map((item, index) => ({
+        kind: item.kind,
         label: item.label,
         detail: item.detail,
+        filePath: item.filePath,
         selected: index === next.selectedIndex
       })),
       selectedIndex: next.selectedIndex,
@@ -381,7 +389,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     searchSource = {
       title: "buffers",
       query: "",
-      variant: "modal",
+      variant: "bar",
       load: buildItems
     };
 
@@ -462,15 +470,17 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     return updatePickerQuery(searchSource.query);
   };
 
-  const openFileSearchPicker = async (scope: "repo" | "folder") => {
+  const openFileSearchPicker = async () => {
     return openSearchPicker({
-      title: scope === "repo" ? "repo" : "folder",
-      variant: "modal",
+      title: "repo",
+      variant: "combo",
       load: async (query) => {
-        const files = await context.getController().searchFiles(scope, query);
+        const files = await context.getController().searchFiles(query);
         return files.map((entry) => ({
+          kind: "file" as const,
           label: entry.filePath,
           detail: entry.detail,
+          filePath: entry.filePath,
           preview: async () => {
             const readFile = context.getPresentation().language.host?.readFile;
             if (!readFile) {
@@ -505,22 +515,24 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     previewRequestId += 1;
     searchSource.query = query;
     const presentation = context.getPresentation();
-    const preserveVisibleModalState = presentation.ui.picker.active && presentation.ui.picker.variant === "modal";
+    const preserveVisiblePickerState =
+      presentation.ui.picker.active &&
+      (presentation.ui.picker.variant === "modal" || presentation.ui.picker.variant === "combo");
     const currentSource = searchSource;
     setPickerState(
       {
         active: true,
         loading: true,
         title: searchSource.title,
-        items: preserveVisibleModalState ? pickerActions : [],
-        selectedIndex: preserveVisibleModalState
+        items: preserveVisiblePickerState ? pickerActions : [],
+        selectedIndex: preserveVisiblePickerState
           ? Math.max(0, Math.min(pickerActions.length - 1, presentation.ui.picker.selectedIndex))
           : 0,
         error: null,
         query,
         variant: searchSource.variant,
-        previewTitle: preserveVisibleModalState ? presentation.ui.picker.previewTitle : "",
-        previewContent: preserveVisibleModalState ? presentation.ui.picker.previewContent : "",
+        previewTitle: preserveVisiblePickerState ? presentation.ui.picker.previewTitle : "",
+        previewContent: preserveVisiblePickerState ? presentation.ui.picker.previewContent : "",
         previewLoading: false
       },
       "ui.picker"

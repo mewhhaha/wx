@@ -29,8 +29,6 @@ const ROOT_COMMANDS: EditorCommandCompletionItem[] = [
 ];
 
 const QUESTION_ACTIONS: EditorCommandCompletionItem[] = [
-  { label: "f", detail: "search repo files" },
-  { label: "F", detail: "search folder files" },
   { label: "b", detail: "show buffers (g n / g p cycle)" },
   { label: "B", detail: "show buffers (g n / g p cycle)" },
   { label: "d", detail: "show diagnostics" },

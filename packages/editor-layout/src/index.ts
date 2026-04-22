@@ -37,6 +37,66 @@ export type EditorLayoutToken =
   | "picker"
   | "picker-selected";
 
+const FILE_ICON_BY_EXACT_BASENAME = new Map<string, string>([
+  ["package.json", ""],
+  ["tsconfig.json", ""],
+  ["README.md", ""],
+  ["Dockerfile", ""]
+]);
+
+const FILE_ICON_BY_EXTENSION = new Map<string, string>([
+  [".ts", ""],
+  [".tsx", ""],
+  [".mts", ""],
+  [".cts", ""],
+  [".js", ""],
+  [".jsx", ""],
+  [".mjs", ""],
+  [".cjs", ""],
+  [".css", ""],
+  [".scss", ""],
+  [".html", ""],
+  [".json", ""],
+  [".md", ""]
+]);
+
+export interface EditorFilePickerPresentation {
+  icon: string;
+  fileName: string;
+  directory: string;
+}
+
+function splitFilePickerPath(filePath: string): { basename: string; directory: string } {
+  const normalized = filePath.replace(/\\/g, "/").replace(/\/+$/, "");
+  const separator = normalized.lastIndexOf("/");
+
+  if (separator < 0) {
+    return {
+      basename: normalized,
+      directory: ""
+    };
+  }
+
+  return {
+    basename: normalized.slice(separator + 1),
+    directory: normalized.slice(0, separator + 1)
+  };
+}
+
+export function getEditorFilePickerPresentation(filePath: string): EditorFilePickerPresentation {
+  const { basename, directory } = splitFilePickerPath(filePath);
+  const exactIcon = FILE_ICON_BY_EXACT_BASENAME.get(basename);
+  const extensionMatch = [...FILE_ICON_BY_EXTENSION.entries()]
+    .sort((left, right) => right[0].length - left[0].length)
+    .find(([suffix]) => basename.endsWith(suffix));
+
+  return {
+    icon: exactIcon ?? extensionMatch?.[1] ?? "󰈔",
+    fileName: basename || filePath,
+    directory
+  };
+}
+
 export interface EditorLayoutViewport {
   cols: number;
   rows: number;
@@ -113,8 +173,10 @@ export type EditorLayoutOverlay =
 export interface EditorLayoutPanel {
   kind: "tooltip" | "picker" | "completion";
   token: "tooltip" | "picker";
+  variant?: "modal" | "combo";
   anchor: { col: number; row: number };
   rows: ReadonlyArray<readonly EditorLayoutRun[]>;
+  pickerItems?: readonly EditorLayoutPickerItemState[];
   tone?: "info" | "warning" | "error";
   width: number;
   height: number;
@@ -201,8 +263,10 @@ export interface EditorLayoutCommandLineState {
 }
 
 export interface EditorLayoutPickerItemState {
+  kind?: "file";
   label: string;
   detail?: string;
+  filePath?: string;
   selected?: boolean;
 }
 
@@ -214,7 +278,7 @@ export interface EditorLayoutPickerState {
   selectedIndex: number;
   error: string | null;
   query: string;
-  variant: "bar" | "modal";
+  variant: "bar" | "modal" | "combo";
   previewTitle: string;
   previewContent: string;
   previewLoading: boolean;
@@ -992,8 +1056,85 @@ function truncatePanelText(text: string, width: number): string {
 function buildPickerPanel(input: EditorLayoutInput): EditorLayoutPanel | null {
   const picker = input.presentation.ui.picker;
 
-  if (!picker.active || picker.variant !== "modal") {
+  if (!picker.active || (picker.variant !== "modal" && picker.variant !== "combo")) {
     return null;
+  }
+
+  if (picker.variant === "combo") {
+    const comboWidth = 108;
+    const availableBodyRows = Math.max(1, input.presentation.viewport.visibleRowCapacity);
+    const visibleItemRows = Math.max(4, Math.min(8, availableBodyRows - 3));
+    const selectedIndex = Math.max(0, Math.min(picker.items.length - 1, picker.selectedIndex));
+    const startIndex = Math.max(
+      0,
+      Math.min(selectedIndex - Math.floor(visibleItemRows / 2), Math.max(0, picker.items.length - visibleItemRows))
+    );
+    const visibleItems = picker.items.slice(startIndex, startIndex + visibleItemRows);
+    const queryText = picker.query || " ";
+    const countText = `${picker.items.length > 0 ? selectedIndex + 1 : 0}/${picker.items.length}`;
+    const fallbackText = picker.loading ? `Loading ${picker.title}...` : (picker.error ?? "No matches");
+    const listRows = visibleItemRows;
+    const availableWidth = Math.max(32, input.presentation.viewport.wrapColumns - 8);
+    const innerWidth = Math.max(queryText.length + countText.length + 3, Math.max(32, Math.min(comboWidth, availableWidth)));
+    const rows: EditorLayoutRun[][] = [];
+
+    rows.push([
+      {
+        col: 0,
+        text: truncatePanelText(queryText, innerWidth - countText.length - 1),
+        token: "picker",
+        part: "picker-query"
+      },
+      {
+        col: Math.max(0, innerWidth - countText.length),
+        text: countText,
+        token: "picker",
+        part: "picker-count"
+      }
+    ]);
+
+    for (let rowIndex = 0; rowIndex < visibleItemRows; rowIndex += 1) {
+      const item = visibleItems[rowIndex];
+      if (!item) {
+        rows.push([
+          {
+            col: 0,
+            text:
+              rowIndex === 0
+                ? truncatePanelText(`  ${fallbackText}`, innerWidth).padEnd(innerWidth, " ")
+                : " ".repeat(innerWidth),
+            token: "picker",
+            part: "picker-item"
+          }
+        ]);
+        continue;
+      }
+
+      const detailSuffix = item.detail ? `  ${item.detail}` : "";
+      rows.push([
+        {
+          col: 0,
+          text: truncatePanelText(`${item.selected ? "› " : "  "}${item.label}${detailSuffix}`, innerWidth).padEnd(innerWidth, " "),
+          token: item.selected ? "picker-selected" : "picker",
+          part: "picker-item",
+          selectedInPicker: item.selected
+        }
+      ]);
+    }
+
+    return {
+      kind: "picker",
+      token: "picker",
+      variant: "combo",
+      anchor: {
+        col: Math.max(0, Math.floor((input.presentation.viewport.wrapColumns - (innerWidth + 2)) / 2)),
+        row: Math.max(0, Math.floor(Math.max(1, availableBodyRows - (listRows + 3)) / 2))
+      },
+      rows,
+      pickerItems: visibleItems,
+      width: innerWidth,
+      height: rows.length + 1
+    };
   }
 
   const lineDigits = Math.max(2, String(Math.max(1, input.state.doc.lineCount)).length);
@@ -1067,11 +1208,13 @@ function buildPickerPanel(input: EditorLayoutInput): EditorLayoutPanel | null {
   return {
     kind: "picker",
     token: "picker",
+    variant: "modal",
     anchor: {
       col: Math.max(0, Math.floor((totalCols - (innerWidth + 2)) / 2)),
       row: Math.max(0, Math.floor(Math.max(1, visibleBodyRows - (rows.length + 2)) / 2))
     },
     rows,
+    pickerItems: visibleItems,
     width: innerWidth,
     height: rows.length
   };
@@ -1392,7 +1535,7 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
       part: "command-text"
     });
   } else if (input.presentation.ui.picker.active) {
-    if (input.presentation.ui.picker.variant === "modal") {
+    if (input.presentation.ui.picker.variant === "modal" || input.presentation.ui.picker.variant === "combo") {
       bottomRuns.push({
         col: 0,
         text: " ",
