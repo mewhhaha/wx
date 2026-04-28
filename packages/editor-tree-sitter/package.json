@@ -1,27 +1,39 @@
 {
   "name": "@wx/editor-tree-sitter",
-  "version": "0.0.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts",
-  "module": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "import": "./src/index.ts"
+      "development": {
+        "types": "./src/index.ts",
+        "import": "./src/index.ts"
+      },
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
     "./node": {
-      "types": "./src/node.ts",
-      "import": "./src/node.ts"
+      "development": {
+        "types": "./src/node.ts",
+        "import": "./src/node.ts"
+      },
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
     },
     "./node-worker": {
-      "types": "./src/nodeWorker.ts",
-      "import": "./src/nodeWorker.ts"
+      "development": {
+        "types": "./src/nodeWorker.ts",
+        "import": "./src/nodeWorker.ts"
+      },
+      "types": "./dist/nodeWorker.d.ts",
+      "import": "./dist/nodeWorker.js"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/treeSitter.worker.ts src/node.ts src/nodeWorker.ts --format esm --out-dir dist"
+    "build": "tsup src/index.ts src/treeSitter.worker.ts src/node.ts src/nodeWorker.ts --format esm --out-dir dist && node ../../scripts/build-package-types.mjs"
   },
   "dependencies": {
     "@mewhhaha/wx-core": "workspace:*",
