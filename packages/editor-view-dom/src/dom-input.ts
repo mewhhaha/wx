@@ -41,7 +41,7 @@ export function isControllerHandledModifierKey(
   }
 
   if (event.ctrlKey && !event.metaKey && !event.altKey) {
-    return [" ", "p", "s", "r", "o", "i", "b", "d", "f", "u", ".", "w", "h", "j", "k", "l", "q", "H", "J", "K", "L", "F"].includes(event.key);
+    return [" ", "p", "s", "r", "o", "i", "b", "d", "f", "u", ".", ",", "w", "h", "j", "k", "l", "q", "H", "J", "K", "L", "F"].includes(event.key);
   }
 
   return false;

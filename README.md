@@ -25,7 +25,7 @@ pnpm run jsr:check:editor
 Assumptions in current config:
 
 - JSR scope: `@mewhhaha`
-- Current publish target for bumped editor packages: `0.1.1`
+- Current publish target for bumped editor packages: `0.1.2`
 - License: `MIT`
 
 If any of those should differ, update package-local `deno.json` files before first publish.

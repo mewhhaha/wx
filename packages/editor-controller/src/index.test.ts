@@ -483,6 +483,31 @@ describe("editor controller", () => {
     });
   });
 
+  it("routes Ctrl+, to pinned hover", async () => {
+    const controller = createEditorController({ value: "alpha" });
+
+    controller.setLanguageServices([
+      {
+        hover: {
+          async hover() {
+            return { source: "fake-lsp", content: "hover:0" };
+          }
+        }
+      }
+    ]);
+
+    const result = await controller.handleKeyInput({ key: ",", ctrl: true });
+
+    expect(result.handled).toBe(true);
+    expect(controller.getPresentationState().ui.hover).toMatchObject({
+      active: true,
+      pinned: true,
+      offset: 0,
+      content: "hover:0",
+      source: "fake-lsp"
+    });
+  });
+
   it("requests explicit completion and applies selected text through controller state", async () => {
     const controller = createEditorController({
       value: "al",

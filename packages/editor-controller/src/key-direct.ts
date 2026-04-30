@@ -40,6 +40,19 @@ export async function handleDirectKey(
   const presentation = context.getPresentation();
   const controller = context.getController();
 
+  const showPinnedHover = async () => {
+    const hoverOffset = context.getActiveOffset();
+    const activeDiagnostic =
+      presentation.language.diagnostics.find((entry) => hoverOffset >= entry.from && hoverOffset < entry.to) ?? null;
+
+    if (activeDiagnostic) {
+      controller.showDiagnosticHover(activeDiagnostic, { pinned: true });
+      return;
+    }
+
+    await controller.requestHoverAt(hoverOffset, { pinned: true });
+  };
+
   if (input.alt && !input.meta && !input.ctrl && state.mode !== "insert" && (input.key === "ArrowUp" || input.key === "ArrowDown")) {
     return { handled: await context.handleAltArrowSyntaxSelection(input.key) };
   }
@@ -64,16 +77,7 @@ export async function handleDirectKey(
   }
 
   if (input.alt && !input.meta && !input.ctrl && state.mode !== "insert" && input.key.toLowerCase() === "k") {
-    const hoverOffset = context.getActiveOffset();
-    const activeDiagnostic =
-      presentation.language.diagnostics.find((entry) => hoverOffset >= entry.from && hoverOffset < entry.to) ?? null;
-
-    if (activeDiagnostic) {
-      controller.showDiagnosticHover(activeDiagnostic, { pinned: true });
-      return { handled: true };
-    }
-
-    await controller.requestHoverAt(hoverOffset, { pinned: true });
+    await showPinnedHover();
     return { handled: true };
   }
 
@@ -93,6 +97,11 @@ export async function handleDirectKey(
 
   if (input.ctrl && !input.meta && !input.alt && input.key === "p") {
     return { handled: await context.openFileSearchPicker() };
+  }
+
+  if (input.ctrl && !input.meta && !input.alt && state.mode !== "insert" && input.key === ",") {
+    await showPinnedHover();
+    return { handled: true };
   }
 
   if (!input.ctrl && !input.meta && !input.alt && input.key === "F2") {

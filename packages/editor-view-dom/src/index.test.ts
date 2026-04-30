@@ -2322,7 +2322,7 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-code-actions='true']")?.textContent).toContain("Replace bad");
   });
 
-  it("shows hover info on mousemove and alt+k", async () => {
+  it("shows hover info on mousemove, alt+k, and ctrl+,", async () => {
     const container = document.createElement("div");
     document.body.append(container);
 
@@ -2349,6 +2349,10 @@ describe("createEditor", () => {
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(container.querySelector("[data-wx-editor-tooltip='true']")).toHaveProperty("hidden", true);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", ctrlKey: true, bubbles: true }));
+    await flushAsyncWork();
+    expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent).toContain("hover:0");
   });
 
   it("invalidates stale hover responses after document edits", async () => {
