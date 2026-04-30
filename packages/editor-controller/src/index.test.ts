@@ -1438,6 +1438,73 @@ describe("editor controller", () => {
     expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual(["src/beta.ts"]);
   });
 
+  it("opens a new unsaved file buffer through :add and writes it on :w", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    const writes: Array<{ filePath: string; text: string }> = [];
+
+    controller.setHostServices({
+      async listFolders() {
+        return [{ folderPath: "." }, { folderPath: "src" }, { folderPath: "pkg" }];
+      },
+      async writeFile(context) {
+        writes.push(context);
+      }
+    });
+
+    controller.openCommandLine(":");
+    for (const key of "add nested/file2.ts") {
+      await controller.handleCommandLineKey(key);
+    }
+    await controller.handleCommandLineKey("Enter");
+    await flushAsyncWork();
+
+    expect(controller.getPresentationState().ui.picker.title).toBe("add");
+    expect(controller.getPresentationState().ui.picker.variant).toBe("combo");
+    expect(controller.getPresentationState().ui.picker.inputMode).toBe("filename");
+    expect(controller.getPresentationState().ui.picker.query).toBe("nested/file2.ts");
+    expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual([".", "src", "pkg"]);
+
+    await controller.handleKeyInput({ key: "ArrowDown" });
+    await controller.handleKeyInput({ key: "Enter" });
+
+    expect(controller.getPresentationState().filePath).toBe("src/nested/file2.ts");
+    expect(controller.getPresentationState().bufferTitle).toBe("src/nested/file2.ts");
+    expect(controller.getState().doc.text).toBe("");
+    expect(controller.getBuffers().find((entry) => entry.filePath === "src/nested/file2.ts")?.dirty).toBe(true);
+    expect(writes).toEqual([]);
+
+    controller.openCommandLine(":");
+    await controller.handleCommandLineKey("w");
+    await controller.handleCommandLineKey("Enter");
+
+    expect(writes).toEqual([{ filePath: "src/nested/file2.ts", text: "" }]);
+    expect(controller.getBuffers().find((entry) => entry.filePath === "src/nested/file2.ts")?.dirty).toBe(false);
+  });
+
+  it("switches to an already open target buffer when :add selects the same path", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    controller.setHostServices({
+      async listFolders() {
+        return [{ folderPath: "." }];
+      }
+    });
+
+    expect(controller.openEmptyFileBuffer("notes/todo.md")).toBe(true);
+    const existingBufferId = controller.getWorkspacePresentationState().activeBufferId;
+    expect(controller.newScratchBuffer()).toBe(true);
+
+    controller.openCommandLine(":");
+    for (const key of "add notes/todo.md") {
+      await controller.handleCommandLineKey(key);
+    }
+    await controller.handleCommandLineKey("Enter");
+    await flushAsyncWork();
+    await controller.handleKeyInput({ key: "Enter" });
+
+    expect(controller.getWorkspacePresentationState().activeBufferId).toBe(existingBufferId);
+    expect(controller.getBuffers().filter((entry) => entry.filePath === "notes/todo.md")).toHaveLength(1);
+  });
+
   it("ignores stale combo search responses when a newer query finishes first", async () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
     let resolveA: ((value: readonly { filePath: string }[]) => void) | null = null;

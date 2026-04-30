@@ -430,6 +430,7 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
               error: null,
               query: "",
               variant: "bar",
+              inputMode: "search",
               previewTitle: "",
               previewContent: "",
               previewLoading: false

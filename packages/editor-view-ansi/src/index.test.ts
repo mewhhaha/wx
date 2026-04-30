@@ -213,6 +213,22 @@ describe("@wx/editor-view-ansi", () => {
     expect(repoMatches?.map((entry) => entry.filePath)).not.toContain("ignored.ts");
   });
 
+  it("lists repo folders through the default Node host helper and respects ignored directories", async () => {
+    const cwd = await mkdtemp(resolve(tmpdir(), "wx-ansi-folder-host-"));
+    await mkdir(resolve(cwd, "src", "nested"), { recursive: true });
+    await mkdir(resolve(cwd, "node_modules", "hidden"), { recursive: true });
+    await writeFile(resolve(cwd, "src", "main.ts"), "export const main = 1;\n");
+    await writeFile(resolve(cwd, "src", "nested", "beta.ts"), "export const beta = 2;\n");
+    await writeFile(resolve(cwd, "node_modules", "hidden", "ignored.ts"), "ignored\n");
+    const host = createNodeHostServices({ cwd });
+
+    await expect(host.listFolders?.({ filePath: "src/main.ts" })).resolves.toEqual([
+      { folderPath: "." },
+      { folderPath: "src" },
+      { folderPath: "src/nested" }
+    ]);
+  });
+
   it("searches root files through Node host helper without adding a slash prefix", async () => {
     const cwd = await mkdtemp(resolve(tmpdir(), "wx-ansi-folder-root-"));
     await mkdir(resolve(cwd, "src"), { recursive: true });

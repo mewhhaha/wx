@@ -38,6 +38,7 @@ interface CommandRuntimeContext {
   setRenameState(next: EditorPresentationState["ui"]["rename"], effectType?: string): void;
   emitPresentationUpdate(effectType?: string): void;
   loadCodeActions(): Promise<boolean>;
+  openAddFilePicker(initialName?: string): Promise<boolean>;
 }
 
 export interface CommandRuntime {
@@ -408,6 +409,11 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
 
       if (value === "new") {
         controller.newScratchBuffer();
+        return { handled: true };
+      }
+
+      if (value === "add") {
+        await context.openAddFilePicker(commandArgument);
         return { handled: true };
       }
 

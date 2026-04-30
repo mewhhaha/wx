@@ -32,6 +32,10 @@ export async function handlePickerKey(context: KeyRuntimeContext, key: string): 
     return context.updatePickerQuery(picker.query.slice(0, -1));
   }
 
+  if (picker.inputMode === "filename" && key.length === 1) {
+    return context.updatePickerQuery(`${picker.query}${key}`);
+  }
+
   if (key.length === 1 && !/^[1-9]$/.test(key)) {
     return context.updatePickerQuery(`${picker.query}${key}`);
   }

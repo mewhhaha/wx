@@ -70,6 +70,7 @@ export function createPresentationState(
         error: null,
         query: "",
         variant: "bar",
+        inputMode: "search",
         previewTitle: "",
         previewContent: "",
         previewLoading: false

@@ -76,6 +76,7 @@ export interface EditorHostServices {
     filePath: string;
     query: string;
   }): Promise<readonly EditorFileSearchResult[]>;
+  listFolders?(context: { filePath: string }): Promise<readonly EditorFolderSearchResult[]>;
   getLineChanges?(context: { filePath: string; text: string }): Promise<readonly EditorLineChange[]>;
   didWriteFile?(context: { filePath: string; text: string }): Promise<void> | void;
 }
@@ -113,6 +114,7 @@ export interface EditorPickerState {
   error: string | null;
   query: string;
   variant: "bar" | "modal" | "combo";
+  inputMode?: "search" | "filename";
   previewTitle: string;
   previewContent: string;
   previewLoading: boolean;
@@ -301,6 +303,11 @@ export interface EditorFileSearchResult {
   detail?: string;
 }
 
+export interface EditorFolderSearchResult {
+  folderPath: string;
+  detail?: string;
+}
+
 export interface EditorBufferState {
   id: string;
   kind: "file" | "scratch";
@@ -370,6 +377,7 @@ export interface EditorController {
   getBuffers(): readonly EditorBufferState[];
   switchBuffer(bufferId: string): boolean;
   openBuffer(filePath: string): Promise<boolean>;
+  openEmptyFileBuffer(filePath: string): boolean;
   newScratchBuffer(): boolean;
   newScratchSplit(axis: EditorWorkspaceSplitAxis): boolean;
   splitPane(axis: EditorWorkspaceSplitAxis): boolean;
@@ -381,6 +389,7 @@ export interface EditorController {
   focusPane(direction: "left" | "right" | "up" | "down"): boolean;
   setActivePane(paneId: string): boolean;
   searchFiles(query?: string): Promise<readonly EditorFileSearchResult[]>;
+  listFolders(): Promise<readonly EditorFolderSearchResult[]>;
   selectNextOccurrence(reverse?: boolean): boolean;
   selectAllOccurrences(): boolean;
   splitSelectionsByLine(): boolean;

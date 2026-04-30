@@ -47,6 +47,7 @@ export function createNodeHostServices(options: {
   const projectRoot = options.projectRoot ?? cwd;
   const ignoredDirectories = new Set(options.ignoredDirectories ?? DEFAULT_IGNORED_DIRECTORIES);
   const walkCache = new Map<string, Promise<readonly string[]>>();
+  const folderCache = new Map<string, Promise<readonly string[]>>();
   const gitCache = new Map<string, Promise<readonly string[] | null>>();
 
   const resolveInsideProjectRoot = async (value: string) => {
@@ -138,6 +139,63 @@ export function createNodeHostServices(options: {
     return pending;
   };
 
+  const foldersFromFiles = (files: readonly string[]): readonly string[] => {
+    const folders = new Set<string>(["."]);
+
+    for (const filePath of files) {
+      const parts = filePath.split("/");
+      parts.pop();
+      let current = "";
+      for (const part of parts) {
+        current = current ? `${current}/${part}` : part;
+        folders.add(current);
+      }
+    }
+
+    return [...folders].sort((left, right) => (left === "." ? -1 : right === "." ? 1 : left.localeCompare(right)));
+  };
+
+  const walkFolders = (rootPath: string): Promise<readonly string[]> => {
+    const cacheKey = `folders:${rootPath}`;
+    const cached = folderCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const pending = (async () => {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const folders = new Set<string>(["."]);
+      const stack = [rootPath];
+
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        let entries: Array<{ name: string; isDirectory(): boolean }>;
+
+        try {
+          entries = await fs.readdir(current, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+
+        for (const entry of entries) {
+          if (!entry.isDirectory() || ignoredDirectories.has(entry.name)) {
+            continue;
+          }
+
+          const absolute = path.join(current, entry.name);
+          folders.add(normalizeRelativePath(path.relative(projectRoot, absolute)));
+          stack.push(absolute);
+        }
+      }
+
+      return [...folders].sort((left, right) => (left === "." ? -1 : right === "." ? 1 : left.localeCompare(right)));
+    })();
+
+    folderCache.set(cacheKey, pending);
+    return pending;
+  };
+
   return {
     async readFile(context) {
       const fs = await import("node:fs/promises");
@@ -151,6 +209,7 @@ export function createNodeHostServices(options: {
       await fs.mkdir(path.dirname(absolute), { recursive: true });
       await fs.writeFile(absolute, context.text, "utf8");
       walkCache.clear();
+      folderCache.clear();
       gitCache.clear();
     },
     async searchFiles(context) {
@@ -164,8 +223,14 @@ export function createNodeHostServices(options: {
         .slice(0, 200)
         .map((filePath) => ({ filePath }));
     },
+    async listFolders() {
+      const gitFiles = await listGitFiles(projectRoot);
+      const folders = gitFiles ? foldersFromFiles(gitFiles) : await walkFolders(projectRoot);
+      return folders.map((folderPath) => ({ folderPath }));
+    },
     didWriteFile() {
       walkCache.clear();
+      folderCache.clear();
       gitCache.clear();
     }
   };

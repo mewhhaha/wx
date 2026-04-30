@@ -27,6 +27,7 @@ import type {
   EditorBufferState,
   EditorController,
   EditorFileSearchResult,
+  EditorFolderSearchResult,
   EditorHostServices,
   EditorJumpEntry,
   EditorLineChange,
@@ -77,6 +78,7 @@ export type {
   EditorViewportPresentationState,
   EditorBufferState,
   EditorFileSearchResult,
+  EditorFolderSearchResult,
   HistoryEntry,
   HistoryPlugin
 } from "./types";
@@ -328,7 +330,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     setCommandLineState: sessionRuntime.setCommandLineState,
     setRenameState: sessionRuntime.setRenameState,
     emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
-    loadCodeActions: () => pickerRuntime.loadCodeActions()
+    loadCodeActions: () => pickerRuntime.loadCodeActions(),
+    openAddFilePicker: (initialName) => pickerRuntime.openAddFilePicker(initialName)
   });
 
   viewportRuntime = createViewportRuntime({
@@ -401,6 +404,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     openBuffersPicker: pickerRuntime.openBuffersPicker,
     openPanesPicker: pickerRuntime.openPanesPicker,
     openFileSearchPicker: pickerRuntime.openFileSearchPicker,
+    openAddFilePicker: pickerRuntime.openAddFilePicker,
     updatePickerQuery: pickerRuntime.updatePickerQuery,
     loadCodeActions: pickerRuntime.loadCodeActions,
     collectVisibleFlashHints: commandsRuntime.collectVisibleFlashHints,

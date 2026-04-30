@@ -23,6 +23,7 @@ export interface PickerSearchSource {
   title: string;
   query?: string;
   variant?: "bar" | "modal" | "combo";
+  inputMode?: "search" | "filename";
   load(query: string): Promise<readonly PickerActionItem[]>;
 }
 
@@ -59,8 +60,27 @@ export interface PickerRuntime {
   }): boolean;
   openSearchPicker(source: PickerSearchSource): Promise<boolean>;
   openFileSearchPicker(): Promise<boolean>;
+  openAddFilePicker(initialName?: string): Promise<boolean>;
   updatePickerQuery(query: string): Promise<boolean>;
   loadCodeActions(): Promise<boolean>;
+}
+
+function validateRelativeFilename(value: string): string | null {
+  const normalized = value.trim().replace(/\\/g, "/");
+  if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) {
+    return null;
+  }
+
+  const segments = normalized.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    return null;
+  }
+
+  return segments.join("/");
+}
+
+function joinFolderAndFilename(folderPath: string, fileName: string): string {
+  return folderPath === "." ? fileName : `${folderPath.replace(/\/+$/g, "")}/${fileName}`;
 }
 
 export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntime {
@@ -68,7 +88,11 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
   let previewRequestId = 0;
   let searchRequestId = 0;
   let pickerSessionId = 0;
-  let searchSource: (PickerSearchSource & { query: string; variant: "bar" | "modal" | "combo" }) | null = null;
+  let searchSource: (PickerSearchSource & {
+    query: string;
+    variant: "bar" | "modal" | "combo";
+    inputMode: "search" | "filename";
+  }) | null = null;
 
   const invalidateAsyncPickerRequests = () => {
     previewRequestId += 1;
@@ -101,6 +125,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       previous.error === next.error &&
       previous.query === next.query &&
       previous.variant === next.variant &&
+      (previous.inputMode ?? "search") === (next.inputMode ?? "search") &&
       previous.previewTitle === next.previewTitle &&
       previous.previewContent === next.previewContent &&
       previous.previewLoading === next.previewLoading
@@ -124,6 +149,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       error: next.error,
       query: next.query,
       variant: next.variant,
+      inputMode: next.inputMode ?? "search",
       previewTitle: next.previewTitle,
       previewContent: next.previewContent,
       previewLoading: next.previewLoading
@@ -150,6 +176,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
           error: presentation.ui.picker.error,
           query: presentation.ui.picker.query,
           variant: presentation.ui.picker.variant,
+          inputMode: presentation.ui.picker.inputMode ?? "search",
           previewTitle: "",
           previewContent: "",
           previewLoading: false
@@ -197,6 +224,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         error: nextPresentation.ui.picker.error,
         query: nextPresentation.ui.picker.query,
         variant: nextPresentation.ui.picker.variant,
+        inputMode: nextPresentation.ui.picker.inputMode ?? "search",
         previewTitle: preview?.title ?? "",
         previewContent: preview?.content ?? "",
         previewLoading: false
@@ -217,6 +245,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         error: null,
         query: "",
         variant: "bar",
+        inputMode: "search",
         previewTitle: "",
         previewContent: "",
         previewLoading: false
@@ -252,6 +281,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         error: presentation.ui.picker.error,
         query: presentation.ui.picker.query,
         variant: presentation.ui.picker.variant,
+        inputMode: presentation.ui.picker.inputMode ?? "search",
         previewTitle: presentation.ui.picker.previewTitle,
         previewContent: presentation.ui.picker.previewContent,
         previewLoading: presentation.ui.picker.previewLoading
@@ -390,6 +420,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       title: "buffers",
       query: "",
       variant: "bar",
+      inputMode: "search",
       load: buildItems
     };
 
@@ -464,6 +495,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       title: source.title,
       query: source.query ?? "",
       variant: source.variant ?? "modal",
+      inputMode: source.inputMode ?? "search",
       load: source.load
     };
 
@@ -505,6 +537,34 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     });
   };
 
+  const openAddFilePicker = async (initialName = "") => {
+    return openSearchPicker({
+      title: "add",
+      query: initialName,
+      variant: "combo",
+      inputMode: "filename",
+      load: async (query) => {
+        const folders = await context.getController().listFolders();
+        return folders.map((entry) => ({
+          label: entry.folderPath,
+          detail: entry.detail,
+          run: () => {
+            const fileName = validateRelativeFilename(query);
+            if (!fileName) {
+              context.setBottomMessage({ tone: "warning", text: "File name must be a relative path without .." });
+              return;
+            }
+
+            const opened = context.getController().openEmptyFileBuffer(joinFolderAndFilename(entry.folderPath, fileName));
+            if (opened) {
+              closePicker("ui.picker.close");
+            }
+          }
+        }));
+      }
+    });
+  };
+
   const updatePickerQuery = async (query: string) => {
     if (!searchSource) {
       return false;
@@ -531,6 +591,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         error: null,
         query,
         variant: searchSource.variant,
+        inputMode: searchSource.inputMode,
         previewTitle: preserveVisiblePickerState ? presentation.ui.picker.previewTitle : "",
         previewContent: preserveVisiblePickerState ? presentation.ui.picker.previewContent : "",
         previewLoading: false
@@ -569,6 +630,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
         error: items.length === 0 ? "No matches" : null,
         query,
         variant: searchSource.variant,
+        inputMode: searchSource.inputMode,
         previewTitle: "",
         previewContent: "",
         previewLoading: false
@@ -674,6 +736,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     openActionPicker,
     openSearchPicker,
     openFileSearchPicker,
+    openAddFilePicker,
     updatePickerQuery,
     loadCodeActions
   };

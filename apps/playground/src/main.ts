@@ -600,9 +600,15 @@ async function main(): Promise<void> {
             },
             async searchFiles(context) {
               const payload = await requestJson<{ files: Array<{ filePath: string; detail?: string }> }>(
-                `/__wx__/search?file=${encodeURIComponent(context.filePath)}&scope=${encodeURIComponent(context.scope)}&q=${encodeURIComponent(context.query)}`
+                `/__wx__/search?file=${encodeURIComponent(context.filePath)}&scope=repo&q=${encodeURIComponent(context.query)}`
               );
               return payload.files;
+            },
+            async listFolders(context) {
+              const payload = await requestJson<{ folders: Array<{ folderPath: string; detail?: string }> }>(
+                `/__wx__/folders?file=${encodeURIComponent(context.filePath)}`
+              );
+              return payload.folders;
             },
             async writeFile(context) {
               await requestJson("/__wx__/write", context);
@@ -625,12 +631,25 @@ async function main(): Promise<void> {
             },
             async searchFiles(context) {
               const normalizedQuery = context.query.trim().toLowerCase();
-              const folderPrefix = context.filePath.includes("/") ? `${context.filePath.slice(0, context.filePath.lastIndexOf("/") + 1)}` : "";
               return [...memoryFiles.keys()]
-                .filter((entry) => context.scope === "repo" || entry.startsWith(folderPrefix))
                 .filter((entry) => !normalizedQuery || entry.toLowerCase().includes(normalizedQuery))
                 .slice(0, 50)
                 .map((filePath) => ({ filePath }));
+            },
+            async listFolders() {
+              const folders = new Set<string>(["."]);
+              for (const filePath of memoryFiles.keys()) {
+                const parts = filePath.split("/");
+                parts.pop();
+                let current = "";
+                for (const part of parts) {
+                  current = current ? `${current}/${part}` : part;
+                  folders.add(current);
+                }
+              }
+              return [...folders]
+                .sort((left, right) => (left === "." ? -1 : right === "." ? 1 : left.localeCompare(right)))
+                .map((folderPath) => ({ folderPath }));
             },
             async writeFile(context) {
               memoryFiles.set(context.filePath, context.text);

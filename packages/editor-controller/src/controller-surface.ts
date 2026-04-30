@@ -427,6 +427,24 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       );
       return switchBuffer(entry.id);
     },
+    openEmptyFileBuffer(filePath) {
+      const existing = options.workspaceRuntime.findBufferByFilePath(filePath);
+      if (existing) {
+        return switchBuffer(existing.id);
+      }
+
+      const entry = options.workspaceRuntime.storeBufferState(
+        filePath,
+        options.workspaceRuntime.createStateForText("", options.getState()),
+        true
+      );
+      if (!options.workspaceRuntime.bindActivePaneToBuffer(entry.id)) {
+        return false;
+      }
+
+      loadActivePaneState("buffer.add-file", { clearHistory: true, resetLanguage: true });
+      return true;
+    },
     newScratchBuffer() {
       const scratch = options.workspaceRuntime.bindActivePaneToNewScratch();
       if (!scratch) {
@@ -521,6 +539,21 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
         });
       } catch {
         return [] as EditorFileSearchResult[];
+      }
+    },
+    async listFolders() {
+      const listFolders = presentation.language.host?.listFolders;
+      if (!listFolders) {
+        return [{ folderPath: "." }];
+      }
+
+      try {
+        const folders = await listFolders({
+          filePath: presentation.filePath ?? ""
+        });
+        return folders.length > 0 ? folders : [{ folderPath: "." }];
+      } catch {
+        return [{ folderPath: "." }];
       }
     },
     selectNextOccurrence(reverse = false) {

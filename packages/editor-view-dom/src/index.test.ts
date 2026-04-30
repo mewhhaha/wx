@@ -2626,6 +2626,42 @@ describe("createEditor", () => {
     expect(editor.controller.getBuffers().map((entry) => entry.filePath)).toEqual(["src/current.ts", "src/beta.ts"]);
   });
 
+  it("renders :add folder picker and opens an empty buffer without writing", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const writeFile = vi.fn(async () => {});
+
+    const editor = createEditor(container, {
+      value: "current",
+      filePath: "src/current.ts",
+      host: {
+        async listFolders() {
+          return [{ folderPath: "." }, { folderPath: "src" }];
+        },
+        writeFile
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", shiftKey: true, bubbles: true }));
+    for (const key of "add feature2.ts") {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushAsyncWork(12);
+
+    expect(container.querySelector("[data-wx-editor-picker-combo='true']")?.textContent).toContain("feature2.ts");
+    expect(container.querySelector("[data-wx-editor-picker-combo='true']")?.textContent).toContain("src");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushAsyncWork(12);
+
+    expect(editor.controller.getPresentationState().filePath).toBe("src/feature2.ts");
+    expect(editor.getState().doc.text).toBe("");
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
   it("keeps newest modal search results when overlapping DOM queries resolve out of order", async () => {
     const container = document.createElement("div");
     document.body.append(container);

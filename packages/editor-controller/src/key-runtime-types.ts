@@ -79,6 +79,7 @@ export interface KeyRuntimeContext {
   openBuffersPicker(): boolean;
   openPanesPicker(): boolean;
   openFileSearchPicker(): Promise<boolean>;
+  openAddFilePicker(initialName?: string): Promise<boolean>;
   updatePickerQuery(query: string): Promise<boolean>;
   loadCodeActions(): Promise<boolean>;
   collectVisibleFlashHints(target: string): readonly EditorFlashHintState[];

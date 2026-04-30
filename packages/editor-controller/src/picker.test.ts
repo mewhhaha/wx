@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createPickerRuntime } from "./picker";
 import { createPresentationState } from "./presentation";
+import { handlePickerKey } from "./key-picker";
 import type { EditorController } from "./types";
 
 async function flushAsyncWork(times = 8): Promise<void> {
@@ -104,5 +105,42 @@ describe("picker runtime", () => {
     expect(harness.presentation.ui.picker.active).toBe(false);
     expect(harness.presentation.ui.picker.title).toBe("");
     expect(harness.presentation.ui.picker.items).toEqual([]);
+  });
+
+  it("treats number keys as query text in filename picker mode", async () => {
+    const harness = createPickerHarness();
+    harness.presentation.ui.picker = {
+      active: true,
+      loading: false,
+      title: "add",
+      items: [{ label: "." }],
+      selectedIndex: 0,
+      error: null,
+      query: "file",
+      variant: "combo",
+      inputMode: "filename",
+      previewTitle: "",
+      previewContent: "",
+      previewLoading: false
+    };
+    const updatePickerQuery = vi.fn(async (query: string) => {
+      harness.presentation.ui.picker.query = query;
+      return true;
+    });
+    const acceptPicker = vi.fn(async () => true);
+
+    await handlePickerKey(
+      {
+        getPresentation: () => harness.presentation,
+        updatePickerQuery,
+        acceptPicker,
+        closePicker: vi.fn(),
+        movePicker: vi.fn()
+      } as never,
+      "2"
+    );
+
+    expect(updatePickerQuery).toHaveBeenCalledWith("file2");
+    expect(acceptPicker).not.toHaveBeenCalled();
   });
 });

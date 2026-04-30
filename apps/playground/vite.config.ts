@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -139,6 +139,30 @@ function createWxDevBridge(repoRoot: string): Plugin {
     }));
   }
 
+  function listWorkspaceFolders() {
+    const folders = new Set<string>(["."]);
+    const files = execFileSync("rg", ["--files"], {
+      cwd: repoRoot,
+      encoding: "utf8"
+    })
+      .split("\n")
+      .filter(Boolean);
+
+    for (const filePath of files) {
+      const parts = filePath.replaceAll("\\", "/").split("/");
+      parts.pop();
+      let current = "";
+      for (const part of parts) {
+        current = current ? `${current}/${part}` : part;
+        folders.add(current);
+      }
+    }
+
+    return [...folders]
+      .sort((left, right) => (left === "." ? -1 : right === "." ? 1 : left.localeCompare(right)))
+      .map((folderPath) => ({ folderPath }));
+  }
+
   return {
     name: "wx-dev-bridge",
     configureServer(server) {
@@ -190,6 +214,17 @@ function createWxDevBridge(repoRoot: string): Plugin {
             return;
           }
 
+          if (request.method === "GET" && request.url.startsWith("/__wx__/folders")) {
+            try {
+              response.setHeader("content-type", "application/json");
+              response.end(JSON.stringify({ folders: listWorkspaceFolders() }));
+            } catch (error) {
+              response.statusCode = 500;
+              response.end(error instanceof Error ? error.message : String(error));
+            }
+            return;
+          }
+
           next();
           return;
         }
@@ -210,7 +245,9 @@ function createWxDevBridge(repoRoot: string): Plugin {
           }
 
           if (request.url === "/__wx__/write") {
-            writeFileSync(resolveWorkspacePath(payload.filePath), payload.text, "utf8");
+            const resolvedPath = resolveWorkspacePath(payload.filePath);
+            mkdirSync(dirname(resolvedPath), { recursive: true });
+            writeFileSync(resolvedPath, payload.text, "utf8");
             response.setHeader("content-type", "application/json");
             response.end(JSON.stringify({ ok: true }));
             return;
