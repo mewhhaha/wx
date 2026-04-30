@@ -38,6 +38,11 @@ type SceneWorkerRequest =
   | ({ type: "highlights"; requestId: number; lines: EditorLineRange } & SceneWorkerBaseRequest);
 
 type SceneWorkerRpcRequest = Extract<SceneWorkerRequest, { requestId: number }>;
+type SceneWorkerRpcRequestInput = SceneWorkerRpcRequest extends infer Request
+  ? Request extends { requestId: number }
+    ? Omit<Request, "requestId">
+    : never
+  : never;
 
 export interface SceneLangLanguageServicesOptions {
   wasmUrl: string;
@@ -166,16 +171,16 @@ export class SceneLangWorkerServices implements Highlighter, HoverSource, Format
     this.worker.terminate();
   }
 
-  private async request<T>(message: Omit<SceneWorkerRpcRequest, "requestId">): Promise<T> {
+  private async request<T>(message: SceneWorkerRpcRequestInput): Promise<T> {
     await this.ready;
     const requestId = this.nextRequestId++;
 
     return await new Promise<T>((resolve) => {
-      this.pending.set(requestId, { resolve });
+      this.pending.set(requestId, { resolve: resolve as (value: unknown) => void });
       this.worker.postMessage({
         requestId,
         ...message
-      } satisfies SceneWorkerRpcRequest);
+      } as SceneWorkerRpcRequest);
     });
   }
 }

@@ -9,6 +9,7 @@ import type { HighlightSpan, SyntaxSelectionRange } from "@mewhhaha/wx-language"
 import { mapCaptureNameToRole } from "./highlightMapping";
 import { applyTextChange, buildTreeEdit, rebaseTextChanges } from "./incrementalEdits";
 import type { TreeSitterWorkerMessage, TreeSitterWorkerResponse } from "./messages";
+import { utf16OffsetToUtf8ByteOffset, utf8ByteOffsetToUtf16Offset, utf8ByteRangeToUtf16Range } from "./offsets";
 import { expandSyntaxSelection, shrinkSyntaxSelection } from "./syntaxSelection";
 
 interface ParserModule {
@@ -113,6 +114,30 @@ function viewportBounds(text: string, lines: { fromLine: number; toLine: number 
   return { from, to };
 }
 
+function viewportByteBounds(text: string, lines: { fromLine: number; toLine: number }): { from: number; to: number } {
+  const bounds = viewportBounds(text, lines);
+  return {
+    from: utf16OffsetToUtf8ByteOffset(text, bounds.from),
+    to: utf16OffsetToUtf8ByteOffset(text, bounds.to)
+  };
+}
+
+function toUtf16SyntaxNode(node: SyntaxNodeLike, text: string, parent: SyntaxNodeLike | null = null): SyntaxNodeLike {
+  const children: SyntaxNodeLike[] = [];
+  const converted: SyntaxNodeLike = {
+    startIndex: utf8ByteOffsetToUtf16Offset(text, node.startIndex),
+    endIndex: utf8ByteOffsetToUtf16Offset(text, node.endIndex),
+    parent,
+    namedChildren: children
+  };
+
+  for (const child of node.namedChildren ?? []) {
+    children.push(toUtf16SyntaxNode(child, text, converted));
+  }
+
+  return converted;
+}
+
 function sortAndCompact(spans: HighlightSpan[]): HighlightSpan[] {
   const sorted = [...spans].sort((left, right) => left.from - right.from || left.to - right.to);
   const compacted: HighlightSpan[] = [];
@@ -200,7 +225,7 @@ function buildHighlights(lines: { fromLine: number; toLine: number }, revision: 
     return [];
   }
 
-  const bounds = viewportBounds(currentText, lines);
+  const bounds = viewportByteBounds(currentText, lines);
   const captures = query.captures(currentTree.rootNode, {
     startPosition: { row: lines.fromLine, column: 0 },
     endPosition: { row: lines.toLine + 1, column: 0 }
@@ -219,6 +244,10 @@ function buildHighlights(lines: { fromLine: number; toLine: number }, revision: 
         from: Math.max(span.from, bounds.from),
         to: Math.min(span.to, bounds.to)
       }))
+      .map((span) => ({
+        ...utf8ByteRangeToUtf16Range(currentText, span),
+        role: span.role
+      }))
       .filter((span) => span.to > span.from)
   );
 }
@@ -233,9 +262,10 @@ function buildSyntaxSelection(
     return null;
   }
 
+  const root = toUtf16SyntaxNode(currentTree.rootNode as SyntaxNodeLike, currentText);
   return mode === "expand"
-    ? expandSyntaxSelection(currentTree.rootNode as SyntaxNodeLike, selection)
-    : shrinkSyntaxSelection(currentTree.rootNode as SyntaxNodeLike, selection, activeOffset);
+    ? expandSyntaxSelection(root, selection)
+    : shrinkSyntaxSelection(root, selection, activeOffset);
 }
 
 parentPort?.on("message", async (payload: TreeSitterWorkerMessage) => {

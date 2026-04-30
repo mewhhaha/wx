@@ -9,7 +9,8 @@
     "dev": "pnpm run dev:playground",
     "dev:playground": "pnpm --filter @wx/playground dev -- --host 127.0.0.1 --port 4173",
     "jsr:check:editor": "bash scripts/jsr-dry-run-editor.sh",
-    "verify:workspace": "pnpm build && pnpm test:unit",
+    "verify:workspace": "pnpm build && pnpm test:exports && pnpm test:unit",
+    "test:exports": "node scripts/package-export-smoke.mjs",
     "test:e2e": "playwright test",
     "test:unit": "vitest run"
   },
@@ -19,7 +20,7 @@
     "jsdom": "^29.0.1",
     "tsup": "^8.5.1",
     "typescript": "^6.0.2",
-    "vite": "^8.0.3",
+    "vite": "^8.0.10",
     "vitest": "^4.1.2"
   }
 }

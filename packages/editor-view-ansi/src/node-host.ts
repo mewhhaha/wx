@@ -104,7 +104,7 @@ export function createNodeHostServices(options: {
 
       while (stack.length > 0) {
         const current = stack.pop()!;
-        let entries: Awaited<ReturnType<typeof fs.readdir>>;
+        let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
 
         try {
           entries = await fs.readdir(current, { withFileTypes: true });

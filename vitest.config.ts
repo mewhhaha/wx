@@ -10,6 +10,7 @@ export default defineConfig({
       "packages/editor-view-ansi/vitest.config.ts",
       "packages/editor-theme/vitest.config.ts",
       "packages/editor-tree-sitter/vitest.config.ts",
+      "packages/scene-lang-wasm/vitest.config.ts",
       "packages/scene-lang-worker/vitest.config.ts",
       "packages/editor-view-dom/vitest.config.ts",
       "packages/editor-element/vitest.config.ts",

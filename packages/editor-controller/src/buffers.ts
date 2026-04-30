@@ -29,7 +29,9 @@ export function createBuffersRuntime(options: CreateBuffersRuntimeOptions): Buff
   const buffers = new Map<string, BufferEntry>();
   const initialBuffer: BufferEntry = {
     id: "buffer-1",
+    kind: "file",
     filePath: options.initialFilePath,
+    displayName: options.initialFilePath,
     dirty: false,
     state: options.initialState
   };
@@ -57,16 +59,24 @@ export function createBuffersRuntime(options: CreateBuffersRuntimeOptions): Buff
     syncActiveFilePath(filePath) {
       const activeBuffer = getActiveBuffer();
       activeBuffer.filePath = filePath;
+      activeBuffer.displayName = filePath;
     },
     markActiveSaved(filePath) {
       const activeBuffer = getActiveBuffer();
       if (filePath) {
         activeBuffer.filePath = filePath;
+        activeBuffer.displayName = filePath;
       }
       activeBuffer.dirty = false;
     },
     getBuffers() {
-      return [...buffers.values()].map(({ id, filePath, dirty }) => ({ id, filePath, dirty }));
+      return [...buffers.values()].map(({ id, kind, filePath, displayName, dirty }) => ({
+        id,
+        kind,
+        filePath,
+        displayName,
+        dirty
+      }));
     },
     getActiveBufferId() {
       return activeBufferId;
@@ -85,7 +95,9 @@ export function createBuffersRuntime(options: CreateBuffersRuntimeOptions): Buff
 
       const entry: BufferEntry = {
         id: `buffer-${nextBufferId++}`,
+        kind: "file",
         filePath,
+        displayName: filePath,
         dirty,
         state
       };

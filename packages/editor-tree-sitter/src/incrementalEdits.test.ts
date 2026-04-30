@@ -11,9 +11,20 @@ describe("incremental tree-sitter edit helpers", () => {
     expect(positionAtOffset("ab\ncd\nef", 8)).toEqual({ row: 2, column: 2 });
   });
 
+  it("computes tree-sitter byte columns from UTF-16 offsets", () => {
+    expect(positionAtOffset("éα\n😀x", 2)).toEqual({ row: 0, column: 4 });
+    expect(positionAtOffset("éα\n😀x", 5)).toEqual({ row: 1, column: 4 });
+    expect(positionAtOffset("éα\n😀x", 6)).toEqual({ row: 1, column: 5 });
+  });
+
   it("advances positions across inserted newlines", () => {
     expect(advancePosition({ row: 2, column: 3 }, "xy")).toEqual({ row: 2, column: 5 });
     expect(advancePosition({ row: 2, column: 3 }, "\nxy\nz")).toEqual({ row: 4, column: 1 });
+  });
+
+  it("advances tree-sitter byte columns across non-ASCII insertions", () => {
+    expect(advancePosition({ row: 0, column: 2 }, "é😀")).toEqual({ row: 0, column: 8 });
+    expect(advancePosition({ row: 0, column: 2 }, "é\nα")).toEqual({ row: 1, column: 2 });
   });
 
   it("builds tree edits for multiline insertions", () => {
@@ -30,6 +41,23 @@ describe("incremental tree-sitter edit helpers", () => {
       startPosition: { row: 0, column: 6 },
       oldEndPosition: { row: 0, column: 6 },
       newEndPosition: { row: 1, column: 12 }
+    });
+  });
+
+  it("builds tree edits with byte indexes while changes stay UTF-16", () => {
+    const edit = buildTreeEdit("aéα\n😀x", {
+      from: 2,
+      to: 6,
+      insert: "β\nz"
+    });
+
+    expect(edit).toEqual({
+      startIndex: 3,
+      oldEndIndex: 10,
+      newEndIndex: 7,
+      startPosition: { row: 0, column: 3 },
+      oldEndPosition: { row: 1, column: 4 },
+      newEndPosition: { row: 1, column: 1 }
     });
   });
 

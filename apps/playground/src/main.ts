@@ -1,4 +1,4 @@
-import sceneLangWasmUrl from "./assets/scene-lang.wasm?url";
+import sceneLangWasmUrl from "@wx/scene-lang-wasm/scene-lang.wasm?url";
 import { installBenchmarkHarness } from "./benchmarkHarness";
 
 import { createCharacterSelection, createTextDocument } from "@mewhhaha/wx-core";

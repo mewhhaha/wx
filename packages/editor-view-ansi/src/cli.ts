@@ -117,7 +117,7 @@ async function main(): Promise<void> {
   const editorFilePath = options.filePath ? normalizeEditorFilePath(projectRoot, options.filePath) : null;
   const controller = createEditorController({
     value: await readInitialValue(projectRoot, editorFilePath),
-    filePath: editorFilePath,
+    filePath: editorFilePath ?? undefined,
     languageRegistry: loadedConfig.languageRegistry
   });
 

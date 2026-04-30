@@ -9,7 +9,7 @@ const targetWasmPath = resolve(
   repoRoot,
   "target/wasm32-unknown-unknown/release/scene_lang_wasm.wasm"
 );
-const playgroundAssetPath = resolve(repoRoot, "apps/playground/src/assets/scene-lang.wasm");
+const packageAssetPath = resolve(repoRoot, "packages/scene-lang-wasm/dist/scene-lang.wasm");
 
 execFileSync(
   "cargo",
@@ -20,5 +20,5 @@ execFileSync(
   }
 );
 
-mkdirSync(dirname(playgroundAssetPath), { recursive: true });
-copyFileSync(targetWasmPath, playgroundAssetPath);
+mkdirSync(dirname(packageAssetPath), { recursive: true });
+copyFileSync(targetWasmPath, packageAssetPath);
