@@ -70,7 +70,7 @@ export interface EditorLineChange {
 }
 
 export interface EditorHostServices {
-  writeFile?(context: { filePath: string; text: string }): Promise<void>;
+  writeFile?(context: { filePath: string; text: string; expectedText?: string | null }): Promise<void>;
   readFile?(context: { filePath: string }): Promise<{ text: string } | string>;
   searchFiles?(context: {
     filePath: string;
@@ -267,6 +267,10 @@ export interface EditorUiPresentationState {
 export interface EditorPresentationState {
   filePath: string | null;
   bufferTitle: string;
+  fileStatus: {
+    dirty: boolean;
+    externalChanged: boolean;
+  };
   themeName: string | null;
   viewport: EditorViewportPresentationState;
   language: EditorLanguagePresentationState;
@@ -444,6 +448,8 @@ export interface EditorController {
   applyCodeAction(action: EditorCodeAction): Promise<boolean>;
   formatDocument(): Promise<boolean>;
   saveDocument(targetPath?: string | null): Promise<boolean>;
+  refreshFileStatus(): Promise<boolean>;
+  reloadDocument(): Promise<boolean>;
 }
 
 export interface CreateEditorControllerOptions {

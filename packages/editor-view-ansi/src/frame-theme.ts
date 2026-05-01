@@ -127,6 +127,10 @@ export function styleForToken(
       return styleForThemeRole(theme, "diagnosticHint", rowBg);
     case "status":
       return makeStyle(resolveThemeColor(theme, "text"), STATUS_BG);
+    case "status-dirty":
+      return makeStyle(resolveThemeColor(theme, "text"), STATUS_BG, true);
+    case "status-external-change":
+      return makeStyle(resolveThemeColor(theme, "diagnosticError"), STATUS_BG, true);
     case "bottom":
       return makeStyle(resolveThemeColor(theme, "text"), BOTTOM_BG);
     case "bottom-prompt":

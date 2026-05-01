@@ -513,6 +513,16 @@ const EDITOR_STYLE_TEXT = `
     font-weight: 600;
   }
 
+  .wx-editor__status-dirty {
+    color: var(--wx-color-text);
+    font-weight: 700;
+  }
+
+  .wx-editor__status-external-change {
+    color: var(--wx-color-diagnostic-error);
+    font-weight: 700;
+  }
+
   .wx-editor__status-meta {
     display: inline-flex;
     align-items: center;

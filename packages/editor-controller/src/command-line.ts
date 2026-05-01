@@ -6,6 +6,7 @@ import type {
 const ROOT_COMMANDS: EditorCommandCompletionItem[] = [
   { label: "theme", detail: "switch theme" },
   { label: "write", detail: "save document" },
+  { label: "reload", detail: "reload file from disk" },
   { label: "format", detail: "format document" },
   { label: "code-actions", detail: "show code actions" },
   { label: "completion", detail: "request completion" },
@@ -107,6 +108,7 @@ export function hasRunnableCommandLineValue(rawValue: string, themeNames: readon
       "fmt",
       "w",
       "write",
+      "reload",
       "code-actions",
       "codeaction",
       "ca",

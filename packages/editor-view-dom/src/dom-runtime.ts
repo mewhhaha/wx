@@ -59,6 +59,10 @@ function runClassNames(run: EditorLayoutRun): string[] {
     classes.push("wx-editor__status-mode-chip");
   }
 
+  if (run.token === "status-dirty" || run.token === "status-external-change") {
+    classes.push(`wx-editor__${run.token}`);
+  }
+
   if (run.token === "picker-selected") {
     classes.push("wx-editor__picker-item--selected");
   }

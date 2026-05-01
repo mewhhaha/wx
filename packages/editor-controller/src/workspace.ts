@@ -28,6 +28,8 @@ interface WorkspaceBufferSession {
   filePath: string | null;
   displayName: string;
   dirty: boolean;
+  externalChanged: boolean;
+  persistedText: string | null;
   buffer: EditorBufferDocumentState;
   language: EditorLanguagePresentationState;
   viewTemplate: EditorViewState;
@@ -57,7 +59,10 @@ export interface WorkspaceRuntime {
   findBufferByFilePath(filePath: string): WorkspaceBufferSession | null;
   getBufferState(filePath: string): EditorState | null;
   syncActiveFilePath(filePath: string | null): void;
-  markActiveSaved(filePath?: string | null): void;
+  getActiveFileStatus(): { dirty: boolean; externalChanged: boolean; persistedText: string | null };
+  setActiveExternalChanged(externalChanged: boolean): void;
+  markActiveSaved(filePath?: string | null, persistedText?: string | null): void;
+  markActiveReloaded(text: string): void;
   createStateForText(text: string, template: EditorState): EditorState;
   storeBufferState(filePath: string, state: EditorState, dirty?: boolean): WorkspaceBufferSession;
   createScratchBuffer(templateState: EditorState): WorkspaceBufferSession;
@@ -353,6 +358,8 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
     filePath: options.presentation.filePath,
     displayName: initialDisplayName,
     dirty: false,
+    externalChanged: false,
+    persistedText: initialBufferKind === "file" ? split.buffer.doc.text : null,
     buffer: cloneBufferState(split.buffer),
     language: cloneLanguageState(options.presentation.language),
     viewTemplate: cloneViewState(split.view)
@@ -411,6 +418,10 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       ...presentation,
       filePath: buffer.filePath,
       bufferTitle: buffer.displayName,
+      fileStatus: {
+        dirty: buffer.dirty,
+        externalChanged: buffer.externalChanged
+      },
       viewport: cloneViewportState(pane.viewport),
       language: cloneLanguageState(buffer.language),
       ui: {
@@ -537,8 +548,24 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       buffer.filePath = filePath;
       buffer.kind = filePath ? "file" : "scratch";
       buffer.displayName = filePath ?? buffer.displayName;
+      if (!filePath) {
+        buffer.persistedText = null;
+        buffer.externalChanged = false;
+      }
     },
-    markActiveSaved(filePath) {
+    getActiveFileStatus() {
+      const buffer = getActiveBuffer();
+      return {
+        dirty: buffer.dirty,
+        externalChanged: buffer.externalChanged,
+        persistedText: buffer.persistedText
+      };
+    },
+    setActiveExternalChanged(externalChanged) {
+      const buffer = getActiveBuffer();
+      buffer.externalChanged = externalChanged;
+    },
+    markActiveSaved(filePath, persistedText) {
       const buffer = getActiveBuffer();
       if (filePath) {
         buffer.filePath = filePath;
@@ -546,6 +573,16 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
         buffer.displayName = filePath;
       }
       buffer.dirty = false;
+      buffer.externalChanged = false;
+      if (persistedText !== undefined) {
+        buffer.persistedText = persistedText;
+      }
+    },
+    markActiveReloaded(text) {
+      const buffer = getActiveBuffer();
+      buffer.dirty = false;
+      buffer.externalChanged = false;
+      buffer.persistedText = text;
     },
     createStateForText(text, template) {
       return createEditorState({
@@ -563,6 +600,8 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
         existing.filePath = filePath;
         existing.displayName = filePath;
         existing.dirty = dirty;
+        existing.externalChanged = false;
+        existing.persistedText = dirty ? null : state.doc.text;
         existing.buffer = cloneBufferState(splitState.buffer);
         existing.viewTemplate = cloneViewState(splitState.view);
 
@@ -585,6 +624,8 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
         filePath,
         displayName: filePath,
         dirty,
+        externalChanged: false,
+        persistedText: dirty ? null : state.doc.text,
         buffer: cloneBufferState(splitState.buffer),
         language: cloneLanguageState(options.presentation.language),
         viewTemplate: cloneViewState(splitState.view)
@@ -600,6 +641,8 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
         filePath: null,
         displayName: createScratchDisplayName(),
         dirty: false,
+        externalChanged: false,
+        persistedText: null,
         buffer: cloneBufferState(splitState.buffer),
         language: cloneLanguageState(options.presentation.language),
         viewTemplate: cloneViewState(splitState.view)
@@ -756,6 +799,10 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       if (runtimeOptions.docChanged) {
         buffer.dirty = true;
       }
+      presentation.fileStatus = {
+        dirty: buffer.dirty,
+        externalChanged: buffer.externalChanged
+      };
       mutateLanguageState(buffer.language, presentation.language);
       activeBufferId = buffer.id;
     },
@@ -764,6 +811,10 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       const nextState = combineEditorState(buffer.buffer, pane.view);
       presentation.filePath = buffer.filePath;
       presentation.bufferTitle = buffer.displayName;
+      presentation.fileStatus = {
+        dirty: buffer.dirty,
+        externalChanged: buffer.externalChanged
+      };
       mutateViewportState(presentation.viewport, pane.viewport);
       mutateLanguageState(presentation.language, buffer.language);
       presentation.ui.completion = cloneCompletionState(pane.completion);

@@ -206,6 +206,17 @@ export function createNodeHostServices(options: {
       const fs = await import("node:fs/promises");
       const path = await import("node:path");
       const absolute = await resolveInsideProjectRoot(context.filePath);
+      if (context.expectedText !== undefined) {
+        let currentText: string | null = null;
+        try {
+          currentText = await fs.readFile(absolute, "utf8");
+        } catch {
+          currentText = null;
+        }
+        if (currentText !== context.expectedText) {
+          throw new Error(`File changed on disk: ${context.filePath}`);
+        }
+      }
       await fs.mkdir(path.dirname(absolute), { recursive: true });
       await fs.writeFile(absolute, context.text, "utf8");
       walkCache.clear();

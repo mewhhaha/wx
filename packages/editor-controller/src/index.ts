@@ -433,6 +433,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     sessionRuntime,
     registersJumpsRuntime,
     workspaceRuntime,
+    pickerRuntime,
     keyRuntime,
     multiSelectionRuntime,
     getLanguageRegistry: () => languageRegistry,

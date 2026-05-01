@@ -19,6 +19,7 @@ interface CreateDomHandleRuntimeOptions {
   normalizeLanguageServices(input: EditorLanguageServiceInput | null | undefined): EditorLanguageServices[];
   unsubscribeController(): void;
   disconnectResizeObserver(): void;
+  cleanupWindowListeners?(): void;
 }
 
 export interface DomHandleRuntime {
@@ -77,6 +78,7 @@ export function createDomHandleRuntime(options: CreateDomHandleRuntimeOptions): 
         options.context.pendingMountFrame = 0;
       }
       options.unsubscribeController();
+      options.cleanupWindowListeners?.();
       destroyLanguageServices();
       options.context.root.remove();
     },

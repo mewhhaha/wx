@@ -367,10 +367,16 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
           return { handled: true };
         }
         const didSave = await controller.saveDocument(targetPath);
-        context.setBottomMessage({
-          tone: didSave ? "info" : "error",
-          text: didSave ? `Wrote ${targetPath}` : `Write failed for ${targetPath}`
-        });
+        if (didSave) {
+          context.setBottomMessage({ tone: "info", text: `Wrote ${targetPath}` });
+        } else if (!presentation.ui.bottomMessage) {
+          context.setBottomMessage({ tone: "error", text: `Write failed for ${targetPath}` });
+        }
+        return { handled: true };
+      }
+
+      if (value === "reload") {
+        await controller.reloadDocument();
         return { handled: true };
       }
 

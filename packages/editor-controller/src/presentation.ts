@@ -8,6 +8,10 @@ export function createPresentationState(
   return {
     filePath: options.filePath ?? null,
     bufferTitle: options.filePath ?? "[scratch]",
+    fileStatus: {
+      dirty: false,
+      externalChanged: false
+    },
     themeName: options.theme ?? null,
     viewport: {
       topVisualRow: 0,

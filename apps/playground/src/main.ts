@@ -652,6 +652,9 @@ async function main(): Promise<void> {
                 .map((folderPath) => ({ folderPath }));
             },
             async writeFile(context) {
+              if (context.expectedText !== undefined && (memoryFiles.get(context.filePath) ?? null) !== context.expectedText) {
+                throw new Error(`File changed on disk: ${context.filePath}`);
+              }
               memoryFiles.set(context.filePath, context.text);
             },
             didWriteFile(context) {

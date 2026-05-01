@@ -1481,6 +1481,47 @@ describe("editor controller", () => {
     expect(controller.getBuffers().find((entry) => entry.filePath === "src/nested/file2.ts")?.dirty).toBe(false);
   });
 
+  it("tracks dirty state, save baselines, external changes, and reload", async () => {
+    const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
+    let diskText = "alpha";
+    const writes: Array<{ filePath: string; text: string; expectedText?: string | null }> = [];
+
+    controller.setHostServices({
+      async readFile() {
+        return { text: diskText };
+      },
+      async writeFile(context) {
+        writes.push(context);
+        diskText = context.text;
+      }
+    });
+
+    controller.execute(enterInsertMode);
+    controller.execute(insertText("!"));
+
+    expect(controller.getPresentationState().fileStatus).toEqual({ dirty: true, externalChanged: false });
+
+    expect(await controller.saveDocument()).toBe(true);
+    expect(writes).toEqual([{ filePath: "src/current.ts", text: "!alpha", expectedText: "alpha" }]);
+    expect(controller.getPresentationState().fileStatus).toEqual({ dirty: false, externalChanged: false });
+
+    diskText = "outside";
+    expect(await controller.refreshFileStatus()).toBe(true);
+    expect(controller.getPresentationState().fileStatus).toEqual({ dirty: false, externalChanged: true });
+
+    controller.execute(insertText("?"));
+    expect(await controller.saveDocument()).toBe(false);
+    expect(writes).toHaveLength(1);
+    expect(controller.getPresentationState().ui.picker.items.map((entry) => entry.label)).toEqual([
+      "Reload file",
+      "Keep editing"
+    ]);
+
+    expect(await controller.reloadDocument()).toBe(true);
+    expect(controller.getState().doc.text).toBe("outside");
+    expect(controller.getPresentationState().fileStatus).toEqual({ dirty: false, externalChanged: false });
+  });
+
   it("switches to an already open target buffer when :add selects the same path", async () => {
     const controller = createEditorController({ value: "alpha", filePath: "src/current.ts" });
     controller.setHostServices({

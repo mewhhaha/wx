@@ -288,7 +288,19 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
 
       options.statusMode.textContent = ` ${statusModeName} `;
       options.statusMode.dataset.mode = statusModeName;
-      options.statusFile.textContent = ` ${options.getBufferTitle()}`;
+      options.statusFile.replaceChildren();
+      options.statusFile.append(document.createTextNode(` ${options.getBufferTitle()}`));
+      if (options.getPresentation().fileStatus.externalChanged || options.getPresentation().fileStatus.dirty) {
+        const indicator = document.createElement("span");
+        indicator.className = options.getPresentation().fileStatus.externalChanged
+          ? "wx-editor__status-external-change"
+          : "wx-editor__status-dirty";
+        indicator.dataset.wxEditorStatusFileIndicator = options.getPresentation().fileStatus.externalChanged
+          ? "external-change"
+          : "dirty";
+        indicator.textContent = " ●";
+        options.statusFile.append(indicator);
+      }
       options.statusMeta.textContent = [
         "1 sel",
         errors > 0 ? `E${errors}` : "",

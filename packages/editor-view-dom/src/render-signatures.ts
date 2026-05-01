@@ -72,6 +72,8 @@ export function readStatusSignature(options: {
     options.presentation.ui.flash.active ? "flash" : "",
     serializePendingAction(options.presentation.ui.pendingAction),
     options.bufferTitle,
+    options.presentation.fileStatus.dirty ? 1 : 0,
+    options.presentation.fileStatus.externalChanged ? 1 : 0,
     options.diagnosticsSummary.errors,
     options.diagnosticsSummary.warnings,
     cursorPosition.line,

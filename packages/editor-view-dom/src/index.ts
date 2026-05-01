@@ -207,6 +207,10 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   context.chromeRuntime = chromeRuntime;
 
   const events = createDomEventRuntime(context, runtime);
+  const refreshFocusedFileStatus = () => {
+    void controller.refreshFileStatus().then(() => runtime.patchStatus());
+  };
+  window.addEventListener("focus", refreshFocusedFileStatus);
   let unsubscribeController = controller.subscribe(runtime.handleControllerUpdate);
   const handle = createDomHandleRuntime({
     controller,
@@ -219,6 +223,9 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     disconnectResizeObserver() {
       resizeObserver?.disconnect();
       resizeObserver = null;
+    },
+    cleanupWindowListeners() {
+      window.removeEventListener("focus", refreshFocusedFileStatus);
     }
   });
 
@@ -228,6 +235,7 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     if (document.activeElement !== textarea) {
       textarea.focus();
     }
+    refreshFocusedFileStatus();
   });
   root.addEventListener("mousedown", () => {
     textarea.focus();

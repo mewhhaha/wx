@@ -23,6 +23,8 @@ export type EditorLayoutToken =
   | "cursor"
   | "status"
   | "status-mode"
+  | "status-dirty"
+  | "status-external-change"
   | "bottom"
   | "bottom-prompt"
   | "search-match"
@@ -343,6 +345,10 @@ export type EditorLayoutPendingAction =
 export interface EditorLayoutPresentationState {
   filePath: string | null;
   bufferTitle: string;
+  fileStatus?: {
+    dirty: boolean;
+    externalChanged: boolean;
+  };
   viewport: {
     topVisualRow: number;
     visibleRowCapacity: number;
@@ -1491,6 +1497,13 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
   const cursorPosition = input.state.doc.positionAt(activeOffset);
   const { errors, warnings } = getDiagnosticsSummary(input.presentation.language.diagnostics);
   const statusModeText = getStatusModeText(input);
+  const fileStatus = input.presentation.fileStatus ?? { dirty: false, externalChanged: false };
+  const fileIndicator = fileStatus.externalChanged
+    ? { text: " ●", token: "status-external-change" as const, part: "status-external-change" }
+    : fileStatus.dirty
+      ? { text: " ●", token: "status-dirty" as const, part: "status-dirty" }
+      : null;
+  const statusFileText = ` ${input.presentation.bufferTitle}${fileIndicator?.text ?? ""}`;
   const statusBar: EditorLayoutRun[] = [
     {
       col: 0,
@@ -1500,12 +1513,22 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
     },
     {
       col: statusModeText.length,
-      text: ` ${input.presentation.bufferTitle}`,
+      text: statusFileText,
       token: "status",
       part: "status-file"
     },
+    ...(fileIndicator
+      ? [
+          {
+            col: statusModeText.length + 1 + input.presentation.bufferTitle.length,
+            text: fileIndicator.text,
+            token: fileIndicator.token,
+            part: fileIndicator.part
+          }
+        ]
+      : []),
     {
-      col: statusModeText.length + input.presentation.bufferTitle.length + 4,
+      col: statusModeText.length + statusFileText.length + 3,
       text: [
         input.state.selection.ranges.length === 1 ? "1 sel" : `${input.state.selection.ranges.length} sels`,
         errors > 0 ? `E${errors}` : "",

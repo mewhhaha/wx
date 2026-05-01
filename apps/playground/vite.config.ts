@@ -236,7 +236,7 @@ function createWxDevBridge(repoRoot: string): Plugin {
 
         try {
           const rawBody = await readRequestBody(request);
-          const payload = JSON.parse(rawBody) as { filePath?: string; text?: string };
+          const payload = JSON.parse(rawBody) as { filePath?: string; text?: string; expectedText?: string | null };
 
           if (!payload.filePath || typeof payload.text !== "string") {
             response.statusCode = 400;
@@ -246,6 +246,19 @@ function createWxDevBridge(repoRoot: string): Plugin {
 
           if (request.url === "/__wx__/write") {
             const resolvedPath = resolveWorkspacePath(payload.filePath);
+            if (payload.expectedText !== undefined) {
+              let currentText: string | null = null;
+              try {
+                currentText = readFileSync(resolvedPath, "utf8");
+              } catch {
+                currentText = null;
+              }
+              if (currentText !== payload.expectedText) {
+                response.statusCode = 409;
+                response.end("File changed on disk.");
+                return;
+              }
+            }
             mkdirSync(dirname(resolvedPath), { recursive: true });
             writeFileSync(resolvedPath, payload.text, "utf8");
             response.setHeader("content-type", "application/json");

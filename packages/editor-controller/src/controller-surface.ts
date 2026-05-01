@@ -100,6 +100,21 @@ interface CreateControllerSurfaceOptions {
     getSelectedRegister(): string | null;
   };
   workspaceRuntime: WorkspaceRuntime;
+  pickerRuntime: {
+    openActionPicker(options: {
+      title: string;
+      items: readonly {
+        label: string;
+        detail?: string;
+        run: () => Promise<void> | void;
+      }[];
+      selectedIndex?: number;
+      query?: string;
+      variant?: "bar" | "modal" | "combo";
+      effectType?: string;
+    }): boolean;
+    closePicker(effectType?: string): void;
+  };
   keyRuntime: {
     handleKeyInput: EditorController["handleKeyInput"];
     handleTextInput: EditorController["handleTextInput"];
@@ -319,6 +334,38 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     }
 
     return true;
+  };
+  const readTextPayload = (payload: { text: string } | string) => (typeof payload === "string" ? payload : payload.text);
+  const syncActiveFileStatusPresentation = (effectType?: string) => {
+    presentation.fileStatus = {
+      dirty: options.workspaceRuntime.getActiveFileStatus().dirty,
+      externalChanged: options.workspaceRuntime.getActiveFileStatus().externalChanged
+    };
+    options.lifecycleRuntime.emitPresentationUpdate(effectType);
+  };
+  const openReloadConflictPicker = () => {
+    options.pickerRuntime.openActionPicker({
+      title: "file changed on disk",
+      variant: "bar",
+      items: [
+        {
+          label: "Reload file",
+          detail: "discard local edits",
+          run: async () => {
+            options.pickerRuntime.closePicker("ui.picker.close");
+            await surface.reloadDocument();
+          }
+        },
+        {
+          label: "Keep editing",
+          detail: "leave buffer unchanged",
+          run: () => {
+            options.pickerRuntime.closePicker("ui.picker.close");
+          }
+        }
+      ],
+      effectType: "file.conflict"
+    });
   };
 
   surface = {
@@ -651,6 +698,10 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
 
       presentation.filePath = filePath;
       presentation.bufferTitle = filePath ?? presentation.bufferTitle;
+      presentation.fileStatus = {
+        dirty: false,
+        externalChanged: false
+      };
       options.workspaceRuntime.syncActiveFilePath(filePath);
       if (options.getLanguageResolutionMode() === "auto") {
         applyResolvedLanguageServices("presentation.file-path");
@@ -753,14 +804,125 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     formatDocument() {
       return options.languageRuntime.formatDocument();
     },
-    saveDocument(targetPath = presentation.filePath) {
-      const nextPath = targetPath ?? presentation.filePath;
-      return options.languageRuntime.saveDocument(nextPath).then((saved) => {
-        if (saved && nextPath) {
-          options.workspaceRuntime.markActiveSaved(nextPath);
-        }
-        return saved;
+    async refreshFileStatus() {
+      const filePath = presentation.filePath;
+      const readFile = presentation.language.host?.readFile;
+      if (!filePath || !readFile) {
+        return false;
+      }
+
+      const persistedText = options.workspaceRuntime.getActiveFileStatus().persistedText;
+      if (persistedText === null) {
+        return false;
+      }
+
+      try {
+        const diskText = readTextPayload(await readFile({ filePath }));
+        const externalChanged = diskText !== persistedText;
+        options.workspaceRuntime.setActiveExternalChanged(externalChanged);
+        presentation.fileStatus = {
+          dirty: options.workspaceRuntime.getActiveFileStatus().dirty,
+          externalChanged
+        };
+        options.lifecycleRuntime.emitPresentationUpdate("file.status");
+        return externalChanged;
+      } catch {
+        return false;
+      }
+    },
+    async reloadDocument() {
+      const filePath = presentation.filePath;
+      const readFile = presentation.language.host?.readFile;
+      if (!filePath || !readFile) {
+        options.sessionRuntime.setBottomMessage({ tone: "warning", text: "No file reader available" });
+        return false;
+      }
+
+      let text: string;
+      try {
+        text = readTextPayload(await readFile({ filePath }));
+      } catch {
+        options.sessionRuntime.setBottomMessage({ tone: "error", text: `Could not reload ${filePath}` });
+        return false;
+      }
+
+      const prevState = options.getState();
+      const nextState = {
+        ...options.workspaceRuntime.createStateForText(text, prevState),
+        revision: prevState.revision + 1
+      };
+      options.setState(nextState);
+      options.history?.clear?.();
+      options.refreshSearchMatchCache(options.getState());
+      options.languageRuntime.resetRequestTracking();
+      options.languageRuntime.clearLanguageState();
+      options.viewportModelRuntime.rebuildViewportModel();
+      options.languageRuntime.syncVisibleLanguageDecorations();
+      options.lifecycleRuntime.notify(prevState, options.getState(), { effects: [{ type: "file.reload" }] }, { recordHistory: false });
+      options.workspaceRuntime.markActiveReloaded(text);
+      syncActiveFileStatusPresentation("file.reload");
+      void options.languageRuntime.syncLanguage({
+        forceDocumentSync: true,
+        refreshHighlights: true,
+        refreshDiagnostics: true,
+        refreshLineChanges: true
       });
+      options.sessionRuntime.setBottomMessage({ tone: "info", text: `Reloaded ${filePath}` });
+      return true;
+    },
+    async saveDocument(targetPath = presentation.filePath) {
+      const nextPath = targetPath ?? presentation.filePath;
+      if (!nextPath) {
+        return false;
+      }
+      if (nextPath === presentation.filePath && await surface.refreshFileStatus()) {
+        options.sessionRuntime.setBottomMessage({
+          tone: "error",
+          text: "File changed on disk. Reload before writing."
+        });
+        openReloadConflictPicker();
+        return false;
+      }
+
+      const expectedText =
+        nextPath === presentation.filePath && presentation.language.host?.readFile
+          ? options.workspaceRuntime.getActiveFileStatus().persistedText
+          : undefined;
+      const writeFile = presentation.language.host?.writeFile;
+      const savedText = options.getState().doc.text;
+      if (!writeFile) {
+        return false;
+      }
+
+      try {
+        await writeFile({
+          filePath: nextPath,
+          text: savedText,
+          expectedText
+        });
+      } catch {
+        await surface.refreshFileStatus();
+        return false;
+      }
+
+      presentation.filePath = nextPath;
+      presentation.bufferTitle = nextPath;
+      options.workspaceRuntime.markActiveSaved(nextPath, savedText);
+      syncActiveFileStatusPresentation("presentation.file-path");
+      void options.languageRuntime.syncLanguage({
+        refreshHighlights: false,
+        refreshDiagnostics: false,
+        refreshLineChanges: true
+      });
+      queueMicrotask(() => {
+        void Promise.resolve(
+          presentation.language.host?.didWriteFile?.({
+            filePath: nextPath,
+            text: savedText
+          })
+        ).catch(() => undefined);
+      });
+      return true;
     }
   };
 
