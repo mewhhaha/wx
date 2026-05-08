@@ -2353,6 +2353,9 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ",", ctrlKey: true, bubbles: true }));
     await flushAsyncWork();
     expect(container.querySelector("[data-wx-editor-tooltip='true']")?.textContent).toContain("hover:0");
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    expect(container.querySelector("[data-wx-editor-tooltip='true']")).toHaveProperty("hidden", true);
   });
 
   it("invalidates stale hover responses after document edits", async () => {
@@ -2624,6 +2627,36 @@ describe("createEditor", () => {
 
     expect(editor.getState().doc.text).toBe("opened:src/beta.ts");
     expect(editor.controller.getBuffers().map((entry) => entry.filePath)).toEqual(["src/current.ts", "src/beta.ts"]);
+  });
+
+  it("keeps the selected repo file visible while moving through many search results", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    createEditor(container, {
+      value: "current",
+      filePath: "src/current.ts",
+      host: {
+        async searchFiles() {
+          return Array.from({ length: 14 }, (_, index) => ({ filePath: `src/file-${String(index + 1).padStart(2, "0")}.ts` }));
+        }
+      }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true, bubbles: true }));
+    await flushAsyncWork(6);
+
+    for (let index = 0; index < 10; index += 1) {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    }
+
+    const picker = container.querySelector("[data-wx-editor-picker-combo='true']") as HTMLElement;
+    const selected = picker.querySelector("[data-selected='true']");
+
+    expect(picker.textContent).toContain("11/14");
+    expect(selected?.textContent).toContain("file-11.ts");
+    expect(picker.textContent).not.toContain("file-01.ts");
   });
 
   it("renders :add folder picker and opens an empty buffer without writing", async () => {

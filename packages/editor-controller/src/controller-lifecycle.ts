@@ -91,6 +91,8 @@ export function createControllerLifecycleRuntime(
       const changes = transaction.changes ?? [];
       options.refreshSearchMatchCache(nextState);
       options.handleLanguageDocumentChange(prevState, nextState, changes);
+    } else if (update.selectionChanged) {
+      options.clearHoverOnDocChange();
     }
 
     options.handleYankBufferChanged(prevState, nextState);

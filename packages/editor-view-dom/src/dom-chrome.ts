@@ -68,6 +68,23 @@ function appendPickerFileRow(row: HTMLDivElement, item: EditorPresentationState[
   row.append(icon, fileName, directory);
 }
 
+function getVisiblePickerItems<T>(
+  items: readonly T[],
+  selectedIndex: number,
+  visibleCount: number
+): Array<{ item: T; index: number }> {
+  if (items.length <= visibleCount) {
+    return items.map((item, index) => ({ item, index }));
+  }
+
+  const clampedSelectedIndex = Math.max(0, Math.min(items.length - 1, selectedIndex));
+  const before = Math.floor((visibleCount - 1) / 2);
+  const maxStart = Math.max(0, items.length - visibleCount);
+  const start = Math.max(0, Math.min(maxStart, clampedSelectedIndex - before));
+
+  return items.slice(start, start + visibleCount).map((item, index) => ({ item, index: start + index }));
+}
+
 export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): DomChromeRuntime {
   return {
     patchCommandPopover() {
@@ -111,7 +128,7 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
           error.textContent = uiState.picker.error;
           list.append(error);
         } else {
-          uiState.picker.items.forEach((item, index) => {
+          getVisiblePickerItems(uiState.picker.items, uiState.picker.selectedIndex, 8).forEach(({ item, index }) => {
             const row = document.createElement("div");
             row.className = "wx-editor__picker-combo-item";
             row.dataset.selected = String(index === uiState.picker.selectedIndex);
@@ -189,7 +206,7 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
           error.textContent = uiState.picker.error;
           list.append(error);
         } else {
-          uiState.picker.items.forEach((item, index) => {
+          getVisiblePickerItems(uiState.picker.items, uiState.picker.selectedIndex, 12).forEach(({ item, index }) => {
             const row = document.createElement("div");
             const label = document.createElement("span");
             const detail = document.createElement("span");

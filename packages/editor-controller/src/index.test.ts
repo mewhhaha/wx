@@ -508,6 +508,15 @@ describe("editor controller", () => {
     });
   });
 
+  it("clears pinned hover on cursor movement", () => {
+    const controller = createEditorController({ value: "alpha" });
+
+    controller.showDiagnosticHover({ from: 0, to: 5, severity: "warning", message: "warn" }, { pinned: true });
+    controller.execute(moveRight);
+
+    expect(controller.getPresentationState().ui.hover.active).toBe(false);
+  });
+
   it("requests explicit completion and applies selected text through controller state", async () => {
     const controller = createEditorController({
       value: "al",
@@ -1006,6 +1015,30 @@ describe("editor controller", () => {
     const pending = controller.requestHoverAt(0, { pinned: true });
     controller.execute(enterInsertMode);
     controller.execute(insertText("x"));
+    resolveHover?.({ source: "fake-lsp", content: "stale hover" });
+
+    expect(await pending).toBe(false);
+    expect(controller.getPresentationState().ui.hover.active).toBe(false);
+  });
+
+  it("ignores stale hover responses after cursor movement", async () => {
+    let resolveHover: ((value: { source: string; content: string }) => void) | null = null;
+    const controller = createEditorController({ value: "alpha" });
+
+    controller.setLanguageServices([
+      {
+        hover: {
+          hover() {
+            return new Promise((resolve) => {
+              resolveHover = resolve;
+            });
+          }
+        }
+      }
+    ]);
+
+    const pending = controller.requestHoverAt(0, { pinned: true });
+    controller.execute(moveRight);
     resolveHover?.({ source: "fake-lsp", content: "stale hover" });
 
     expect(await pending).toBe(false);
