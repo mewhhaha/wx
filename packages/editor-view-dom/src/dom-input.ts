@@ -89,6 +89,14 @@ export function shouldRouteKeydown(
   const plainEditorKey = !event.metaKey && !event.ctrlKey && !event.altKey;
   const functionEditorKey = !event.metaKey && !event.ctrlKey && !event.altKey && event.key === "F2";
 
+  // In insert mode printable characters are committed by beforeinput/input.
+  // Routing them here would insert dead keys and IME commits twice. Tab has no
+  // reliable beforeinput path in every browser, while Escape and arrows are
+  // editor commands rather than text input.
+  if (options.state.mode === "insert" && !hasCommandState && plainEditorKey) {
+    return ["Escape", "Tab", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key);
+  }
+
   return (
     hasCommandState ||
     plainEditorKey ||

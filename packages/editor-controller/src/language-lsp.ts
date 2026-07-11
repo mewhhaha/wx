@@ -18,28 +18,31 @@ import type {
   LanguageGotoSource,
   LanguageLspRuntime,
   LanguageRenameSource,
+  LanguageSignatureHelpSource,
   LanguageRuntimeContext,
   LanguageSymbolSource,
   LineChangeHostServices
 } from "./language-runtime-types";
-import type { EditorBottomMessageState } from "./types";
+import type { EditorBottomMessageState, EditorJumpEntry } from "./types";
 
 interface CreateLanguageLspRuntimeOptions {
   context: LanguageRuntimeContext;
   getCompletionSource(presentation: ReturnType<LanguageRuntimeContext["getPresentation"]>): LanguageCompletionSource | undefined;
+  getSignatureHelpSource(presentation: ReturnType<LanguageRuntimeContext["getPresentation"]>): LanguageSignatureHelpSource | undefined;
   getGotoSource(presentation: ReturnType<LanguageRuntimeContext["getPresentation"]>): LanguageGotoSource | undefined;
   getRenameSource(presentation: ReturnType<LanguageRuntimeContext["getPresentation"]>): LanguageRenameSource | undefined;
   getSymbolSource(presentation: ReturnType<LanguageRuntimeContext["getPresentation"]>): LanguageSymbolSource | undefined;
   getHostServices(presentation: ReturnType<LanguageRuntimeContext["getPresentation"]>): LineChangeHostServices | null;
   setBottomMessage(message: EditorBottomMessageState | null): void;
   setCompletionState(next: ReturnType<LanguageRuntimeContext["getPresentation"]>["ui"]["completion"], effectType?: string): void;
+  setSignatureHelpState(next: ReturnType<LanguageRuntimeContext["getPresentation"]>["ui"]["signatureHelp"], effectType?: string): void;
   setRenameState(next: ReturnType<LanguageRuntimeContext["getPresentation"]>["ui"]["rename"], effectType?: string): void;
   applySelectionRange(from: number, to: number): void;
   revealSelectionWithinViewport(): boolean;
   syncVisibleViewportRows(): boolean;
   syncVisibleLanguageDecorations(): boolean;
   ensureVisibleHighlightCoverage(): Promise<void>;
-  pushJump(): boolean;
+  pushJump(entry?: EditorJumpEntry): boolean;
   openBuffer(filePath: string): Promise<boolean>;
   findBufferState(filePath: string): EditorState | null;
   storeBufferState(filePath: string, state: EditorState, dirty?: boolean): void;
@@ -121,6 +124,48 @@ function gotoSourceMethod(source: LanguageGotoSource | undefined, kind: GotoKind
 }
 
 export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOptions): LanguageLspRuntime {
+  let signatureGeneration = 1;
+  const emptySignature = () => ({ active: false, loading: false, anchorOffset: null, signatures: [], selectedIndex: 0, error: null } as const);
+  const dismissSignatureHelp = (effectType = "ui.signature-help.dismiss") => {
+    const current = options.context.getPresentation().ui.signatureHelp;
+    signatureGeneration += 1;
+    options.context.getPresentation().language.signatureHelpRequestId += 1;
+    if (!current.active && !current.loading && current.signatures.length === 0) return false;
+    options.setSignatureHelpState(emptySignature(), effectType);
+    return true;
+  };
+  const requestSignatureHelp = async () => {
+    const presentation = options.context.getPresentation();
+    const source = options.getSignatureHelpSource(presentation);
+    const snapshot = options.context.getSnapshot();
+    const offset = getSelectionOffsets(options.context.getState()).to;
+    if (presentation.ui.signatureHelp.anchorOffset === offset && (presentation.ui.signatureHelp.loading || presentation.ui.signatureHelp.active)) return true;
+    if (!source) { options.setBottomMessage({ tone: "warning", text: "No signature help provider" }); return false; }
+    dismissCompletion("ui.completion.dismiss-for-signature");
+    const requestId = ++presentation.language.signatureHelpRequestId;
+    const generation = ++signatureGeneration;
+    const serviceGeneration = presentation.language.serviceStatus.generation;
+    options.setSignatureHelpState({ active: true, loading: true, anchorOffset: offset, signatures: [], selectedIndex: 0, error: null });
+    let signatures;
+    try { signatures = await source.signatureHelp(snapshot, offset); }
+    catch { signatures = []; }
+    const current = options.context.getPresentation();
+    if (requestId !== current.language.signatureHelpRequestId || generation !== signatureGeneration || serviceGeneration !== current.language.serviceStatus.generation || snapshot.revision !== options.context.getSnapshot().revision || offset !== getSelectionOffsets(options.context.getState()).to) return false;
+    if (!signatures.length) {
+      options.setSignatureHelpState({ active: false, loading: false, anchorOffset: null, signatures: [], selectedIndex: 0, error: "No signature help" });
+      options.setBottomMessage({ tone: "warning", text: "No signature help" });
+      return false;
+    }
+    options.setSignatureHelpState({ active: true, loading: false, anchorOffset: offset, signatures: [...signatures], selectedIndex: 0, error: null });
+    return true;
+  };
+  const moveSignatureHelp = (delta: number) => {
+    const current = options.context.getPresentation().ui.signatureHelp;
+    if (!current.active || current.signatures.length < 2) return false;
+    const selectedIndex = (current.selectedIndex + delta + current.signatures.length) % current.signatures.length;
+    options.setSignatureHelpState({ ...current, selectedIndex });
+    return true;
+  };
   const dismissCompletion = (effectType = "ui.completion.dismiss") => {
     const presentation = options.context.getPresentation();
     const current = presentation.ui.completion;
@@ -145,8 +190,12 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
 
   const jumpToTarget = async (target: EditorLocationTarget) => {
     const presentation = options.context.getPresentation();
+    const origin = {
+      selection: options.context.getState().selection,
+      mode: options.context.getState().mode,
+      filePath: presentation.filePath
+    };
     const nextPath = target.filePath ?? presentation.filePath;
-    options.pushJump();
 
     if (nextPath && nextPath !== presentation.filePath) {
       const opened = await options.openBuffer(nextPath);
@@ -155,6 +204,7 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
       }
     }
 
+    options.pushJump(origin);
     options.applySelectionRange(target.from, target.to);
     options.revealSelectionWithinViewport();
     options.syncVisibleViewportRows();
@@ -215,22 +265,100 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
     });
   };
 
-  const requestCompletion = async () => {
+  interface CompletionJob {
+    source: LanguageCompletionSource;
+    snapshot: ReturnType<LanguageRuntimeContext["getSnapshot"]>;
+    anchorOffset: number;
+    filePath: string | null;
+    requestId: number;
+    generation: number;
+    serviceGeneration: number;
+    controller: AbortController;
+    resolve(value: boolean): void;
+    settled: boolean;
+  }
+  let completionGeneration = 1;
+  let activeCompletion: CompletionJob | null = null;
+  let staleCompletion: CompletionJob | null = null;
+  let pendingCompletion: CompletionJob | null = null;
+
+  const updateCompletionDepth = () => {
+    const stats = options.context.getPresentation().language.work.completion;
+    stats.inFlight = Number(activeCompletion !== null) + Number(staleCompletion !== null);
+    stats.queued = pendingCompletion ? 1 : 0;
+    stats.maxQueueDepth = Math.max(stats.maxQueueDepth, stats.inFlight + stats.queued);
+  };
+
+  const settleCompletion = (job: CompletionJob, value: boolean) => {
+    if (job.settled) return;
+    job.settled = true;
+    job.resolve(value);
+  };
+
+  const pumpCompletion = () => {
+    if (activeCompletion || !pendingCompletion) return;
+    const job = pendingCompletion;
+    pendingCompletion = null;
+    activeCompletion = job;
+    const stats = options.context.getPresentation().language.work.completion;
+    stats.started += 1;
+    updateCompletionDepth();
+    void job.source.complete(job.snapshot, job.anchorOffset, job.controller.signal).catch(() => [] as readonly EditorCompletionItem[]).then((items) => {
+      const nextPresentation = options.context.getPresentation();
+      if (
+        job.controller.signal.aborted ||
+        job.generation !== completionGeneration ||
+        job.requestId !== nextPresentation.language.completionRequestId ||
+        job.serviceGeneration !== nextPresentation.language.serviceStatus.generation ||
+        job.snapshot.revision !== options.context.getSnapshot().revision ||
+        job.filePath !== nextPresentation.filePath ||
+        getSelectionOffsets(options.context.getState()).to !== job.anchorOffset
+      ) {
+        stats.staleDropped += 1;
+        settleCompletion(job, false);
+        return;
+      }
+
+      const sortedItems = [...items].sort((left, right) => {
+        const leftKey = left.sortText ?? left.label;
+        const rightKey = right.sortText ?? right.label;
+        return leftKey.localeCompare(rightKey);
+      });
+      options.setCompletionState(completionStateFromItems(sortedItems, 0, job.anchorOffset), "ui.completion");
+      if (sortedItems.length === 0) {
+        options.setBottomMessage({ tone: "warning", text: "No completions" });
+        settleCompletion(job, false);
+        return;
+      }
+      options.setBottomMessage(null);
+      settleCompletion(job, true);
+    }).finally(() => {
+      if (activeCompletion === job) activeCompletion = null;
+      else if (staleCompletion === job) staleCompletion = null;
+      else return;
+      stats.completed += 1;
+      updateCompletionDepth();
+      pumpCompletion();
+    });
+  };
+
+  const requestCompletion = () => {
     const presentation = options.context.getPresentation();
     const completionSource = options.getCompletionSource(presentation);
     const snapshot = options.context.getSnapshot();
     const anchorOffset = getSelectionOffsets(options.context.getState()).to;
 
     dismissCompletion("ui.completion.dismiss");
+    dismissSignatureHelp("ui.signature-help.dismiss-for-completion");
 
     if (!completionSource) {
       options.setBottomMessage({ tone: "warning", text: "No completion source" });
-      return false;
+      return Promise.resolve(false);
     }
 
     const requestId = ++presentation.language.completionRequestId;
-    const revision = snapshot.revision;
-    const filePath = presentation.filePath;
+    const stats = presentation.language.work.completion;
+    stats.requested += 1;
     options.setCompletionState(
       {
         active: true,
@@ -243,37 +371,35 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
       "ui.completion"
     );
 
-    let items: readonly EditorCompletionItem[];
-    try {
-      items = await completionSource.complete(snapshot, anchorOffset);
-    } catch {
-      items = [];
-    }
-
-    const nextPresentation = options.context.getPresentation();
-    if (
-      requestId !== nextPresentation.language.completionRequestId ||
-      revision !== options.context.getSnapshot().revision ||
-      filePath !== nextPresentation.filePath
-    ) {
-      return false;
-    }
-
-    const sortedItems = [...items].sort((left, right) => {
-      const leftKey = left.sortText ?? left.label;
-      const rightKey = right.sortText ?? right.label;
-      return leftKey.localeCompare(rightKey);
+    return new Promise<boolean>((resolve) => {
+      const job: CompletionJob = {
+        source: completionSource,
+        snapshot,
+        anchorOffset,
+        filePath: presentation.filePath,
+        requestId,
+        generation: completionGeneration,
+        serviceGeneration: presentation.language.serviceStatus.generation,
+        controller: new AbortController(),
+        resolve,
+        settled: false
+      };
+      if (pendingCompletion) {
+        settleCompletion(pendingCompletion, false);
+        stats.cancelled += 1;
+      }
+      pendingCompletion = job;
+      if (activeCompletion && !activeCompletion.controller.signal.aborted) {
+        activeCompletion.controller.abort();
+        stats.cancelled += 1;
+        if (!staleCompletion) {
+          staleCompletion = activeCompletion;
+          activeCompletion = null;
+        }
+      }
+      updateCompletionDepth();
+      pumpCompletion();
     });
-
-    options.setCompletionState(completionStateFromItems(sortedItems, 0, anchorOffset), "ui.completion");
-
-    if (sortedItems.length === 0) {
-      options.setBottomMessage({ tone: "warning", text: "No completions" });
-      return false;
-    }
-
-    options.setBottomMessage(null);
-    return true;
   };
 
   const moveCompletion = (delta: number) => {
@@ -377,7 +503,7 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
       return false;
     }
 
-    if (kind !== "references" && targets.length === 1) {
+    if (targets.length === 1) {
       return jumpToTarget(targets[0]!);
     }
 
@@ -649,15 +775,35 @@ export function createLanguageLspRuntime(options: CreateLanguageLspRuntimeOption
     acceptCompletion,
     moveCompletion,
     dismissCompletion,
+    requestSignatureHelp,
+    moveSignatureHelp,
+    dismissSignatureHelp,
     gotoTarget,
     renameSymbol,
     openSymbols,
     resetLspTracking() {
       const presentation = options.context.getPresentation();
-      presentation.language.completionRequestId = 0;
-      presentation.language.navigationRequestId = 0;
-      presentation.language.renameRequestId = 0;
-      presentation.language.symbolsRequestId = 0;
+      completionGeneration += 1;
+      presentation.language.completionRequestId += 1;
+      presentation.language.signatureHelpRequestId += 1;
+      signatureGeneration += 1;
+      options.setSignatureHelpState(emptySignature(), "ui.signature-help.reset");
+      presentation.language.navigationRequestId += 1;
+      presentation.language.renameRequestId += 1;
+      presentation.language.symbolsRequestId += 1;
+      if (activeCompletion) {
+        activeCompletion.controller.abort();
+        settleCompletion(activeCompletion, false);
+      }
+      if (staleCompletion) {
+        staleCompletion.controller.abort();
+        settleCompletion(staleCompletion, false);
+      }
+      if (pendingCompletion) settleCompletion(pendingCompletion, false);
+      activeCompletion = null;
+      staleCompletion = null;
+      pendingCompletion = null;
+      updateCompletionDepth();
     }
   };
 }

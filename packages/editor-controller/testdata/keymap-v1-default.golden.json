@@ -1,0 +1,6883 @@
+{
+  "version": 1,
+  "contextPolicies": [
+    {
+      "context": "bracket-next",
+      "modifiers": "ignore",
+      "unmatched": "fallthrough"
+    },
+    {
+      "context": "bracket-prev",
+      "modifiers": "ignore",
+      "unmatched": "fallthrough"
+    },
+    {
+      "context": "completion",
+      "modifiers": "completion-tab-shift",
+      "unmatched": "fallthrough"
+    },
+    {
+      "context": "ctrl-w",
+      "modifiers": "ctrl-w",
+      "unmatched": "fallthrough",
+      "ignoreModifiersFor": [
+        "Escape",
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown"
+      ]
+    },
+    {
+      "context": "editor",
+      "modifiers": "canonical",
+      "unmatched": "fallthrough"
+    },
+    {
+      "context": "goto",
+      "modifiers": "ignore",
+      "unmatched": "fallthrough"
+    },
+    {
+      "context": "hover",
+      "modifiers": "ignore",
+      "unmatched": "fallthrough"
+    },
+    {
+      "context": "match",
+      "modifiers": "ignore",
+      "unmatched": "fallthrough"
+    },
+    {
+      "context": "picker",
+      "modifiers": "ignore",
+      "unmatched": "consume"
+    },
+    {
+      "context": "question",
+      "modifiers": "ignore",
+      "unmatched": "fallthrough"
+    },
+    {
+      "context": "sticky-view",
+      "modifiers": "selective-ignore",
+      "unmatched": "fallthrough",
+      "ignoreModifiersFor": [
+        "Escape",
+        "j",
+        "k",
+        "ArrowDown",
+        "ArrowUp"
+      ]
+    },
+    {
+      "context": "sticky-view-overlay",
+      "modifiers": "selective-ignore",
+      "unmatched": "delegate",
+      "ignoreModifiersFor": [
+        "Escape",
+        "j",
+        "k",
+        "ArrowDown",
+        "ArrowUp"
+      ],
+      "overlay": {
+        "fallbackContext": "sticky-view-prefix",
+        "retainFallbackOnMatch": true
+      }
+    },
+    {
+      "context": "sticky-view-prefix",
+      "modifiers": "ignore",
+      "unmatched": "consume",
+      "afterInput": {
+        "kind": "sticky-state",
+        "whenActive": "sticky-view",
+        "whenInactive": "editor"
+      }
+    },
+    {
+      "context": "view",
+      "modifiers": "ignore",
+      "unmatched": "consume",
+      "afterInput": {
+        "kind": "fixed",
+        "context": "editor"
+      }
+    }
+  ],
+  "catalog": [
+    {
+      "id": "comment.smart",
+      "description": "Toggle smart comment",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "comment.toggle",
+      "description": "Toggle line comment",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "completion.accept",
+      "description": "Accept completion",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "completion"
+      ],
+      "availability": [
+        {
+          "context": "completion",
+          "mode": "normal"
+        },
+        {
+          "context": "completion",
+          "mode": "visual"
+        },
+        {
+          "context": "completion",
+          "mode": "insert"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "completion.dismiss",
+      "description": "Dismiss completion",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "completion"
+      ],
+      "availability": [
+        {
+          "context": "completion",
+          "mode": "normal"
+        },
+        {
+          "context": "completion",
+          "mode": "visual"
+        },
+        {
+          "context": "completion",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "completion.next",
+      "description": "Next completion",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "completion"
+      ],
+      "availability": [
+        {
+          "context": "completion",
+          "mode": "normal"
+        },
+        {
+          "context": "completion",
+          "mode": "visual"
+        },
+        {
+          "context": "completion",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "completion.previous",
+      "description": "Previous completion",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "completion"
+      ],
+      "availability": [
+        {
+          "context": "completion",
+          "mode": "normal"
+        },
+        {
+          "context": "completion",
+          "mode": "visual"
+        },
+        {
+          "context": "completion",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "diagnostic.next",
+      "description": "Next diagnostic",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "bracket-next"
+      ],
+      "availability": [
+        {
+          "context": "bracket-next",
+          "mode": "normal"
+        },
+        {
+          "context": "bracket-next",
+          "mode": "visual"
+        }
+      ],
+      "args": {
+        "defaults": {
+          "extreme": false
+        },
+        "properties": {
+          "extreme": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "id": "diagnostic.previous",
+      "description": "Previous diagnostic",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "bracket-prev"
+      ],
+      "availability": [
+        {
+          "context": "bracket-prev",
+          "mode": "normal"
+        },
+        {
+          "context": "bracket-prev",
+          "mode": "visual"
+        }
+      ],
+      "args": {
+        "defaults": {
+          "extreme": false
+        },
+        "properties": {
+          "extreme": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "id": "edit.change",
+      "description": "Change selection",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true,
+      "history": true
+    },
+    {
+      "id": "edit.delete",
+      "description": "Delete selection",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true,
+      "history": true
+    },
+    {
+      "id": "edit.delete-backward",
+      "description": "Delete backward",
+      "modes": [
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "history": true,
+      "count": true
+    },
+    {
+      "id": "edit.delete-forward",
+      "description": "Delete forward",
+      "modes": [
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "history": true,
+      "count": true
+    },
+    {
+      "id": "edit.indent",
+      "description": "Insert indentation",
+      "modes": [
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "history": true,
+      "count": true
+    },
+    {
+      "id": "edit.newline",
+      "description": "Insert newline",
+      "modes": [
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "history": true,
+      "count": true
+    },
+    {
+      "id": "edit.open-above",
+      "description": "Open line above",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true,
+      "history": true
+    },
+    {
+      "id": "edit.open-below",
+      "description": "Open line below",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true,
+      "history": true
+    },
+    {
+      "id": "edit.paste-after",
+      "description": "Paste after",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true,
+      "async": true
+    },
+    {
+      "id": "edit.paste-before",
+      "description": "Paste before",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true,
+      "async": true
+    },
+    {
+      "id": "edit.redo",
+      "description": "Redo",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "edit.select-all",
+      "description": "Select all",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "edit.select-line-below",
+      "description": "Select line below",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "edit.undo",
+      "description": "Undo",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "edit.yank",
+      "description": "Yank selection",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "find.next-char",
+      "description": "Find next character",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "operand": {
+        "kind": "character",
+        "arity": 1
+      },
+      "repeat": true
+    },
+    {
+      "id": "find.previous-char",
+      "description": "Find previous character",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "operand": {
+        "kind": "character",
+        "arity": 1
+      },
+      "repeat": true
+    },
+    {
+      "id": "find.till-next-char",
+      "description": "Find until next character",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "operand": {
+        "kind": "character",
+        "arity": 1
+      },
+      "repeat": true
+    },
+    {
+      "id": "find.till-previous-char",
+      "description": "Find until previous character",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "operand": {
+        "kind": "character",
+        "arity": 1
+      },
+      "repeat": true
+    },
+    {
+      "id": "goto.counted-line",
+      "description": "Go to one-based counted line",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor",
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "count": true,
+      "args": {
+        "properties": {
+          "fallback": {
+            "type": "string",
+            "values": [
+              "first",
+              "last"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "goto.declaration",
+      "description": "Go to declaration",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "goto.definition",
+      "description": "Go to definition",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor",
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "goto.file-start",
+      "description": "Go to file start",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "goto.first-non-whitespace",
+      "description": "Go to first non-whitespace",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "goto.implementation",
+      "description": "Go to implementation",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "goto.last-line",
+      "description": "Go to last line",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "goto.line-end",
+      "description": "Go to line end",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor",
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "goto.line-start",
+      "description": "Go to line start",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor",
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "goto.matching-bracket",
+      "description": "Matching bracket",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "match"
+      ],
+      "availability": [
+        {
+          "context": "match",
+          "mode": "normal"
+        },
+        {
+          "context": "match",
+          "mode": "visual"
+        }
+      ],
+      "repeat": true
+    },
+    {
+      "id": "goto.next-paragraph",
+      "description": "Next paragraph",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "bracket-next"
+      ],
+      "availability": [
+        {
+          "context": "bracket-next",
+          "mode": "normal"
+        },
+        {
+          "context": "bracket-next",
+          "mode": "visual"
+        }
+      ],
+      "count": true,
+      "repeat": true,
+      "args": {
+        "required": [
+          "direction"
+        ],
+        "properties": {
+          "direction": {
+            "type": "string",
+            "values": [
+              "next"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "goto.previous-paragraph",
+      "description": "Previous paragraph",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "bracket-prev"
+      ],
+      "availability": [
+        {
+          "context": "bracket-prev",
+          "mode": "normal"
+        },
+        {
+          "context": "bracket-prev",
+          "mode": "visual"
+        }
+      ],
+      "count": true,
+      "repeat": true,
+      "args": {
+        "required": [
+          "direction"
+        ],
+        "properties": {
+          "direction": {
+            "type": "string",
+            "values": [
+              "previous"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "goto.references",
+      "description": "Go to references",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor",
+        "goto",
+        "question"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        },
+        {
+          "context": "question",
+          "mode": "normal"
+        },
+        {
+          "context": "question",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "goto.type-definition",
+      "description": "Go to type definition",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "goto.window-bottom",
+      "description": "Go to window bottom",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "goto.window-center",
+      "description": "Go to window center",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "goto.window-top",
+      "description": "Go to window top",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "history.checkpoint",
+      "description": "Checkpoint history",
+      "modes": [
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "hover.dismiss",
+      "description": "Dismiss hover",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "hover"
+      ],
+      "availability": [
+        {
+          "context": "hover",
+          "mode": "normal"
+        },
+        {
+          "context": "hover",
+          "mode": "visual"
+        },
+        {
+          "context": "hover",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "jump.flash",
+      "description": "Jump to a visible target",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "mode.append",
+      "description": "Append in insert mode",
+      "modes": [
+        "normal"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "mode.append-line-end",
+      "description": "Append at line end",
+      "modes": [
+        "normal"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "mode.insert",
+      "description": "Enter insert mode",
+      "modes": [
+        "normal"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "mode.insert-line-start",
+      "description": "Insert at first non-whitespace",
+      "modes": [
+        "normal"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "mode.normal",
+      "description": "Return to normal mode",
+      "modes": [
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "mode.visual",
+      "description": "Toggle visual mode",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.B-start",
+      "description": "Move to previous long word",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.E-end",
+      "description": "Move to long word end",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.W-start",
+      "description": "Move to next long word start",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.down",
+      "description": "Move down",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor",
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        },
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.half-page-down",
+      "description": "Half page down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.half-page-up",
+      "description": "Half page up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.left",
+      "description": "Move left",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.page-down",
+      "description": "Page down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.page-up",
+      "description": "Page up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.right",
+      "description": "Move right",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.up",
+      "description": "Move up",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor",
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        },
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.word-backward",
+      "description": "Move backward a word",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.word-forward",
+      "description": "Move forward a word",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "motion.word-start",
+      "description": "Move to next word start",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "count": true
+    },
+    {
+      "id": "picker.accept",
+      "description": "Accept picker item",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "picker"
+      ],
+      "availability": [
+        {
+          "context": "picker",
+          "mode": "normal"
+        },
+        {
+          "context": "picker",
+          "mode": "visual"
+        },
+        {
+          "context": "picker",
+          "mode": "insert"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "picker.accept-background",
+      "description": "Open picker result in background",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "picker"
+      ],
+      "availability": [
+        {
+          "context": "picker",
+          "mode": "normal"
+        },
+        {
+          "context": "picker",
+          "mode": "visual"
+        },
+        {
+          "context": "picker",
+          "mode": "insert"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "picker.accept-horizontal",
+      "description": "Open picker result in horizontal split",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "picker"
+      ],
+      "availability": [
+        {
+          "context": "picker",
+          "mode": "normal"
+        },
+        {
+          "context": "picker",
+          "mode": "visual"
+        },
+        {
+          "context": "picker",
+          "mode": "insert"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "picker.accept-vertical",
+      "description": "Open picker result in vertical split",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "picker"
+      ],
+      "availability": [
+        {
+          "context": "picker",
+          "mode": "normal"
+        },
+        {
+          "context": "picker",
+          "mode": "visual"
+        },
+        {
+          "context": "picker",
+          "mode": "insert"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "picker.buffers",
+      "description": "show buffers (g n / g p cycle)",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "question"
+      ],
+      "availability": [
+        {
+          "context": "question",
+          "mode": "normal"
+        },
+        {
+          "context": "question",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "picker.delete-backward",
+      "description": "Delete picker query backward",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "picker"
+      ],
+      "availability": [
+        {
+          "context": "picker",
+          "mode": "normal"
+        },
+        {
+          "context": "picker",
+          "mode": "visual"
+        },
+        {
+          "context": "picker",
+          "mode": "insert"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "picker.diagnostics",
+      "description": "show diagnostics",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "question"
+      ],
+      "availability": [
+        {
+          "context": "question",
+          "mode": "normal"
+        },
+        {
+          "context": "question",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "picker.dismiss",
+      "description": "Dismiss picker",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "picker"
+      ],
+      "availability": [
+        {
+          "context": "picker",
+          "mode": "normal"
+        },
+        {
+          "context": "picker",
+          "mode": "visual"
+        },
+        {
+          "context": "picker",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "picker.jumps",
+      "description": "show jumplist",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "question"
+      ],
+      "availability": [
+        {
+          "context": "question",
+          "mode": "normal"
+        },
+        {
+          "context": "question",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "picker.next",
+      "description": "Next picker item",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "picker"
+      ],
+      "availability": [
+        {
+          "context": "picker",
+          "mode": "normal"
+        },
+        {
+          "context": "picker",
+          "mode": "visual"
+        },
+        {
+          "context": "picker",
+          "mode": "insert"
+        }
+      ],
+      "args": {
+        "properties": {
+          "variant": {
+            "type": "string",
+            "values": [
+              "bar"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "picker.panes",
+      "description": "show panes (Ctrl-w window mode)",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "question"
+      ],
+      "availability": [
+        {
+          "context": "question",
+          "mode": "normal"
+        },
+        {
+          "context": "question",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "picker.previous",
+      "description": "Previous picker item",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "picker"
+      ],
+      "availability": [
+        {
+          "context": "picker",
+          "mode": "normal"
+        },
+        {
+          "context": "picker",
+          "mode": "visual"
+        },
+        {
+          "context": "picker",
+          "mode": "insert"
+        }
+      ],
+      "args": {
+        "properties": {
+          "variant": {
+            "type": "string",
+            "values": [
+              "bar"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "picker.symbols-document",
+      "description": "show document symbols",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "question"
+      ],
+      "availability": [
+        {
+          "context": "question",
+          "mode": "normal"
+        },
+        {
+          "context": "question",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "picker.symbols-workspace",
+      "description": "show workspace symbols",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "question"
+      ],
+      "availability": [
+        {
+          "context": "question",
+          "mode": "normal"
+        },
+        {
+          "context": "question",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "prefix.bracket-next",
+      "description": "Next bracket prefix",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "prefix.bracket-prev",
+      "description": "Previous bracket prefix",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "prefix.ctrl-w",
+      "description": "Window prefix",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "prefix.goto",
+      "description": "Go-to prefix",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "prefix.match",
+      "description": "Match prefix",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "prefix.question",
+      "description": "Help prefix",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "prefix.sticky-view",
+      "description": "Sticky view prefix",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "prefix.view",
+      "description": "View prefix",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "register.insert",
+      "description": "Insert selected register",
+      "modes": [
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "async": true,
+      "operand": {
+        "kind": "register",
+        "arity": 1
+      }
+    },
+    {
+      "id": "register.select",
+      "description": "Select register",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "operand": {
+        "kind": "register",
+        "arity": 1
+      }
+    },
+    {
+      "id": "repeat.edit",
+      "description": "Repeat last completed edit",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true,
+      "count": true,
+      "repeat": true,
+      "history": true
+    },
+    {
+      "id": "repeat.motion",
+      "description": "Repeat motion",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "search.backward",
+      "description": "Search backward",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "aliases": [
+        "search-backward"
+      ],
+      "palette": true
+    },
+    {
+      "id": "search.forward",
+      "description": "Search forward",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "aliases": [
+        "search",
+        "/"
+      ],
+      "palette": true
+    },
+    {
+      "id": "search.repeat-next",
+      "description": "Repeat next search",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "search.repeat-previous",
+      "description": "Repeat previous search",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "search.selection",
+      "description": "Search selected text",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "selection.align",
+      "description": "Align selection columns",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "selection.collapse",
+      "description": "Collapse selections",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true
+    },
+    {
+      "id": "selection.decrement",
+      "description": "Decrement selected numbers",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "selection.ensure-forward",
+      "description": "Ensure selections face forward",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true
+    },
+    {
+      "id": "selection.flip",
+      "description": "Flip selection direction",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true
+    },
+    {
+      "id": "selection.format",
+      "description": "Format selections",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true,
+      "history": true,
+      "palette": true
+    },
+    {
+      "id": "selection.increment",
+      "description": "Increment selected numbers",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "selection.indent",
+      "description": "Indent selections",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "selection.join-lines",
+      "description": "Join selected lines",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "selection.join-lines-space",
+      "description": "Join selected lines with spaces",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "selection.keep-primary",
+      "description": "Keep primary selection",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true
+    },
+    {
+      "id": "selection.lower-case",
+      "description": "Lowercase selections",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "selection.merge-consecutive",
+      "description": "Merge consecutive selections",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true
+    },
+    {
+      "id": "selection.merge-overlapping",
+      "description": "Merge overlapping selections",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true
+    },
+    {
+      "id": "selection.outdent",
+      "description": "Outdent selections",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "selection.remove-primary",
+      "description": "Remove primary selection",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true
+    },
+    {
+      "id": "selection.replace-character",
+      "description": "Replace selection characters",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "history": true,
+      "operand": {
+        "kind": "character",
+        "arity": 1
+      },
+      "palette": true
+    },
+    {
+      "id": "selection.rotate-primary-backward",
+      "description": "Rotate primary selection backward",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true
+    },
+    {
+      "id": "selection.rotate-primary-forward",
+      "description": "Rotate primary selection forward",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true
+    },
+    {
+      "id": "selection.split-newline",
+      "description": "Split selections on newlines",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true
+    },
+    {
+      "id": "selection.split-regex",
+      "description": "Split selections by regular expression",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true,
+      "palette": true
+    },
+    {
+      "id": "selection.toggle-case",
+      "description": "Toggle selection case",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "selection.trim",
+      "description": "Trim selections",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "selection.upper-case",
+      "description": "Uppercase selections",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "palette": true,
+      "history": true
+    },
+    {
+      "id": "signature.dismiss",
+      "description": "Dismiss signature help",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "signature.next",
+      "description": "Next signature",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "signature.previous",
+      "description": "Previous signature",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "surround.add",
+      "description": "Add surround",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "match"
+      ],
+      "availability": [
+        {
+          "context": "match",
+          "mode": "normal"
+        },
+        {
+          "context": "match",
+          "mode": "visual"
+        }
+      ],
+      "operand": {
+        "kind": "surround",
+        "arity": 1
+      }
+    },
+    {
+      "id": "surround.delete",
+      "description": "Delete surround",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "match"
+      ],
+      "availability": [
+        {
+          "context": "match",
+          "mode": "normal"
+        },
+        {
+          "context": "match",
+          "mode": "visual"
+        }
+      ],
+      "operand": {
+        "kind": "surround",
+        "arity": 1
+      }
+    },
+    {
+      "id": "surround.replace",
+      "description": "Replace surround",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "match"
+      ],
+      "availability": [
+        {
+          "context": "match",
+          "mode": "normal"
+        },
+        {
+          "context": "match",
+          "mode": "visual"
+        }
+      ],
+      "operand": {
+        "kind": "surround",
+        "arity": 2
+      }
+    },
+    {
+      "id": "syntax.next",
+      "description": "Next syntax target",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "bracket-next"
+      ],
+      "availability": [
+        {
+          "context": "bracket-next",
+          "mode": "normal"
+        },
+        {
+          "context": "bracket-next",
+          "mode": "visual"
+        }
+      ],
+      "async": true,
+      "args": {
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "values": [
+              "f",
+              "t",
+              "a",
+              "c",
+              "T",
+              "g",
+              "x"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "syntax.previous",
+      "description": "Previous syntax target",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "bracket-prev"
+      ],
+      "availability": [
+        {
+          "context": "bracket-prev",
+          "mode": "normal"
+        },
+        {
+          "context": "bracket-prev",
+          "mode": "visual"
+        }
+      ],
+      "async": true,
+      "args": {
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "values": [
+              "f",
+              "t",
+              "a",
+              "c",
+              "T",
+              "g",
+              "x"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "syntax.select-down",
+      "description": "Shrink syntax selection",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "syntax.select-up",
+      "description": "Expand syntax selection",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "textobject.select",
+      "description": "Select text object",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "match"
+      ],
+      "availability": [
+        {
+          "context": "match",
+          "mode": "normal"
+        },
+        {
+          "context": "match",
+          "mode": "visual"
+        }
+      ],
+      "async": true,
+      "operand": {
+        "kind": "textobject",
+        "arity": 1
+      },
+      "repeat": true,
+      "args": {
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "values": [
+              "inside",
+              "around"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "ui.code-actions",
+      "description": "Code actions",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "ui.command-line",
+      "description": "Open command line",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "aliases": [
+        "command",
+        ":"
+      ],
+      "palette": true
+    },
+    {
+      "id": "ui.completion",
+      "description": "Request completion",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "ui.file-picker",
+      "description": "Open file picker",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "async": true,
+      "aliases": [
+        "files"
+      ]
+    },
+    {
+      "id": "ui.hover",
+      "description": "Show hover",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "ui.rename",
+      "description": "Rename symbol",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "async": true,
+      "aliases": [
+        "rename"
+      ]
+    },
+    {
+      "id": "ui.signature-help",
+      "description": "Request signature help",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "async": true,
+      "palette": true
+    },
+    {
+      "id": "ui.workspace-search",
+      "description": "Search workspace contents",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        },
+        {
+          "context": "editor",
+          "mode": "insert"
+        }
+      ],
+      "async": true,
+      "aliases": [
+        "global-search"
+      ],
+      "palette": true
+    },
+    {
+      "id": "view.bottom",
+      "description": "Align selection bottom",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "view",
+        "sticky-view-prefix"
+      ],
+      "availability": [
+        {
+          "context": "view",
+          "mode": "normal"
+        },
+        {
+          "context": "view",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view-prefix",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view-prefix",
+          "mode": "visual"
+        }
+      ],
+      "args": {
+        "required": [
+          "alignment",
+          "sticky"
+        ],
+        "properties": {
+          "alignment": {
+            "type": "string",
+            "values": [
+              "bottom"
+            ]
+          },
+          "sticky": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "id": "view.center",
+      "description": "Center selection",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "view",
+        "sticky-view-prefix"
+      ],
+      "availability": [
+        {
+          "context": "view",
+          "mode": "normal"
+        },
+        {
+          "context": "view",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view-prefix",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view-prefix",
+          "mode": "visual"
+        }
+      ],
+      "args": {
+        "required": [
+          "alignment",
+          "sticky"
+        ],
+        "properties": {
+          "alignment": {
+            "type": "string",
+            "values": [
+              "center"
+            ]
+          },
+          "sticky": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "id": "view.exit-sticky",
+      "description": "Exit sticky view mode",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "sticky-view-overlay",
+        "sticky-view"
+      ],
+      "availability": [
+        {
+          "context": "sticky-view-overlay",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view-overlay",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "view.half-page-down",
+      "description": "Half-page viewport down",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "sticky-view"
+      ],
+      "availability": [
+        {
+          "context": "sticky-view",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "view.half-page-up",
+      "description": "Half-page viewport up",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "sticky-view"
+      ],
+      "availability": [
+        {
+          "context": "sticky-view",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "view.page-down",
+      "description": "Page viewport down",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "sticky-view"
+      ],
+      "availability": [
+        {
+          "context": "sticky-view",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "view.page-up",
+      "description": "Page viewport up",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "contexts": [
+        "sticky-view"
+      ],
+      "availability": [
+        {
+          "context": "sticky-view",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "insert"
+        }
+      ]
+    },
+    {
+      "id": "view.scroll-down",
+      "description": "Scroll down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "view",
+        "sticky-view-prefix",
+        "sticky-view-overlay",
+        "sticky-view"
+      ],
+      "availability": [
+        {
+          "context": "view",
+          "mode": "normal"
+        },
+        {
+          "context": "view",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view-prefix",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view-prefix",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view-overlay",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view-overlay",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "visual"
+        }
+      ],
+      "args": {
+        "required": [
+          "sticky"
+        ],
+        "properties": {
+          "sticky": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "id": "view.scroll-up",
+      "description": "Scroll up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "view",
+        "sticky-view-prefix",
+        "sticky-view-overlay",
+        "sticky-view"
+      ],
+      "availability": [
+        {
+          "context": "view",
+          "mode": "normal"
+        },
+        {
+          "context": "view",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view-prefix",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view-prefix",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view-overlay",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view-overlay",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view",
+          "mode": "visual"
+        }
+      ],
+      "args": {
+        "required": [
+          "sticky"
+        ],
+        "properties": {
+          "sticky": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "id": "view.top",
+      "description": "Align selection top",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "view",
+        "sticky-view-prefix"
+      ],
+      "availability": [
+        {
+          "context": "view",
+          "mode": "normal"
+        },
+        {
+          "context": "view",
+          "mode": "visual"
+        },
+        {
+          "context": "sticky-view-prefix",
+          "mode": "normal"
+        },
+        {
+          "context": "sticky-view-prefix",
+          "mode": "visual"
+        }
+      ],
+      "args": {
+        "required": [
+          "alignment",
+          "sticky"
+        ],
+        "properties": {
+          "alignment": {
+            "type": "string",
+            "values": [
+              "top"
+            ]
+          },
+          "sticky": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "id": "workspace.close-pane",
+      "description": "Close pane",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.focus-down",
+      "description": "Focus down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.focus-left",
+      "description": "Focus left",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.focus-next-pane",
+      "description": "Focus next pane",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.focus-right",
+      "description": "Focus right",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.focus-up",
+      "description": "Focus up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.jump-back",
+      "description": "Jump back",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "workspace.jump-forward",
+      "description": "Jump forward",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "workspace.new-scratch-horizontal",
+      "description": "New scratch split",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.next-buffer",
+      "description": "Next buffer",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "workspace.only-pane",
+      "description": "Only pane",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.open-selection-horizontal",
+      "description": "Open selection horizontally",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "workspace.open-selection-vertical",
+      "description": "Open selection vertically",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": true
+    },
+    {
+      "id": "workspace.previous-buffer",
+      "description": "Previous buffer",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "goto"
+      ],
+      "availability": [
+        {
+          "context": "goto",
+          "mode": "normal"
+        },
+        {
+          "context": "goto",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "workspace.save-jump",
+      "description": "Save jump",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "editor"
+      ],
+      "availability": [
+        {
+          "context": "editor",
+          "mode": "normal"
+        },
+        {
+          "context": "editor",
+          "mode": "visual"
+        }
+      ]
+    },
+    {
+      "id": "workspace.split-horizontal",
+      "description": "Split horizontally",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.split-vertical",
+      "description": "Split vertically",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.swap-down",
+      "description": "Swap down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.swap-left",
+      "description": "Swap left",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.swap-right",
+      "description": "Swap right",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    },
+    {
+      "id": "workspace.swap-up",
+      "description": "Swap up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "contexts": [
+        "ctrl-w"
+      ],
+      "availability": [
+        {
+          "context": "ctrl-w",
+          "mode": "normal"
+        },
+        {
+          "context": "ctrl-w",
+          "mode": "visual"
+        }
+      ],
+      "async": false
+    }
+  ],
+  "bindings": [
+    {
+      "context": "bracket-next",
+      "keys": "D",
+      "command": "diagnostic.next",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "extreme": true
+      }
+    },
+    {
+      "context": "bracket-next",
+      "keys": "T",
+      "command": "syntax.next",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "T"
+      }
+    },
+    {
+      "context": "bracket-next",
+      "keys": "a",
+      "command": "syntax.next",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "a"
+      }
+    },
+    {
+      "context": "bracket-next",
+      "keys": "c",
+      "command": "syntax.next",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "c"
+      }
+    },
+    {
+      "context": "bracket-next",
+      "keys": "d",
+      "command": "diagnostic.next",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "extreme": false
+      }
+    },
+    {
+      "context": "bracket-next",
+      "keys": "f",
+      "command": "syntax.next",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "f"
+      }
+    },
+    {
+      "context": "bracket-next",
+      "keys": "g",
+      "command": "syntax.next",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "g"
+      }
+    },
+    {
+      "context": "bracket-next",
+      "keys": "p",
+      "command": "goto.next-paragraph",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "direction": "next"
+      }
+    },
+    {
+      "context": "bracket-next",
+      "keys": "t",
+      "command": "syntax.next",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "t"
+      }
+    },
+    {
+      "context": "bracket-next",
+      "keys": "x",
+      "command": "syntax.next",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "x"
+      }
+    },
+    {
+      "context": "bracket-prev",
+      "keys": "D",
+      "command": "diagnostic.previous",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "extreme": true
+      }
+    },
+    {
+      "context": "bracket-prev",
+      "keys": "T",
+      "command": "syntax.previous",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "T"
+      }
+    },
+    {
+      "context": "bracket-prev",
+      "keys": "a",
+      "command": "syntax.previous",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "a"
+      }
+    },
+    {
+      "context": "bracket-prev",
+      "keys": "c",
+      "command": "syntax.previous",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "c"
+      }
+    },
+    {
+      "context": "bracket-prev",
+      "keys": "d",
+      "command": "diagnostic.previous",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "extreme": false
+      }
+    },
+    {
+      "context": "bracket-prev",
+      "keys": "f",
+      "command": "syntax.previous",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "f"
+      }
+    },
+    {
+      "context": "bracket-prev",
+      "keys": "g",
+      "command": "syntax.previous",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "g"
+      }
+    },
+    {
+      "context": "bracket-prev",
+      "keys": "p",
+      "command": "goto.previous-paragraph",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "direction": "previous"
+      }
+    },
+    {
+      "context": "bracket-prev",
+      "keys": "t",
+      "command": "syntax.previous",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "t"
+      }
+    },
+    {
+      "context": "bracket-prev",
+      "keys": "x",
+      "command": "syntax.previous",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "target": "x"
+      }
+    },
+    {
+      "context": "completion",
+      "keys": "ArrowDown",
+      "command": "completion.next",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "completion",
+      "keys": "ArrowUp",
+      "command": "completion.previous",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "completion",
+      "keys": "Enter",
+      "command": "completion.accept",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "completion",
+      "keys": "Escape",
+      "command": "completion.dismiss",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "completion",
+      "keys": "Shift+Tab",
+      "command": "completion.previous",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "completion",
+      "keys": "Tab",
+      "command": "completion.next",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "ArrowDown",
+      "command": "workspace.focus-down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "ArrowLeft",
+      "command": "workspace.focus-left",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "ArrowRight",
+      "command": "workspace.focus-right",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "ArrowUp",
+      "command": "workspace.focus-up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+F",
+      "command": "workspace.open-selection-vertical",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+H",
+      "command": "workspace.swap-left",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+J",
+      "command": "workspace.swap-down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+K",
+      "command": "workspace.swap-up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+L",
+      "command": "workspace.swap-right",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+N",
+      "command": "workspace.new-scratch-horizontal",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+O",
+      "command": "workspace.only-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+Q",
+      "command": "workspace.close-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+S",
+      "command": "workspace.split-horizontal",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+V",
+      "command": "workspace.split-vertical",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+W",
+      "command": "workspace.focus-next-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+f",
+      "command": "workspace.open-selection-horizontal",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+h",
+      "command": "workspace.focus-left",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+j",
+      "command": "workspace.focus-down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+k",
+      "command": "workspace.focus-up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+l",
+      "command": "workspace.focus-right",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+n",
+      "command": "workspace.new-scratch-horizontal",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+o",
+      "command": "workspace.only-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+q",
+      "command": "workspace.close-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+s",
+      "command": "workspace.split-horizontal",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+v",
+      "command": "workspace.split-vertical",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Ctrl+w",
+      "command": "workspace.focus-next-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "F",
+      "command": "workspace.open-selection-vertical",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "H",
+      "command": "workspace.swap-left",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "J",
+      "command": "workspace.swap-down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "K",
+      "command": "workspace.swap-up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "L",
+      "command": "workspace.swap-right",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "N",
+      "command": "workspace.new-scratch-horizontal",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "O",
+      "command": "workspace.only-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "Q",
+      "command": "workspace.close-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "S",
+      "command": "workspace.split-horizontal",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "V",
+      "command": "workspace.split-vertical",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "W",
+      "command": "workspace.focus-next-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "f",
+      "command": "workspace.open-selection-horizontal",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "h",
+      "command": "workspace.focus-left",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "j",
+      "command": "workspace.focus-down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "k",
+      "command": "workspace.focus-up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "l",
+      "command": "workspace.focus-right",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "n",
+      "command": "workspace.new-scratch-horizontal",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "o",
+      "command": "workspace.only-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "q",
+      "command": "workspace.close-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "s",
+      "command": "workspace.split-horizontal",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "v",
+      "command": "workspace.split-vertical",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "ctrl-w",
+      "keys": "w",
+      "command": "workspace.focus-next-pane",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+PageDown",
+      "command": "signature.next",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Alt+PageUp",
+      "command": "signature.previous",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "ArrowDown",
+      "command": "motion.down",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "ArrowLeft",
+      "command": "motion.left",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "ArrowRight",
+      "command": "motion.right",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "ArrowUp",
+      "command": "motion.up",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Backspace",
+      "command": "edit.delete-backward",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Ctrl+F",
+      "command": "ui.workspace-search",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Ctrl+Space",
+      "command": "ui.completion",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Ctrl+k",
+      "command": "ui.signature-help",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Ctrl+p",
+      "command": "ui.file-picker",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Ctrl+r",
+      "command": "register.insert",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Ctrl+s",
+      "command": "history.checkpoint",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Delete",
+      "command": "edit.delete-forward",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Enter",
+      "command": "edit.newline",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "F2",
+      "command": "ui.rename",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "Tab",
+      "command": "edit.indent",
+      "modes": [
+        "insert"
+      ]
+    },
+    {
+      "keys": "\"",
+      "command": "register.select",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "%",
+      "command": "edit.select-all",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "&",
+      "command": "selection.align",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "(",
+      "command": "selection.rotate-primary-backward",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": ")",
+      "command": "selection.rotate-primary-forward",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "*",
+      "command": "search.selection",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": ",",
+      "command": "selection.keep-primary",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": ".",
+      "command": "repeat.edit",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "/",
+      "command": "search.forward",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": ":",
+      "command": "ui.command-line",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": ";",
+      "command": "selection.collapse",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "<",
+      "command": "selection.outdent",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "=",
+      "command": "selection.format",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": ">",
+      "command": "selection.indent",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "?",
+      "command": "prefix.question",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+*",
+      "command": "search.selection",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+,",
+      "command": "selection.remove-primary",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+-",
+      "command": "selection.merge-overlapping",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+.",
+      "command": "repeat.motion",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+/",
+      "command": "comment.smart",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+:",
+      "command": "selection.ensure-forward",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+;",
+      "command": "selection.flip",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+ArrowDown",
+      "command": "syntax.select-down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+ArrowUp",
+      "command": "syntax.select-up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+G",
+      "command": "goto.references",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+J",
+      "command": "selection.join-lines-space",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+K",
+      "command": "ui.hover",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+PageDown",
+      "command": "signature.next",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+PageUp",
+      "command": "signature.previous",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+R",
+      "command": "ui.rename",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+_",
+      "command": "selection.merge-consecutive",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+`",
+      "command": "selection.upper-case",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+g",
+      "command": "goto.definition",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+k",
+      "command": "ui.hover",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+r",
+      "command": "ui.rename",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Alt+s",
+      "command": "selection.split-newline",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "ArrowDown",
+      "command": "motion.down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "ArrowLeft",
+      "command": "motion.left",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "ArrowRight",
+      "command": "motion.right",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "ArrowUp",
+      "command": "motion.up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "B",
+      "command": "motion.B-start",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+,",
+      "command": "ui.hover",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+.",
+      "command": "ui.code-actions",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+F",
+      "command": "ui.workspace-search",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+Space",
+      "command": "ui.completion",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+a",
+      "command": "selection.increment",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+b",
+      "command": "motion.page-up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+d",
+      "command": "motion.half-page-down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+f",
+      "command": "motion.page-down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+i",
+      "command": "workspace.jump-forward",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+k",
+      "command": "ui.signature-help",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+o",
+      "command": "workspace.jump-back",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+p",
+      "command": "ui.file-picker",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+s",
+      "command": "workspace.save-jump",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+u",
+      "command": "motion.half-page-up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+w",
+      "command": "prefix.ctrl-w",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Ctrl+x",
+      "command": "selection.decrement",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "E",
+      "command": "motion.E-end",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "End",
+      "command": "goto.line-end",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "F2",
+      "command": "ui.rename",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "F",
+      "command": "find.previous-char",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "G",
+      "command": "goto.counted-line",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "fallback": "last"
+      }
+    },
+    {
+      "keys": "Home",
+      "command": "goto.line-start",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "J",
+      "command": "selection.join-lines",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "N",
+      "command": "search.repeat-previous",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "O",
+      "command": "edit.open-above",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "P",
+      "command": "edit.paste-before",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "PageDown",
+      "command": "motion.page-down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "PageUp",
+      "command": "motion.page-up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "S",
+      "command": "selection.split-regex",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Space",
+      "command": "jump.flash",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "T",
+      "command": "find.till-previous-char",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "U",
+      "command": "edit.redo",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "W",
+      "command": "motion.W-start",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "Z",
+      "command": "prefix.sticky-view",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "[",
+      "command": "prefix.bracket-prev",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "]",
+      "command": "prefix.bracket-next",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "_",
+      "command": "selection.trim",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "`",
+      "command": "selection.lower-case",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "b",
+      "command": "motion.word-backward",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "c",
+      "command": "edit.change",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "d",
+      "command": "edit.delete",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "e",
+      "command": "motion.word-forward",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "f",
+      "command": "find.next-char",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "g",
+      "command": "prefix.goto",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "h",
+      "command": "motion.left",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "j",
+      "command": "motion.down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "k",
+      "command": "motion.up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "l",
+      "command": "motion.right",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "m",
+      "command": "prefix.match",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "n",
+      "command": "search.repeat-next",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "o",
+      "command": "edit.open-below",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "p",
+      "command": "edit.paste-after",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "r",
+      "command": "selection.replace-character",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "t",
+      "command": "find.till-next-char",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "u",
+      "command": "edit.undo",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "v",
+      "command": "mode.visual",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "w",
+      "command": "motion.word-start",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "x",
+      "command": "edit.select-line-below",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "y",
+      "command": "edit.yank",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "z",
+      "command": "prefix.view",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "~",
+      "command": "selection.toggle-case",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "keys": "A",
+      "command": "mode.append-line-end",
+      "modes": [
+        "normal"
+      ]
+    },
+    {
+      "keys": "Escape",
+      "command": "signature.dismiss",
+      "modes": [
+        "normal"
+      ]
+    },
+    {
+      "keys": "I",
+      "command": "mode.insert-line-start",
+      "modes": [
+        "normal"
+      ]
+    },
+    {
+      "keys": "a",
+      "command": "mode.append",
+      "modes": [
+        "normal"
+      ]
+    },
+    {
+      "keys": "i",
+      "command": "mode.insert",
+      "modes": [
+        "normal"
+      ]
+    },
+    {
+      "keys": "Escape",
+      "command": "mode.normal",
+      "modes": [
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "D",
+      "command": "goto.declaration",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "b",
+      "command": "goto.window-bottom",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "c",
+      "command": "comment.toggle",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "d",
+      "command": "goto.definition",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "e",
+      "command": "goto.last-line",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "g",
+      "command": "goto.counted-line",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "fallback": "first"
+      }
+    },
+    {
+      "context": "goto",
+      "keys": "h",
+      "command": "goto.line-start",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "i",
+      "command": "goto.implementation",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "j",
+      "command": "motion.down",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "k",
+      "command": "motion.up",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "l",
+      "command": "goto.line-end",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "n",
+      "command": "workspace.next-buffer",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "p",
+      "command": "workspace.previous-buffer",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "r",
+      "command": "goto.references",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "s",
+      "command": "goto.first-non-whitespace",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "t",
+      "command": "goto.window-top",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "goto",
+      "keys": "y",
+      "command": "goto.type-definition",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "hover",
+      "keys": "Escape",
+      "command": "hover.dismiss",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "match",
+      "keys": "a",
+      "command": "textobject.select",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "scope": "around"
+      }
+    },
+    {
+      "context": "match",
+      "keys": "d",
+      "command": "surround.delete",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "match",
+      "keys": "i",
+      "command": "textobject.select",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "scope": "inside"
+      }
+    },
+    {
+      "context": "match",
+      "keys": "m",
+      "command": "goto.matching-bracket",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "match",
+      "keys": "r",
+      "command": "surround.replace",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "match",
+      "keys": "s",
+      "command": "surround.add",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "picker",
+      "keys": "ArrowDown",
+      "command": "picker.next",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "picker",
+      "keys": "ArrowLeft",
+      "command": "picker.previous",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "args": {
+        "variant": "bar"
+      }
+    },
+    {
+      "context": "picker",
+      "keys": "ArrowRight",
+      "command": "picker.next",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "args": {
+        "variant": "bar"
+      }
+    },
+    {
+      "context": "picker",
+      "keys": "ArrowUp",
+      "command": "picker.previous",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "picker",
+      "keys": "B",
+      "command": "picker.accept-background",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "picker",
+      "keys": "Backspace",
+      "command": "picker.delete-backward",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "picker",
+      "keys": "Enter",
+      "command": "picker.accept",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "picker",
+      "keys": "Escape",
+      "command": "picker.dismiss",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "picker",
+      "keys": "H",
+      "command": "picker.accept-horizontal",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "picker",
+      "keys": "V",
+      "command": "picker.accept-vertical",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "picker",
+      "keys": "h",
+      "command": "picker.previous",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "args": {
+        "variant": "bar"
+      }
+    },
+    {
+      "context": "picker",
+      "keys": "l",
+      "command": "picker.next",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ],
+      "args": {
+        "variant": "bar"
+      }
+    },
+    {
+      "context": "question",
+      "keys": "B",
+      "command": "picker.buffers",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "question",
+      "keys": "S",
+      "command": "picker.symbols-workspace",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "question",
+      "keys": "b",
+      "command": "picker.buffers",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "question",
+      "keys": "d",
+      "command": "picker.diagnostics",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "question",
+      "keys": "j",
+      "command": "picker.jumps",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "question",
+      "keys": "p",
+      "command": "picker.panes",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "question",
+      "keys": "r",
+      "command": "goto.references",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "question",
+      "keys": "s",
+      "command": "picker.symbols-document",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "sticky-view-overlay",
+      "keys": "ArrowDown",
+      "command": "view.scroll-down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view-overlay",
+      "keys": "ArrowUp",
+      "command": "view.scroll-up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view-overlay",
+      "keys": "Escape",
+      "command": "view.exit-sticky",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "sticky-view-overlay",
+      "keys": "j",
+      "command": "view.scroll-down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view-overlay",
+      "keys": "k",
+      "command": "view.scroll-up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view-prefix",
+      "keys": "b",
+      "command": "view.bottom",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "alignment": "bottom",
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view-prefix",
+      "keys": "c",
+      "command": "view.center",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "alignment": "center",
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view-prefix",
+      "keys": "j",
+      "command": "view.scroll-down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view-prefix",
+      "keys": "k",
+      "command": "view.scroll-up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view-prefix",
+      "keys": "m",
+      "command": "view.center",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "alignment": "center",
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view-prefix",
+      "keys": "t",
+      "command": "view.top",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "alignment": "top",
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view-prefix",
+      "keys": "z",
+      "command": "view.center",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "alignment": "center",
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view",
+      "keys": "Ctrl+b",
+      "command": "view.page-up",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "sticky-view",
+      "keys": "Ctrl+d",
+      "command": "view.half-page-down",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "sticky-view",
+      "keys": "Ctrl+f",
+      "command": "view.page-down",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "sticky-view",
+      "keys": "Ctrl+u",
+      "command": "view.half-page-up",
+      "modes": [
+        "normal",
+        "visual",
+        "insert"
+      ]
+    },
+    {
+      "context": "sticky-view",
+      "keys": "ArrowDown",
+      "command": "view.scroll-down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view",
+      "keys": "ArrowUp",
+      "command": "view.scroll-up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view",
+      "keys": "Escape",
+      "command": "view.exit-sticky",
+      "modes": [
+        "normal",
+        "visual"
+      ]
+    },
+    {
+      "context": "sticky-view",
+      "keys": "j",
+      "command": "view.scroll-down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": true
+      }
+    },
+    {
+      "context": "sticky-view",
+      "keys": "k",
+      "command": "view.scroll-up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": true
+      }
+    },
+    {
+      "context": "view",
+      "keys": "b",
+      "command": "view.bottom",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "alignment": "bottom",
+        "sticky": false
+      }
+    },
+    {
+      "context": "view",
+      "keys": "c",
+      "command": "view.center",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "alignment": "center",
+        "sticky": false
+      }
+    },
+    {
+      "context": "view",
+      "keys": "j",
+      "command": "view.scroll-down",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": false
+      }
+    },
+    {
+      "context": "view",
+      "keys": "k",
+      "command": "view.scroll-up",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "sticky": false
+      }
+    },
+    {
+      "context": "view",
+      "keys": "m",
+      "command": "view.center",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "alignment": "center",
+        "sticky": false
+      }
+    },
+    {
+      "context": "view",
+      "keys": "t",
+      "command": "view.top",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "alignment": "top",
+        "sticky": false
+      }
+    },
+    {
+      "context": "view",
+      "keys": "z",
+      "command": "view.center",
+      "modes": [
+        "normal",
+        "visual"
+      ],
+      "args": {
+        "alignment": "center",
+        "sticky": false
+      }
+    }
+  ]
+}

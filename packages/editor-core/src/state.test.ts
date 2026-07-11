@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   applyTransaction,
   appendInsertMode,
+  appendInsertModeAtLineEnd,
   changeSelection,
   type Command,
   createEditorState,
   createSelection,
+  createSelectionSet,
   createTextDocument,
   deleteBackward,
   deleteBackwardIndentAware,
@@ -45,6 +47,8 @@ import {
   pageDown,
   pageUp,
   pasteAfter,
+  pasteBefore,
+  insertFirstNonWhitespace,
   gotoFileStart,
   gotoFirstNonWhitespace,
   gotoLastLine,
@@ -156,6 +160,76 @@ describe("editor core", () => {
     expect(state.current.yankBuffer).toBe("bc");
   });
 
+  it.each([
+    [deleteSelection, pasteAfter, "03X456X9"],
+    [deleteSelection, pasteBefore, "0X3456X9"],
+    [changeSelection, pasteAfter, "0X3456X9"],
+    [changeSelection, pasteBefore, "0X3456X9"]
+  ])("maps multi-selection delete/change locations before pasting", (edit, paste, expected) => {
+    const state = {
+      current: createEditorState({
+        value: "0123456789",
+        selection: createSelectionSet(
+          [
+            { anchor: 1, head: 2, preferredColumn: null },
+            { anchor: 7, head: 8, preferredColumn: null }
+          ],
+          1
+        )
+      })
+    };
+
+    run(state, edit);
+    expect(state.current.doc.text).toBe("034569");
+    expect(state.current.selection.ranges.map((range) => range.head)).toEqual([1, 5]);
+    expect(state.current.selection.primaryIndex).toBe(1);
+    expect(state.current.lastDeletedFrom).toBe(5);
+    expect(state.current.yankBuffer).toBe("12\n78");
+    if (edit === changeSelection) {
+      expect(state.current.insertSession?.restoreOffset).toBe(5);
+    }
+
+    state.current = applyTransaction(state.current, { yankBuffer: "X" });
+    run(state, paste);
+    expect(state.current.doc.text).toBe(expected);
+  });
+
+  it.each([
+    ["identical", deleteSelection, pasteAfter, "abcde", [[1, 2], [1, 2]], "ade", "bc"],
+    ["identical", deleteSelection, pasteBefore, "abcde", [[1, 2], [1, 2]], "ade", "bc"],
+    ["identical", changeSelection, pasteAfter, "abcde", [[1, 2], [1, 2]], "ade", "bc"],
+    ["identical", changeSelection, pasteBefore, "abcde", [[1, 2], [1, 2]], "ade", "bc"],
+    ["overlapping", deleteSelection, pasteAfter, "abcdef", [[1, 3], [2, 4]], "af", "bcde"],
+    ["overlapping", deleteSelection, pasteBefore, "abcdef", [[1, 3], [2, 4]], "af", "bcde"],
+    ["overlapping", changeSelection, pasteAfter, "abcdef", [[1, 3], [2, 4]], "af", "bcde"],
+    ["overlapping", changeSelection, pasteBefore, "abcdef", [[1, 3], [2, 4]], "af", "bcde"]
+  ])(
+    "%s delete/change yanks the merged union once and immediate paste restores it",
+    (_kind, edit, paste, value, offsets, deletedValue, yanked) => {
+      const state = { current: createEditorState({ value }) };
+      state.current = {
+        ...state.current,
+        selection: createSelectionSet(
+          offsets.map(([anchor, head]) => ({ anchor, head, preferredColumn: null })),
+          1
+        )
+      };
+
+      run(state, edit);
+
+      expect(state.current.doc.text).toBe(deletedValue);
+      expect(state.current.yankBuffer).toBe(yanked);
+      expect(state.current.selection.ranges.map((range) => range.head)).toEqual([1]);
+      expect(state.current.selection.primaryIndex).toBe(0);
+      if (edit === changeSelection) {
+        expect(state.current.insertSession?.restoreOffset).toBe(1);
+      }
+
+      run(state, paste);
+      expect(state.current.doc.text).toBe(value);
+    }
+  );
+
   it("undoes and redoes document changes with u and U", () => {
     let undid = false;
     let redid = false;
@@ -240,6 +314,135 @@ describe("editor core", () => {
     expect(getCursorOffset(state.current.selection)).toBe(2);
     insertText("x")(state.current, (transaction) => dispatchTransaction(state, transaction), {});
     expect(state.current.doc.text).toBe("abxc");
+  });
+
+  it.each([
+    ["  alpha", 2],
+    ["   ", 0],
+    ["", 0]
+  ])("I enters at first non-whitespace (%s)", (value, offset) => {
+    const state = { current: createEditorState({ value }) };
+    run(state, insertFirstNonWhitespace);
+    expect(state.current.mode).toBe("insert");
+    expect(getCursorOffset(state.current.selection)).toBe(offset);
+  });
+
+  it.each([
+    ["alpha", 5],
+    ["alpha\n beta", 11],
+    ["", 0]
+  ])("A enters at line end (%s)", (value, offset) => {
+    const state = { current: createEditorState({ value, selection: createSelection(value.includes("\n") ? value.indexOf("\n") + 2 : 0) }) };
+    run(state, appendInsertModeAtLineEnd);
+    expect(state.current.mode).toBe("insert");
+    expect(getCursorOffset(state.current.selection)).toBe(offset);
+  });
+
+  it.each([
+    [insertFirstNonWhitespace, [2, 9]],
+    [appendInsertModeAtLineEnd, [5, 12]]
+  ])("uses each selection's active line for I/A", (command, expectedHeads) => {
+    const state = {
+      current: createEditorState({
+        value: "  one\n   two",
+        selection: createSelectionSet(
+          [
+            { anchor: 10, head: 3, preferredColumn: null },
+            { anchor: 2, head: 10, preferredColumn: null }
+          ],
+          1
+        )
+      })
+    };
+
+    run(state, command);
+
+    expect(state.current.selection.ranges.map((range) => range.head)).toEqual(expectedHeads);
+    expect(state.current.selection.primaryIndex).toBe(1);
+  });
+
+  it("P pastes before characterwise and linewise text, deduplicating overlaps", () => {
+    const state = { current: createEditorState({ value: "abcd", selection: createSelection(1, 2) }) };
+    state.current = applyTransaction(state.current, { yankBuffer: "X" });
+    run(state, pasteBefore);
+    expect(state.current.doc.text).toBe("aXbcd");
+
+    const linewise = { current: createEditorState({ value: "one\ntwo", selection: createSelection(5, 5) }) };
+    linewise.current = applyTransaction(linewise.current, { yankBuffer: "X\n" });
+    run(linewise, pasteBefore);
+    expect(linewise.current.doc.text).toBe("one\nX\ntwo");
+  });
+
+  it("uses register shape instead of trailing-newline inference for P", () => {
+    const linewise = { current: createEditorState({ value: "one\ntwo", selection: createSelection(5, 5) }) };
+    linewise.current = applyTransaction(linewise.current, {
+      yankBuffer: "X",
+      yankKind: "linewise"
+    });
+    run(linewise, pasteBefore);
+    expect(linewise.current.doc.text).toBe("one\nX\ntwo");
+
+    const characterwise = { current: createEditorState({ value: "ab", selection: createSelection(0, 0) }) };
+    characterwise.current = applyTransaction(characterwise.current, {
+      yankBuffer: "X\n",
+      yankKind: "characterwise"
+    });
+    run(characterwise, pasteBefore);
+    expect(characterwise.current.doc.text).toBe("X\nab");
+  });
+
+  it("pastes a newline-free linewise register after an unterminated final line", () => {
+    const state = { current: createEditorState({ value: "one", selection: createSelection(1, 1) }) };
+    state.current = applyTransaction(state.current, { yankBuffer: "two", yankKind: "linewise" });
+
+    run(state, pasteAfter);
+
+    expect(state.current.doc.text).toBe("one\ntwo");
+    expect(state.current.yankKind).toBe("linewise");
+  });
+
+  it("clears the yank buffer explicitly and resets its inferred shape", () => {
+    let state = createEditorState();
+    state = applyTransaction(state, { yankBuffer: "line\n", yankKind: "linewise" });
+    state = applyTransaction(state, { yankBuffer: null });
+
+    expect(state.yankBuffer).toBeNull();
+    expect(state.yankKind).toBe("characterwise");
+  });
+
+  it.each([
+    [createSelection(1, 7), "X\none\ntwo\nthree"],
+    [createSelection(7, 1), "X\none\ntwo\nthree"]
+  ])("linewise P uses the normalized selection start", (selection, expected) => {
+    const state = { current: createEditorState({ value: "one\ntwo\nthree", selection }) };
+    state.current = applyTransaction(state.current, { yankBuffer: "X\n" });
+
+    run(state, pasteBefore);
+
+    expect(state.current.doc.text).toBe(expected);
+  });
+
+  it("linewise P deduplicates same-line and overlapping insertion locations", () => {
+    const state = {
+      current: createEditorState({
+        value: "one\ntwo\nthree",
+        selection: createSelectionSet(
+          [
+            { anchor: 1, head: 2, preferredColumn: null },
+            { anchor: 2, head: 1, preferredColumn: null },
+            { anchor: 1, head: 7, preferredColumn: null }
+          ],
+          2
+        )
+      })
+    };
+    state.current = applyTransaction(state.current, { yankBuffer: "X\n" });
+
+    run(state, pasteBefore);
+
+    expect(state.current.doc.text).toBe("X\none\ntwo\nthree");
+    expect(state.current.selection.ranges).toHaveLength(1);
+    expect(state.current.selection.primaryIndex).toBe(0);
   });
 
   it("restores the same glyph after i then escape", () => {
@@ -328,6 +531,16 @@ describe("editor core", () => {
     expect(state.current.mode).toBe("insert");
     expect(state.current.doc.text).toBe("alpha\n\nbeta");
     expect(getCursorOffset(state.current.selection)).toBe(6);
+  });
+
+  it("opens below an unterminated final line after the inserted newline", () => {
+    const state = { current: createEditorState({ value: "alpha", selection: createSelection(1, 1) }) };
+
+    run(state, openBelow);
+    run(state, insertText("z"));
+
+    expect(state.current.doc.text).toBe("alpha\nz");
+    expect(getCursorOffset(state.current.selection)).toBe(7);
   });
 
   it("opens a new line above with O and enters insert mode there", () => {
@@ -466,10 +679,20 @@ describe("editor core", () => {
 
     run(state, yankSelection);
     expect(state.current.yankBuffer).toBe("one\n");
+    expect(state.current.yankKind).toBe("linewise");
 
     run(state, pasteAfter);
     expect(state.current.doc.text).toBe("one\none\ntwo\n");
     expect(getSelectionOffsets(state.current)).toEqual({ from: 4, to: 8 });
+  });
+
+  it("marks a full unterminated final-line yank as linewise", () => {
+    const state = { current: createEditorState({ value: "one\ntwo", selection: createSelection(4, 6) }) };
+
+    run(state, yankSelection);
+
+    expect(state.current.yankBuffer).toBe("two");
+    expect(state.current.yankKind).toBe("linewise");
   });
 
   it("returns to normal mode after yanking from visual mode", () => {

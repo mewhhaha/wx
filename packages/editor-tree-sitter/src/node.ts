@@ -14,35 +14,38 @@ export interface NodeTreeSitterProviderOptions extends Omit<TreeSitterProviderOp
 
 export function createNodeTreeSitterWorkerHost(moduleUrl: string | URL = new URL("./nodeWorker.js", import.meta.url)): TreeSitterWorkerHost {
   const worker = new NodeWorker(moduleUrl);
-  const listeners = new Map<(event: MessageEvent) => void, (data: unknown) => void>();
+  const listeners = new Map<string, Map<(event: Event) => void, (...args: unknown[]) => void>>();
+
+  const add = (type: "message" | "error" | "messageerror", listener: (event: Event) => void) => {
+    const wrapped = type === "message"
+      ? (data: unknown) => listener({ type, data } as MessageEvent)
+      : () => listener({ type } as Event);
+    const typedListeners = listeners.get(type) ?? new Map();
+    typedListeners.set(listener, wrapped);
+    listeners.set(type, typedListeners);
+    worker.on(type, wrapped);
+  };
+
+  const remove = (type: "message" | "error" | "messageerror", listener: (event: Event) => void) => {
+    const typedListeners = listeners.get(type);
+    const wrapped = typedListeners?.get(listener);
+    if (!wrapped) return;
+    typedListeners?.delete(listener);
+    worker.off(type, wrapped);
+  };
 
   return {
     addEventListener(type, listener) {
-      if (type !== "message") {
-        return;
-      }
-
-      const wrapped = (data: unknown) => listener({ data } as MessageEvent);
-      listeners.set(listener, wrapped);
-      worker.on("message", wrapped);
+      add(type, listener as (event: Event) => void);
     },
     removeEventListener(type, listener) {
-      if (type !== "message") {
-        return;
-      }
-
-      const wrapped = listeners.get(listener);
-      if (!wrapped) {
-        return;
-      }
-
-      listeners.delete(listener);
-      worker.off("message", wrapped);
+      remove(type, listener as (event: Event) => void);
     },
     postMessage(message) {
       worker.postMessage(message);
     },
     terminate() {
+      for (const [type, typedListeners] of listeners) for (const wrapped of typedListeners.values()) worker.off(type as "message", wrapped);
       listeners.clear();
       void worker.terminate();
     }

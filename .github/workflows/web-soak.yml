@@ -1,0 +1,58 @@
+name: Web large-document soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Deterministic unsigned action seed
+        required: false
+        default: "1592639710"
+      seconds:
+        description: Soak duration in seconds
+        required: false
+        default: "600"
+  schedule:
+    - cron: "17 3 * * 2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-soak-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  chromium-soak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      WX_SOAK_SEED: ${{ inputs.seed || '1592639710' }}
+      WX_SOAK_SECONDS: ${{ inputs.seconds || '600' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run seeded soak
+        run: pnpm run test:e2e:soak
+
+      - name: Upload replay artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-soak-${{ env.WX_SOAK_SEED }}
+          path: |
+            test-results/soak
+            playwright-report-soak
+          if-no-files-found: warn

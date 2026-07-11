@@ -4,16 +4,18 @@ import type {
   EditorDiagnostic,
   EditorHover,
   EditorLanguageServiceInput,
+  EditorLanguageServiceLifecycle,
   EditorLanguageServices,
   LanguageRegistry
 } from "@mewhhaha/wx-language";
 
 import { normalizeLanguageServices } from "./normalize";
-import { alignSelectionTopVisualRow } from "./viewport";
 import type { WorkspaceRuntime } from "./workspace";
 import type {
   EditorController,
   EditorFileSearchResult,
+  EditorWorkspaceSearchRequest,
+  EditorWorkspaceSearchResult,
   EditorJumpEntry,
   EditorPresentationState,
   EditorSearchState,
@@ -48,7 +50,7 @@ interface CreateControllerSurfaceOptions {
   viewportRuntime: {
     setViewportMetrics(metrics: { visibleRowCapacity: number; wrapColumns: number; softWrap: boolean }): void;
     scrollViewportBy(rowsDelta: number): boolean;
-    alignViewport(getTopVisualRow: () => number, effectType?: string): boolean;
+    alignViewport(position: "top" | "center" | "bottom", effectType?: string): boolean;
     revealSelection(): void;
   };
   viewportModelRuntime: {
@@ -73,6 +75,9 @@ interface CreateControllerSurfaceOptions {
     acceptCompletion(index?: number): Promise<boolean>;
     moveCompletion(delta: number): boolean;
     dismissCompletion(): boolean;
+    requestSignatureHelp(): Promise<boolean>;
+    moveSignatureHelp(delta: number): boolean;
+    dismissSignatureHelp(): boolean;
     gotoTarget(kind: "definition" | "declaration" | "type-definition" | "implementation" | "references"): Promise<boolean>;
     renameSymbol(nextName: string): Promise<boolean>;
     openSymbols(kind: "document" | "workspace"): Promise<boolean>;
@@ -95,7 +100,13 @@ interface CreateControllerSurfaceOptions {
     jumpForward(): EditorJumpEntry | null;
     getJumpList(): readonly EditorJumpEntry[];
     getRegister(name?: string | null): string | null;
-    applyRegisterValue(name: string | null, value: string | null, effectType?: string): void;
+    getRegisterKind(name?: string | null): EditorState["yankKind"];
+    applyRegisterValue(
+      name: string | null,
+      value: string | null,
+      effectType?: string,
+      kind?: EditorState["yankKind"]
+    ): void;
     selectRegister(name: string | null): void;
     getSelectedRegister(): string | null;
   };
@@ -218,6 +229,71 @@ function extractSelectionTarget(state: EditorState, activeOffset: number): strin
 export function createControllerSurface(options: CreateControllerSurfaceOptions): EditorController {
   const presentation = options.getPresentation();
   let surface!: EditorController;
+  let destroyed = false;
+
+  const serviceLifecycles = (services: readonly EditorLanguageServices[]) =>
+    [...new Set(services.map((entry) => entry.lifecycle).filter((entry): entry is EditorLanguageServiceLifecycle => !!entry))];
+
+  const destroyOwnedServices = (
+    services: readonly EditorLanguageServices[],
+    owner: EditorLanguageServiceLifecycle["owner"]
+  ) => {
+    for (const lifecycle of serviceLifecycles(services)) {
+      if (lifecycle.owner !== owner) continue;
+      void Promise.resolve(lifecycle.destroy()).catch(() => undefined);
+    }
+  };
+
+  const observeLanguageServiceReadiness = (
+    services: readonly EditorLanguageServices[],
+    generation: number
+  ) => {
+    const lifecycles = serviceLifecycles(services);
+    if (lifecycles.length === 0) {
+      presentation.language.serviceStatus = {
+        state: services.length > 0 ? "ready" : "disabled",
+        message: null,
+        retryable: false,
+        generation
+      };
+      return;
+    }
+
+    const readiness = lifecycles.map((lifecycle) => {
+      if (lifecycle.state === "failed" || lifecycle.state === "destroyed") {
+        return Promise.reject(lifecycle.error ?? new Error(`Language service is ${lifecycle.state}`));
+      }
+      return lifecycle.whenReady?.() ?? Promise.resolve();
+    });
+
+    void Promise.all(readiness).then(
+      () => {
+        if (destroyed || generation !== presentation.language.serviceStatus.generation) return;
+        presentation.language.serviceStatus = {
+          state: "ready",
+          message: null,
+          retryable: false,
+          generation
+        };
+        options.lifecycleRuntime.emitPresentationUpdate("language.services.ready");
+      },
+      (error: unknown) => {
+        if (destroyed || generation !== presentation.language.serviceStatus.generation) return;
+        const message = error instanceof Error ? error.message : String(error);
+        presentation.language.serviceStatus = {
+          state: "failed",
+          message,
+          retryable: lifecycles.some((lifecycle) => !!lifecycle.recreate),
+          generation
+        };
+        options.sessionRuntime.setBottomMessage({
+          tone: "warning",
+          text: `Language services unavailable: ${message}${presentation.language.serviceStatus.retryable ? " (retry available)" : ""}`
+        });
+      }
+    );
+  };
+
   const applyLanguageServices = (
     languageServices: EditorLanguageServiceInput | readonly EditorLanguageServices[] | null,
     effectType: string | null,
@@ -233,7 +309,24 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       refreshLineChanges: true
     }
   ) => {
-    presentation.language.services = normalizeLanguageServices(languageServices);
+    if (destroyed) return;
+    const previousServices = presentation.language.services;
+    const nextServices = normalizeLanguageServices(languageServices);
+    presentation.language.services = nextServices;
+    const generation = presentation.language.serviceStatus.generation + 1;
+    presentation.language.serviceStatus = {
+      state: nextServices.length > 0 ? "starting" : "disabled",
+      message: null,
+      retryable: false,
+      generation
+    };
+    const retained = new Set(serviceLifecycles(nextServices));
+    for (const lifecycle of serviceLifecycles(previousServices)) {
+      if (!retained.has(lifecycle) && lifecycle.owner === "controller") {
+        void Promise.resolve(lifecycle.destroy()).catch(() => undefined);
+      }
+    }
+    observeLanguageServiceReadiness(nextServices, generation);
     options.languageRuntime.resetRequestTracking();
     options.languageRuntime.clearLanguageState();
     options.refreshSearchMatchCache(options.getState());
@@ -403,6 +496,9 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       });
     },
     subscribe(listener) {
+      if (destroyed) {
+        return () => {};
+      }
       options.listeners.add(listener);
       return () => {
         options.listeners.delete(listener);
@@ -417,8 +513,8 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     clearSearchState() {
       options.clearSearchState();
     },
-    pushJump() {
-      return options.registersJumpsRuntime.pushJumpEntry(options.createJumpEntry());
+    pushJump(entry) {
+      return options.registersJumpsRuntime.pushJumpEntry(entry ?? options.createJumpEntry());
     },
     jumpBackward() {
       return options.registersJumpsRuntime.jumpBackward();
@@ -432,8 +528,11 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     getRegister(name = null) {
       return options.registersJumpsRuntime.getRegister(name);
     },
-    setRegister(name, value) {
-      options.registersJumpsRuntime.applyRegisterValue(name, value, "register.update");
+    getRegisterKind(name = null) {
+      return options.registersJumpsRuntime.getRegisterKind(name);
+    },
+    setRegister(name, value, kind) {
+      options.registersJumpsRuntime.applyRegisterValue(name, value, "register.update", kind);
     },
     selectRegister(name) {
       options.registersJumpsRuntime.selectRegister(name);
@@ -588,6 +687,12 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
         return [] as EditorFileSearchResult[];
       }
     },
+    async searchWorkspace(request: Omit<EditorWorkspaceSearchRequest, "filePath">): Promise<readonly EditorWorkspaceSearchResult[]> {
+      const search = presentation.language.host?.searchWorkspace;
+      if (!search) return [];
+      try { return await search({ ...request, filePath: presentation.filePath ?? "" }); }
+      catch (error) { if (request.signal?.aborted) return []; options.sessionRuntime.setBottomMessage({ tone: "warning", text: error instanceof Error ? error.message : "Workspace search failed" }); return []; }
+    },
     async listFolders() {
       const listFolders = presentation.language.host?.listFolders;
       if (!listFolders) {
@@ -630,6 +735,9 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     dismissCompletion() {
       return options.languageRuntime.dismissCompletion();
     },
+    requestSignatureHelp() { return options.languageRuntime.requestSignatureHelp(); },
+    moveSignatureHelp(delta) { return options.languageRuntime.moveSignatureHelp(delta); },
+    dismissSignatureHelp() { return options.languageRuntime.dismissSignatureHelp(); },
     gotoTarget(kind) {
       return options.languageRuntime.gotoTarget(kind);
     },
@@ -652,10 +760,7 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
       return options.viewportRuntime.scrollViewportBy(rowsDelta);
     },
     alignViewportToSelection(position) {
-      return options.viewportRuntime.alignViewport(
-        () => alignSelectionTopVisualRow(options.getState(), presentation, options.getActiveOffset(), position),
-        "viewport.align"
-      );
+      return options.viewportRuntime.alignViewport(position, "viewport.align");
     },
     revealSelection() {
       options.viewportRuntime.revealSelection();
@@ -677,6 +782,60 @@ export function createControllerSurface(options: CreateControllerSurfaceOptions)
     resetLanguageServices() {
       options.setLanguageResolutionMode("auto");
       applyResolvedLanguageServices("language.services.reset");
+    },
+    async retryLanguageServices() {
+      if (destroyed || presentation.language.serviceStatus.state !== "failed") {
+        return false;
+      }
+      const previousServices = [...presentation.language.services];
+      let recreated = false;
+      const nextServices: EditorLanguageServices[] = [];
+      try {
+        for (const services of previousServices) {
+          if (services.lifecycle?.recreate) {
+            nextServices.push(await services.lifecycle.recreate());
+            recreated = true;
+          } else {
+            nextServices.push(services);
+          }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        presentation.language.serviceStatus = {
+          ...presentation.language.serviceStatus,
+          message,
+          retryable: true
+        };
+        options.sessionRuntime.setBottomMessage({ tone: "warning", text: `Language service retry failed: ${message}` });
+        return false;
+      }
+      if (!recreated) {
+        return false;
+      }
+      for (const lifecycle of serviceLifecycles(previousServices)) {
+        if (lifecycle.owner !== "controller") {
+          void Promise.resolve(lifecycle.destroy()).catch(() => undefined);
+        }
+      }
+      applyLanguageServices(nextServices, "language.services.retry");
+      return true;
+    },
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      options.languageRuntime.resetRequestTracking();
+      options.languageRuntime.clearLanguageState();
+      destroyOwnedServices(presentation.language.services, "controller");
+      presentation.language.services = [];
+      presentation.language.host = null;
+      presentation.language.serviceStatus = {
+        state: "destroyed",
+        message: null,
+        retryable: false,
+        generation: presentation.language.serviceStatus.generation + 1
+      };
+      options.history?.clear?.();
+      options.listeners.clear();
     },
     setHostServices(host) {
       if (presentation.language.host === host) {

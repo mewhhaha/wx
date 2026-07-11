@@ -1,0 +1,7 @@
+# Workspace content search
+
+`Ctrl+Shift+F` opens the bounded workspace-content picker. Plain queries are literal; surrounding a query with `/` selects Unicode regular-expression mode. Searches use smart case by default: lowercase queries are case-insensitive, while any uppercase character makes the query case-sensitive.
+
+Hosts receive an abort signal, literal/regex mode, case policy, optional include/exclude globs, and a clamped result limit. Results use zero-based physical lines and UTF-16 columns, matching editor offsets. Node and Deno filesystem hosts skip known binary extensions and NUL-containing files, honor Git file lists when available (therefore repository ignore rules), remain inside the configured project root, and use the same bounded in-process fallback when `rg` is unavailable. The development bridge exposes a fixed JSON route rather than arbitrary process execution; it also falls back to a bounded, ignore-aware in-process walker when `rg` is not installed. The production playground searches its in-memory files.
+
+In the picker, `Enter` opens the exact match in the current pane. `H`, `V`, and `B` open it in a horizontal split, vertical split, or background buffer. Current/split navigation records a cross-file jump, so `Ctrl+o` and `Ctrl+i` return to and from the match. Starting another query aborts the previous host request, and only the newest picker generation may publish results.

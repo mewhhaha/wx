@@ -63,6 +63,7 @@ interface CreateLanguageHighlightsRuntimeOptions {
 export function createLanguageHighlightsRuntime(options: CreateLanguageHighlightsRuntimeOptions): LanguageHighlightsRuntime {
   let inFlightVisibleHighlightRequestKey: string | null = null;
   let inFlightVisibleHighlightRequest: Promise<void> | null = null;
+  let highlightGeneration = 1;
 
   const syncVisibleLanguageDecorations = (): boolean => {
     const state = options.context.getState();
@@ -293,10 +294,17 @@ export function createLanguageHighlightsRuntime(options: CreateLanguageHighlight
     presentation.language.highlightCoverage = nextCoverage;
   };
 
-  const refreshHighlights = async (viewport: EditorLineRange, force = false): Promise<void> => {
+  const refreshHighlights = async (
+    viewport: EditorLineRange,
+    force = false,
+    expectedRevision = options.context.getSnapshot().revision,
+    isCurrent: () => boolean = () => true
+  ): Promise<void> => {
     const snapshot = options.context.getSnapshot();
     const presentation = options.context.getPresentation();
     const highlighter = options.getHighlighter(presentation);
+    const serviceGeneration = presentation.language.serviceStatus.generation;
+    const requestGeneration = highlightGeneration;
 
     if (!highlighter || presentation.language.languageRevision < 0) {
       if (presentation.language.highlightCache.size > 0) {
@@ -309,7 +317,7 @@ export function createLanguageHighlightsRuntime(options: CreateLanguageHighlight
       return;
     }
 
-    if (presentation.language.languageRevision !== snapshot.revision) {
+    if (snapshot.revision !== expectedRevision || presentation.language.languageRevision !== expectedRevision || !isCurrent()) {
       return;
     }
 
@@ -323,9 +331,29 @@ export function createLanguageHighlightsRuntime(options: CreateLanguageHighlight
     }
 
     const requestId = ++presentation.language.highlightRequestId;
-    const next = await highlighter.getHighlights(viewport, presentation.language.languageRevision);
+    const stats = presentation.language.work.highlights;
+    stats.requested += 1;
+    stats.started += 1;
+    stats.inFlight += 1;
+    stats.maxQueueDepth = Math.max(stats.maxQueueDepth, stats.inFlight + stats.queued);
+    let next: HighlightSpan[];
+    try {
+      next = await highlighter.getHighlights(viewport, expectedRevision);
+    } finally {
+      stats.inFlight = Math.max(0, stats.inFlight - 1);
+      stats.completed += 1;
+    }
 
-    if (requestId !== presentation.language.highlightRequestId) {
+    const nextPresentation = options.context.getPresentation();
+    if (
+      requestId !== nextPresentation.language.highlightRequestId ||
+      requestGeneration !== highlightGeneration ||
+      serviceGeneration !== nextPresentation.language.serviceStatus.generation ||
+      expectedRevision !== options.context.getSnapshot().revision ||
+      nextPresentation.language.languageRevision !== expectedRevision ||
+      !isCurrent()
+    ) {
+      stats.staleDropped += 1;
       return;
     }
 
@@ -368,7 +396,7 @@ export function createLanguageHighlightsRuntime(options: CreateLanguageHighlight
     }
 
     inFlightVisibleHighlightRequestKey = requestKey;
-    inFlightVisibleHighlightRequest = refreshHighlights(viewport, force).finally(() => {
+    inFlightVisibleHighlightRequest = refreshHighlights(viewport, force, snapshot.revision).finally(() => {
       if (inFlightVisibleHighlightRequestKey === requestKey) {
         inFlightVisibleHighlightRequestKey = null;
         inFlightVisibleHighlightRequest = null;
@@ -380,18 +408,22 @@ export function createLanguageHighlightsRuntime(options: CreateLanguageHighlight
 
   const syncLanguageHighlights = async (
     runtimeOptions: {
-      changes?: readonly TextChange[];
+      target?: ReturnType<LanguageRuntimeContext["getSnapshot"]>;
+      updates?: readonly { document: ReturnType<LanguageRuntimeContext["getSnapshot"]>; changes: readonly TextChange[] }[];
       forceDocumentSync?: boolean;
       highlightViewport?: EditorLineRange;
       refreshHighlights?: boolean;
+      isCurrent?: () => boolean;
     } = {}
   ) => {
-    const snapshot = options.context.getSnapshot();
+    const snapshot = runtimeOptions.target ?? options.context.getSnapshot();
     const presentation = options.context.getPresentation();
-    const changes = runtimeOptions.changes ?? [];
+    const updates = runtimeOptions.updates ?? [];
+    const changes = updates.flatMap((entry) => entry.changes);
     const forceDocumentSync = runtimeOptions.forceDocumentSync ?? false;
     const shouldRefreshHighlights = runtimeOptions.refreshHighlights ?? true;
     const highlightViewport = runtimeOptions.highlightViewport ?? options.context.getVisibleHighlightViewport();
+    const isCurrent = runtimeOptions.isCurrent ?? (() => true);
 
     if (changes.length > 0) {
       invalidateHighlightViewport(highlightViewport);
@@ -404,19 +436,29 @@ export function createLanguageHighlightsRuntime(options: CreateLanguageHighlight
 
     if (forceDocumentSync || presentation.language.languageRevision < 0) {
       await highlighter.open(snapshot);
+      if (!isCurrent()) return;
       presentation.language.languageRevision = snapshot.revision;
       presentation.language.lastHighlightedRevision = -1;
-      await refreshHighlights(highlightViewport, true);
-    } else if (changes.length > 0) {
-      await highlighter.update(snapshot, changes);
+      await refreshHighlights(highlightViewport, true, snapshot.revision, isCurrent);
+    } else if (updates.length > 0) {
+      if (updates.length === 1) {
+        await highlighter.update(updates[0]!.document, updates[0]!.changes);
+      } else if (highlighter.updateBatches) {
+        await highlighter.updateBatches(updates);
+      } else {
+        // Providers without an edit-batch capability receive one latest full
+        // sync instead of an unbounded series of full-document updates.
+        await highlighter.open(snapshot);
+      }
+      if (!isCurrent()) return;
       presentation.language.languageRevision = snapshot.revision;
       presentation.language.lastHighlightedRevision = -1;
-      await refreshHighlights(highlightViewport, true);
+      await refreshHighlights(highlightViewport, true, snapshot.revision, isCurrent);
     } else if (presentation.language.languageRevision === snapshot.revision) {
-      await refreshHighlights(highlightViewport, false);
+      await refreshHighlights(highlightViewport, false, snapshot.revision, isCurrent);
     }
 
-    await ensureVisibleHighlightCoverage(false);
+    if (isCurrent()) await ensureVisibleHighlightCoverage(false);
   };
 
   const handleDocumentChange = (previousState: EditorState, nextState: EditorState, changes: readonly TextChange[]) => {
@@ -456,6 +498,7 @@ export function createLanguageHighlightsRuntime(options: CreateLanguageHighlight
 
   const resetHighlightTracking = () => {
     const presentation = options.context.getPresentation();
+    highlightGeneration += 1;
     presentation.language.languageRevision = -1;
     presentation.language.lastHighlightedRevision = -1;
     presentation.language.highlightRequestId = 0;

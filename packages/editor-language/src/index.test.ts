@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createTextDocument } from "@mewhhaha/wx-core";
 
 import { createLanguageRegistry, languageProviderToServices, type LanguageProvider } from "./index";
 
@@ -97,6 +98,9 @@ describe("language registry", () => {
       },
       async expandSelection() {
         return null;
+      },
+      async getIndentation({ document }) {
+        return { revision: document.revision, status: "ok", indent: 1 };
       }
     };
 
@@ -104,5 +108,8 @@ describe("language registry", () => {
 
     expect(await services?.highlighter?.getHighlights({ fromLine: 0, toLine: 0 }, 1)).toEqual([]);
     expect(services?.syntaxSelector?.expandSelection).toBe(provider.expandSelection);
+    const snapshot = { revision: 3, doc: createTextDocument("value") };
+    expect(await services?.indentation?.getIndentation({ document: snapshot, offset: 0, action: "enter" }))
+      .toEqual({ revision: 3, status: "ok", indent: 1 });
   });
 });

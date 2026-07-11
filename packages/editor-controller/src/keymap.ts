@@ -195,7 +195,7 @@ export function commandForInsertMode(key: string): Command | null {
     case "Enter":
       return insertNewline;
     default:
-      return key.length === 1 ? insertText(key) : null;
+      return [...key].length === 1 ? insertText(key) : null;
   }
 }
 

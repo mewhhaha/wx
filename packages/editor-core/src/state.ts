@@ -7,6 +7,11 @@ import {
 } from "./document";
 
 export type EditorMode = "normal" | "insert" | "visual";
+export type RegisterKind = "characterwise" | "linewise";
+
+export function inferRegisterKind(value: string | null): RegisterKind {
+  return value?.endsWith("\n") ? "linewise" : "characterwise";
+}
 
 export interface SelectionRange {
   anchor: number;
@@ -36,6 +41,7 @@ export interface Transaction {
   mode?: EditorMode;
   insertSession?: InsertSession | null;
   yankBuffer?: string | null;
+  yankKind?: RegisterKind;
   lastDeletedFrom?: number | null;
   effects?: readonly EditorEffect[];
 }
@@ -46,6 +52,7 @@ export interface EditorState {
   mode: EditorMode;
   revision: number;
   yankBuffer: string | null;
+  yankKind: RegisterKind;
   lastDeletedFrom: number | null;
   language?: string;
   theme?: string;
@@ -67,6 +74,7 @@ export interface EditorViewState {
   selection: SelectionSet;
   mode: EditorMode;
   yankBuffer: string | null;
+  yankKind: RegisterKind;
   lastDeletedFrom: number | null;
   insertSession: InsertSession | null;
 }
@@ -196,6 +204,7 @@ export function createEditorState(options: {
     mode,
     revision: 0,
     yankBuffer: null,
+    yankKind: "characterwise",
     lastDeletedFrom: null,
     language: options.language,
     theme: options.theme,
@@ -222,6 +231,7 @@ export function splitEditorState(state: EditorState): {
       selection: createSelectionSet(state.selection.ranges, state.selection.primaryIndex),
       mode: state.mode,
       yankBuffer: state.yankBuffer,
+      yankKind: state.yankKind,
       lastDeletedFrom: state.lastDeletedFrom,
       insertSession: state.insertSession ? { ...state.insertSession } : null
     }
@@ -241,6 +251,7 @@ export function combineEditorState(
     selection: normalizeSelection(buffer.doc, view.selection, view.mode),
     mode: view.mode,
     yankBuffer: view.yankBuffer,
+    yankKind: view.yankKind,
     lastDeletedFrom: view.lastDeletedFrom,
     insertSession: view.mode === "insert" ? view.insertSession : null,
     viewport
@@ -270,13 +281,18 @@ export function applyTransaction(state: EditorState, transaction: Transaction): 
         ? transaction.insertSession
         : mapInsertSession(state.insertSession, changes)
       : null;
+  const nextYankBuffer = transaction.yankBuffer !== undefined ? transaction.yankBuffer : state.yankBuffer;
+  const nextYankKind =
+    transaction.yankKind ??
+    (transaction.yankBuffer !== undefined ? inferRegisterKind(transaction.yankBuffer) : state.yankKind);
 
   return {
     ...state,
     doc: nextDoc,
     selection: normalizeSelection(nextDoc, nextSelection, nextMode),
     mode: nextMode,
-    yankBuffer: transaction.yankBuffer ?? state.yankBuffer,
+    yankBuffer: nextYankBuffer,
+    yankKind: nextYankKind,
     lastDeletedFrom: transaction.lastDeletedFrom !== undefined ? transaction.lastDeletedFrom : state.lastDeletedFrom,
     insertSession: nextInsertSession,
     revision: state.revision + 1

@@ -35,6 +35,36 @@ export interface LanguageDocumentSnapshot {
   doc: TextDocument;
 }
 
+/** Serializable editor indentation preferences. `indentUnit` is either a tab or 1–16 spaces. */
+export interface IndentationConfiguration {
+  indentUnit: "\t" | string;
+  tabWidth: number;
+  guideWidth: number;
+  lineEnding?: "\n" | "\r\n";
+}
+
+/** A best-effort answer. Providers must return this instead of allowing parser errors into editing. */
+export interface IndentationResult {
+  revision: number;
+  status: "ok" | "stale" | "incomplete" | "error";
+  /** Absolute syntax indentation depth at the requested insertion point. */
+  indent?: number;
+  /** Remove one or more indentation levels at the requested insertion point. */
+  outdent?: number;
+  /** Absolute visual column requested by an @align capture. */
+  alignColumn?: number;
+}
+
+/** Optional, revision-aware syntax indentation service. Non-`ok` answers use core's plain fallback. */
+export interface IndentationProvider {
+  getIndentation(context: {
+    document: LanguageDocumentSnapshot;
+    offset: number;
+    action: "enter" | "open-below" | "open-above";
+    signal?: AbortSignal;
+  }): Promise<IndentationResult>;
+}
+
 export interface SyntaxSelectionRange {
   from: number;
   to: number;
@@ -183,6 +213,24 @@ export interface CommentToggler {
   toggleLineComments(context: { document: LanguageDocumentSnapshot; selection: SyntaxSelectionRange }): Promise<readonly TextChange[]>;
 }
 
+export type EditorLanguageServiceState = "starting" | "ready" | "failed" | "destroying" | "destroyed";
+export type EditorLanguageServiceOwner = "external" | "controller" | "view";
+
+/**
+ * Optional lifecycle contract for stateful language-service bundles.
+ *
+ * Ownership is explicit so a view never terminates a worker supplied by a
+ * controller or shared by another view. `external` is the safe default.
+ */
+export interface EditorLanguageServiceLifecycle {
+  readonly state: EditorLanguageServiceState;
+  readonly error?: Error | null;
+  readonly owner?: EditorLanguageServiceOwner;
+  whenReady?(): Promise<void>;
+  destroy(): Promise<void> | void;
+  recreate?(): EditorLanguageServices | Promise<EditorLanguageServices>;
+}
+
 export type SyntaxTextobjectMode = "around" | "inside";
 
 export interface SyntaxTextobjectProvider {
@@ -215,6 +263,8 @@ export interface EditorLanguageServices {
   comments?: CommentToggler;
   syntaxTextobjects?: SyntaxTextobjectProvider;
   syntaxNavigation?: SyntaxNavigationProvider;
+  indentation?: IndentationProvider;
+  lifecycle?: EditorLanguageServiceLifecycle;
 }
 
 export type EditorLanguageServiceInput = EditorLanguageServices | readonly EditorLanguageServices[];
@@ -241,7 +291,7 @@ export interface LanguageRegistry {
 /**
  * @deprecated Use EditorLanguageServices directly.
  */
-export interface LanguageProvider extends Partial<SyntaxSelector> {
+export interface LanguageProvider extends Partial<SyntaxSelector>, Partial<IndentationProvider> {
   open(document: LanguageDocumentSnapshot): Promise<void>;
   update(document: LanguageDocumentSnapshot, changes: readonly TextChange[]): Promise<void>;
   getHighlights?(lines: EditorLineRange, revision: number): Promise<HighlightSpan[]>;
@@ -254,7 +304,7 @@ export function languageProviderToServices(provider: LanguageProvider | null): E
     return null;
   }
 
-  const { expandSelection, shrinkSelection } = provider;
+  const { expandSelection, shrinkSelection, getIndentation } = provider;
   const highlighter: Highlighter = {
     open(document) {
       return provider.open(document);
@@ -280,7 +330,8 @@ export function languageProviderToServices(provider: LanguageProvider | null): E
 
   return {
     highlighter,
-    syntaxSelector: expandSelection || shrinkSelection ? { expandSelection, shrinkSelection } : undefined
+    syntaxSelector: expandSelection || shrinkSelection ? { expandSelection, shrinkSelection } : undefined,
+    indentation: getIndentation ? { getIndentation: getIndentation.bind(provider) } : undefined
   };
 }
 

@@ -1,11 +1,17 @@
 {
+  "unstable": ["sloppy-imports"],
   "workspace": [
     "./packages/editor-core",
     "./packages/editor-language",
     "./packages/editor-layout",
     "./packages/editor-theme",
     "./packages/editor-controller",
-    "./packages/editor-view-dom",
-    "./packages/editor-element"
-  ]
+    "./packages/editor-view-ansi"
+  ],
+  "tasks": {
+    "check": "deno check --conditions development packages/editor-core/src/index.ts packages/editor-language/src/index.ts packages/editor-layout/src/index.ts packages/editor-theme/src/index.ts packages/editor-controller/src/index.ts packages/editor-tree-sitter/src/deno.ts packages/editor-view-ansi/src/deno-cli.ts",
+    "test": "deno test --conditions development --allow-read packages/editor-tree-sitter/src/denoWorker.deno.ts && deno test --conditions development --allow-read --allow-write --allow-run=git packages/editor-view-ansi/src/deno-host.deno.ts packages/editor-view-ansi/src/deno-config.deno.ts && deno run --conditions development --allow-read --allow-write --allow-run packages/editor-view-ansi/scripts/deno-install-smoke.ts",
+    "terminal:pty-smoke": "deno run --conditions development --allow-read --allow-write --allow-run --allow-env packages/editor-view-ansi/scripts/deno-pty-smoke.ts",
+    "wx": "deno run --conditions development --allow-read --allow-write --allow-run=git packages/editor-view-ansi/src/deno-cli.ts"
+  }
 }

@@ -77,6 +77,10 @@ interface SceneLangExports extends WebAssembly.Exports {
   last_result_len(): number;
 }
 
+export class SceneLangAbiError extends Error {
+  constructor(message: string, readonly code: "exports" | "status" | "protocol" | "memory" | "trap" | "host") { super(message); this.name = "SceneLangAbiError"; }
+}
+
 export interface SceneLangWasm {
   compile(source: string): ShaderCompileResult;
   diagnostics(source: string): SceneDiagnostic[];
@@ -109,6 +113,7 @@ async function loadWasmBytes(options: SceneLangWasmOptions): Promise<Uint8Array>
 }
 
 function readBytesFromMemory(memory: WebAssembly.Memory, pointer: number, length: number): Uint8Array {
+  if (!Number.isSafeInteger(pointer) || !Number.isSafeInteger(length) || pointer < 0 || length < 0 || pointer + length > memory.buffer.byteLength) throw new SceneLangAbiError("Shader language Wasm returned an out-of-bounds result.", "memory");
   const view = new Uint8Array(memory.buffer, pointer, length);
   return new Uint8Array(view);
 }
@@ -117,11 +122,28 @@ function instantiateSceneLanguage(bytes: Uint8Array): Promise<SceneLangExports> 
   const moduleBytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   return WebAssembly.compile(moduleBytes)
     .then((module) => WebAssembly.instantiate(module, {}))
-    .then((instance) => instance.exports as SceneLangExports);
+    .then((instance) => validateExports(instance.exports));
+}
+
+function validateExports(value: WebAssembly.Exports): SceneLangExports {
+  const names = ["memory", "alloc", "dealloc", "scene_compile", "scene_diagnostics_json", "scene_hover_json", "scene_format_json", "scene_code_actions_json", "scene_highlights_json", "last_result_ptr", "last_result_len"] as const;
+  for (const name of names) {
+    if (!(name in value) || (name === "memory" ? !(value[name] instanceof WebAssembly.Memory) : typeof value[name] !== "function")) {
+      throw new SceneLangAbiError(`Missing or invalid shader language export: ${name}`, "exports");
+    }
+  }
+  return value as SceneLangExports;
 }
 
 function parseJson<T>(bytes: Uint8Array): T {
-  return JSON.parse(decoder.decode(bytes)) as T;
+  try {
+    return JSON.parse(decoder.decode(bytes)) as T;
+  } catch (cause) {
+    throw new SceneLangAbiError(
+      `Shader language Wasm returned malformed JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
+      "protocol"
+    );
+  }
 }
 
 function clampUtf16Offset(source: string, offset: number): number {
@@ -217,17 +239,30 @@ function createSceneLangRuntime(exports: SceneLangExports): SceneLangWasm {
     const pointer = exports.alloc(sourceBytes.length);
 
     try {
+      if (!Number.isSafeInteger(pointer) || pointer < 0 || pointer + sourceBytes.length > exports.memory.buffer.byteLength) throw new SceneLangAbiError("Shader language Wasm returned an invalid allocation.", "memory");
       new Uint8Array(exports.memory.buffer, pointer, sourceBytes.length).set(sourceBytes);
       const fn = exports[name];
 
       if (typeof fn !== "function") {
-        throw new Error(`Missing shader language export: ${String(name)}`);
+        throw new SceneLangAbiError(`Missing shader language export: ${String(name)}`, "exports");
       }
 
-      const status = (fn as (...args: number[]) => number)(pointer, sourceBytes.length, ...extraArgs);
+      let status: number;
+      try {
+        status = (fn as (...args: number[]) => number)(pointer, sourceBytes.length, ...extraArgs);
+      } catch (cause) {
+        if (cause instanceof SceneLangAbiError) throw cause;
+        if (cause instanceof WebAssembly.RuntimeError) {
+          throw new SceneLangAbiError(`Shader language Wasm trapped: ${cause.message}`, "trap");
+        }
+        throw new SceneLangAbiError(
+          `Shader language Wasm host call failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          "host"
+        );
+      }
 
       if (status !== 0) {
-        throw new Error(`Shader language Wasm call ${String(name)} failed with status ${status}.`);
+        throw new SceneLangAbiError(`Shader language Wasm call ${String(name)} failed with status ${status}.`, "status");
       }
 
       return readBytesFromMemory(exports.memory, exports.last_result_ptr(), exports.last_result_len());
@@ -287,5 +322,7 @@ export const __internal = {
   convertChangesToUtf16,
   convertRangeToUtf16,
   utf16OffsetToUtf8ByteOffset,
-  utf8ByteOffsetToUtf16Offset
+  utf8ByteOffsetToUtf16Offset,
+  validateExports,
+  createSceneLangRuntime
 };

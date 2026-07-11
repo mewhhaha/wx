@@ -14,6 +14,7 @@ import {
   getSelectionOffsetsForRange,
   getSelectionRanges,
   type EditorState,
+  type RegisterKind,
   type SelectionRange,
   type SelectionSet,
   type Transaction
@@ -296,6 +297,52 @@ export const appendInsertMode: Command = (state, dispatch, context) => {
   return true;
 };
 
+/** Enter insert mode at the first non-whitespace character of each line.
+ * Whitespace-only (including empty) lines use their line start. */
+export const insertFirstNonWhitespace: Command = (state, dispatch, context) => {
+  if (state.mode === "insert") return true;
+  const nextSelection = createSelectionSet(
+    state.selection.ranges.map((range) => {
+      const active = getActiveCharacterOffsetForRange(state, range);
+      const line = state.doc.lineAt(state.doc.positionAt(active).line);
+      const column = line.text.search(/\S/);
+      const offset = line.start + (column < 0 ? 0 : column);
+      return { anchor: offset, head: offset, preferredColumn: null };
+    }),
+    state.selection.primaryIndex
+  );
+  dispatch({
+    mode: "insert",
+    selection: nextSelection,
+    insertSession: { restoreOffset: getActiveCharacterOffset(state), restoreAffinity: "right", moved: false }
+  });
+  context.requestFocus?.();
+  return true;
+};
+
+/** Enter insert mode at the end of each selected line (before its newline). */
+export const appendInsertModeAtLineEnd: Command = (state, dispatch, context) => {
+  if (state.mode === "insert") return true;
+  const nextSelection = createSelectionSet(
+    state.selection.ranges.map((range) => {
+      const active = getActiveCharacterOffsetForRange(state, range);
+      const line = state.doc.lineAt(state.doc.positionAt(active).line);
+      return { anchor: line.end, head: line.end, preferredColumn: null };
+    }),
+    state.selection.primaryIndex
+  );
+  dispatch({
+    mode: "insert",
+    selection: nextSelection,
+    insertSession: { restoreOffset: getActiveCharacterOffset(state), restoreAffinity: "left", moved: false }
+  });
+  context.requestFocus?.();
+  return true;
+};
+
+export const enterInsertModeAtFirstNonWhitespace = insertFirstNonWhitespace;
+export const appendInsertModeLineEnd = appendInsertModeAtLineEnd;
+
 function openLine(state: EditorState, dispatch: EditorDispatch, context: CommandContext, position: "above" | "below"): boolean {
   if (state.mode === "insert") {
     return true;
@@ -344,7 +391,12 @@ function openLine(state: EditorState, dispatch: EditorDispatch, context: Command
     );
   const nextSelection = createSelectionSet(
     insertOffsets.ranges.map((range) => {
-      const cursor = mapOffsetThroughChanges(range.head, changes, "left");
+      const opensAfterUnterminatedEof =
+        position === "below" &&
+        range.head === state.doc.length &&
+        state.doc.length > 0 &&
+        state.doc.charAt(state.doc.length - 1) !== "\n";
+      const cursor = mapOffsetThroughChanges(range.head, changes, opensAfterUnterminatedEof ? "right" : "left");
       return {
         anchor: cursor,
         head: cursor,
@@ -800,6 +852,16 @@ export const gotoFileStart: Command = (state, dispatch) => {
   return gotoTargets(state, dispatch, () => 0);
 };
 
+/** Moves every selection head to a clamped one-based physical line. */
+export function gotoLine(lineNumber: number): Command {
+  return (state, dispatch) => {
+    if (state.doc.length === 0) return true;
+    const requested = Number.isFinite(lineNumber) ? Math.trunc(lineNumber) : 1;
+    const line = state.doc.lineAt(Math.max(0, Math.min(state.doc.lineCount - 1, requested - 1)));
+    return gotoTargets(state, dispatch, () => line.start);
+  };
+}
+
 export const gotoLastLine: Command = (state, dispatch) => {
   if (state.doc.length === 0) {
     return true;
@@ -1118,6 +1180,25 @@ function linewisePasteOffset(state: EditorState): number {
   return newlineOffset < state.doc.length && state.doc.text[newlineOffset] === "\n" ? newlineOffset + 1 : state.doc.length;
 }
 
+function linewisePasteBeforeOffset(state: EditorState, range: SelectionRange): number {
+  if (state.doc.length === 0) return 0;
+  const selection = getSelectionOffsetsForRange(state, range);
+  return state.doc.lineAt(state.doc.positionAt(selection.from).line).start;
+}
+
+function linewisePasteText(
+  state: EditorState,
+  insertAt: number,
+  text: string,
+  position: "before" | "after"
+): string {
+  if (state.doc.length === 0 || text.length === 0) return text;
+  if (position === "before" || insertAt < state.doc.length) {
+    return text.endsWith("\n") ? text : `${text}\n`;
+  }
+  return state.doc.charAt(state.doc.length - 1) === "\n" ? text : `\n${text}`;
+}
+
 function lineSelectionHead(doc: EditorState["doc"], lineIndex: number): number {
   const line = doc.lineAt(lineIndex);
   const newlineOffset = line.end;
@@ -1132,6 +1213,24 @@ function lineSelectionHead(doc: EditorState["doc"], lineIndex: number): number {
 
 function lineSelectionEndExclusive(doc: EditorState["doc"], lineIndex: number): number {
   return Math.min(doc.length, lineSelectionHead(doc, lineIndex) + 1);
+}
+
+function registerKindForSelections(
+  state: EditorState,
+  selections: readonly { from: number; to: number }[]
+): RegisterKind {
+  if (state.doc.length === 0 || selections.length === 0) return "characterwise";
+  return selections.every((selection) => {
+    if (selection.to <= selection.from) return false;
+    const firstLine = state.doc.positionAt(selection.from).line;
+    const lastLine = state.doc.positionAt(Math.max(selection.from, selection.to - 1)).line;
+    return (
+      selection.from === state.doc.lineAt(firstLine).start &&
+      selection.to === lineSelectionEndExclusive(state.doc, lastLine)
+    );
+  })
+    ? "linewise"
+    : "characterwise";
 }
 
 export const selectLineBelow: Command = (state, dispatch) => {
@@ -1171,25 +1270,31 @@ function applySingleChange(state: EditorState, dispatch: EditorDispatch, change:
   return true;
 }
 
+function deletionChanges(selections: readonly { from: number; to: number }[]): TextChange[] {
+  const sorted = selections
+    .filter((selection) => selection.to > selection.from)
+    .sort((left, right) => left.from - right.from || left.to - right.to);
+  const merged: TextChange[] = [];
+
+  for (const selection of sorted) {
+    const previous = merged[merged.length - 1];
+    if (previous && selection.from <= previous.to) {
+      previous.to = Math.max(previous.to, selection.to);
+    } else {
+      merged.push({ from: selection.from, to: selection.to, insert: "" });
+    }
+  }
+
+  return merged.sort((left, right) => right.from - left.from || right.to - left.to);
+}
+
 function selectionAfterDeletion(
-  doc: EditorState["doc"],
   changes: readonly TextChange[],
   froms: readonly number[],
   primaryIndex: number
 ): SelectionSet {
-  if (doc.length === 0) {
-    return createCollapsedSelectionSet(froms.map(() => 0), primaryIndex);
-  }
-
-  return createSelectionSet(
-    froms.map((from) => {
-      const cursor = Math.max(0, Math.min(mapOffsetThroughChanges(from, changes, "left"), doc.length - 1));
-      return {
-        anchor: cursor,
-        head: cursor,
-        preferredColumn: null
-      };
-    }),
+  return createCollapsedSelectionSet(
+    froms.map((from) => mapOffsetThroughChanges(from, changes, "left")),
     primaryIndex
   );
 }
@@ -1198,6 +1303,12 @@ export function insertText(text: string): Command {
   return (state, dispatch) => {
     const changes = state.selection.ranges
       .map((range) => changeAtCursorForRange(state, range, text))
+      .filter(
+        (change, index, all) =>
+          all.findIndex(
+            (other) => other.from === change.from && other.to === change.to && other.insert === change.insert
+          ) === index
+      )
       .sort((left, right) => right.from - left.from || right.to - left.to);
     const baseOffsets = state.selection.ranges.map((range) => range.head);
     dispatch({
@@ -1309,34 +1420,26 @@ export const deleteSelection: Command = (state, dispatch) => {
     return true;
   }
 
-  const deletedText = selections
-    .filter((selection) => selection.to > selection.from)
-    .map((selection) => state.doc.slice(selection.from, selection.to))
+  const changes = deletionChanges(selections);
+  const deletedText = [...changes]
+    .sort((left, right) => left.from - right.from || left.to - right.to)
+    .map((change) => state.doc.slice(change.from, change.to))
     .join("\n");
-  const changes = selections
-    .filter((selection) => selection.to > selection.from)
-    .map(
-      (selection): TextChange => ({
-        from: selection.from,
-        to: selection.to,
-        insert: ""
-      })
-    )
-    .sort((left, right) => right.from - left.from || right.to - left.to);
-  const nextDoc = state.doc.applyChanges(changes);
+  const mappedSelection = selectionAfterDeletion(
+    changes,
+    selections.map((selection) => selection.from),
+    state.selection.primaryIndex
+  );
+  const mappedPrimaryFrom = mappedSelection.ranges[mappedSelection.primaryIndex]?.head ?? 0;
 
   dispatch({
     changes,
-    selection: selectionAfterDeletion(
-      nextDoc,
-      changes,
-      selections.map((selection) => selection.from),
-      state.selection.primaryIndex
-    ),
+    selection: mappedSelection,
     mode: "normal",
     insertSession: null,
     yankBuffer: deletedText,
-    lastDeletedFrom: selections[state.selection.primaryIndex]?.from ?? null
+    yankKind: registerKindForSelections(state, selections),
+    lastDeletedFrom: mappedPrimaryFrom
   });
   return true;
 };
@@ -1347,36 +1450,30 @@ export const changeSelection: Command = (state, dispatch, context) => {
     return true;
   }
 
-  const deletedText = selections
-    .filter((selection) => selection.to > selection.from)
-    .map((selection) => state.doc.slice(selection.from, selection.to))
+  const changes = deletionChanges(selections);
+  const deletedText = [...changes]
+    .sort((left, right) => left.from - right.from || left.to - right.to)
+    .map((change) => state.doc.slice(change.from, change.to))
     .join("\n");
-  const changes = selections
-    .filter((selection) => selection.to > selection.from)
-    .map(
-      (selection): TextChange => ({
-        from: selection.from,
-        to: selection.to,
-        insert: ""
-      })
-    )
-    .sort((left, right) => right.from - left.from || right.to - left.to);
-  const primaryFrom = selections[state.selection.primaryIndex]?.from ?? 0;
+  const mappedSelection = selectionAfterDeletion(
+    changes,
+    selections.map((selection) => selection.from),
+    state.selection.primaryIndex
+  );
+  const mappedPrimaryFrom = mappedSelection.ranges[mappedSelection.primaryIndex]?.head ?? 0;
 
   dispatch({
     changes,
-    selection: createCollapsedSelectionSet(
-      selections.map((selection) => selection.from),
-      state.selection.primaryIndex
-    ),
+    selection: mappedSelection,
     mode: "insert",
     insertSession: {
-      restoreOffset: primaryFrom,
+      restoreOffset: mappedPrimaryFrom,
       restoreAffinity: "left",
       moved: false
     },
     yankBuffer: deletedText,
-    lastDeletedFrom: primaryFrom
+    yankKind: registerKindForSelections(state, selections),
+    lastDeletedFrom: mappedPrimaryFrom
   });
   context.requestFocus?.();
   return true;
@@ -1384,10 +1481,14 @@ export const changeSelection: Command = (state, dispatch, context) => {
 
 export const yankSelection: Command = (state, dispatch) => {
   const selections = getSelectionRanges(state);
-  const yanked = selections.map((selection) => state.doc.slice(selection.from, selection.to)).join("\n");
+  const yanked = deletionChanges(selections)
+    .sort((left, right) => left.from - right.from || left.to - right.to)
+    .map((selection) => state.doc.slice(selection.from, selection.to))
+    .join("\n");
 
   dispatch({
     yankBuffer: yanked,
+    yankKind: registerKindForSelections(state, selections),
     lastDeletedFrom: null,
     mode: state.mode === "visual" ? "normal" : state.mode,
     selection:
@@ -1418,7 +1519,7 @@ export const pasteAfter: Command = (state, dispatch) => {
   const insertions = state.selection.ranges.map((range, index) => {
     const selection = getSelectionOffsetsForRange(state, range);
     const insertAt =
-      yanked.endsWith("\n")
+      state.yankKind === "linewise"
         ? linewisePasteOffset({
             ...state,
             selection: createSelectionSet([range])
@@ -1428,10 +1529,13 @@ export const pasteAfter: Command = (state, dispatch) => {
           : selection.to;
     return {
       from: insertAt,
-      insert: yanked
+      insert: state.yankKind === "linewise"
+        ? linewisePasteText(state, insertAt, yanked, "after")
+        : yanked
     };
   });
   const changes = insertions
+    .filter((insertion, index, all) => all.findIndex((other) => other.from === insertion.from) === index)
     .map(
       (insertion): TextChange => ({
         from: insertion.from,
@@ -1442,6 +1546,46 @@ export const pasteAfter: Command = (state, dispatch) => {
     .sort((left, right) => right.from - left.from || right.to - left.to);
   const nextDoc = state.doc.applyChanges(changes);
 
+  dispatch({
+    changes,
+    selection: selectionForInsertedText(nextDoc, changes, insertions, state.selection.primaryIndex),
+    mode: "normal",
+    lastDeletedFrom: null
+  });
+  return true;
+};
+
+export const pasteBefore: Command = (state, dispatch) => {
+  const yanked = state.yankBuffer;
+  if (!yanked) return true;
+
+  const insertions = state.selection.ranges.map((range, index) => {
+    const selection = getSelectionOffsetsForRange(state, range);
+    const insertAt = state.yankKind === "linewise"
+      ? linewisePasteBeforeOffset(state, range)
+      : state.lastDeletedFrom !== null && index === state.selection.primaryIndex
+        ? state.lastDeletedFrom
+        : selection.from;
+    return {
+      from: insertAt,
+      insert: state.yankKind === "linewise"
+        ? linewisePasteText(state, insertAt, yanked, "before")
+        : yanked
+    };
+  });
+  const uniqueInsertions = insertions.filter(
+    (insertion, index, all) => all.findIndex((other) => other.from === insertion.from) === index
+  );
+  const changes = uniqueInsertions
+    .map(
+      (insertion): TextChange => ({
+        from: insertion.from,
+        to: insertion.from,
+        insert: insertion.insert
+      })
+    )
+    .sort((left, right) => right.from - left.from || right.to - left.to);
+  const nextDoc = state.doc.applyChanges(changes);
   dispatch({
     changes,
     selection: selectionForInsertedText(nextDoc, changes, insertions, state.selection.primaryIndex),

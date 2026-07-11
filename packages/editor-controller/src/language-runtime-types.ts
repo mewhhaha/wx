@@ -7,6 +7,7 @@ import type {
   EditorLineRange,
   EditorLocationTarget,
   EditorRenameChangeSet,
+  EditorSignatureHelp,
   EditorSymbol,
   HighlightSpan
 } from "@mewhhaha/wx-language";
@@ -23,6 +24,11 @@ export interface Snapshot {
   doc: EditorState["doc"];
 }
 
+export interface LanguageDocumentUpdate {
+  document: Snapshot;
+  changes: readonly TextChange[];
+}
+
 export interface LanguageRuntimeContext {
   getState(): EditorState;
   getPresentation(): EditorPresentationState;
@@ -37,15 +43,17 @@ export interface LanguageRuntimeContext {
 export interface LanguageHighlighter {
   open(snapshot: Snapshot): Promise<void>;
   update(snapshot: Snapshot, changes: readonly TextChange[]): Promise<void>;
+  /** Optional edit-only batch fast path for backpressured worker providers. */
+  updateBatches?(updates: readonly LanguageDocumentUpdate[]): Promise<void>;
   getHighlights(viewport: EditorLineRange, revision: number): Promise<HighlightSpan[]>;
 }
 
 export interface LanguageHoverSource {
-  hover(snapshot: Snapshot, offset: number): Promise<EditorHover | null>;
+  hover(snapshot: Snapshot, offset: number, signal?: AbortSignal): Promise<EditorHover | null>;
 }
 
 export interface LanguageDiagnosticsSource {
-  diagnostics(snapshot: Snapshot): Promise<readonly EditorDiagnostic[]>;
+  diagnostics(snapshot: Snapshot, signal?: AbortSignal): Promise<readonly EditorDiagnostic[]>;
 }
 
 export interface LanguageCodeActionSource {
@@ -57,7 +65,10 @@ export interface LanguageCodeActionSource {
 }
 
 export interface LanguageCompletionSource {
-  complete(document: Snapshot, offset: number): Promise<readonly EditorCompletionItem[]>;
+  complete(document: Snapshot, offset: number, signal?: AbortSignal): Promise<readonly EditorCompletionItem[]>;
+}
+export interface LanguageSignatureHelpSource {
+  signatureHelp(document: Snapshot, offset: number): Promise<readonly EditorSignatureHelp[]>;
 }
 
 export interface LanguageGotoSource {
@@ -107,6 +118,9 @@ export interface LanguageRuntime {
   acceptCompletion(index?: number): Promise<boolean>;
   moveCompletion(delta: number): boolean;
   dismissCompletion(): boolean;
+  requestSignatureHelp(): Promise<boolean>;
+  moveSignatureHelp(delta: number): boolean;
+  dismissSignatureHelp(): boolean;
   gotoTarget(kind: "definition" | "declaration" | "type-definition" | "implementation" | "references"): Promise<boolean>;
   renameSymbol(nextName: string): Promise<boolean>;
   openSymbols(kind: "document" | "workspace"): Promise<boolean>;
@@ -121,10 +135,12 @@ export interface LanguageHighlightsRuntime {
   resetHighlightTracking(): void;
   ensureVisibleHighlightCoverage(force?: boolean): Promise<void>;
   syncLanguageHighlights(options?: {
-    changes?: readonly TextChange[];
+    target?: Snapshot;
+    updates?: readonly LanguageDocumentUpdate[];
     forceDocumentSync?: boolean;
     highlightViewport?: EditorLineRange;
     refreshHighlights?: boolean;
+    isCurrent?: () => boolean;
   }): Promise<void>;
 }
 
@@ -150,6 +166,9 @@ export interface LanguageLspRuntime {
   acceptCompletion(index?: number): Promise<boolean>;
   moveCompletion(delta: number): boolean;
   dismissCompletion(): boolean;
+  requestSignatureHelp(): Promise<boolean>;
+  moveSignatureHelp(delta: number): boolean;
+  dismissSignatureHelp(): boolean;
   gotoTarget(kind: "definition" | "declaration" | "type-definition" | "implementation" | "references"): Promise<boolean>;
   renameSymbol(nextName: string): Promise<boolean>;
   openSymbols(kind: "document" | "workspace"): Promise<boolean>;
@@ -157,7 +176,7 @@ export interface LanguageLspRuntime {
 }
 
 export interface LineChangeHostServices {
-  getLineChanges?(context: { filePath: string; text: string }): Promise<readonly EditorLineChange[]>;
+  getLineChanges?(context: { filePath: string; text: string; signal?: AbortSignal }): Promise<readonly EditorLineChange[]>;
   readFile?(context: { filePath: string }): Promise<{ text: string } | string>;
   searchFiles?(context: {
     filePath: string;

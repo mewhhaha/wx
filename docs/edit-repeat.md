@@ -1,0 +1,9 @@
+# Essential edit parity and dot repeat
+
+The default normal-mode map exposes `I` (first non-whitespace), `A` (line end), `P` (paste before), and `.` (repeat the last completed edit). `Alt+.` remains repeat-last-motion. DOM, ANSI, and Deno resolve these commands through the same controller catalog and keymap.
+
+Registers carry `{ text, kind }`, where `kind` is `characterwise` or `linewise`; paste placement never guesses from text for unnamed or named registers. The system clipboard supplies text only, so `+` uses the compatibility rule that a terminal newline means linewise. A completed paste recipe captures its text, shape, direction, and original count, so later register or clipboard changes do not alter dot repeat.
+
+Insert recipes record the semantic entry operation (`i`, `a`, `I`, `A`, `c`, `o`, or `O`) and the common text produced at every active insertion span. Replay runs that operation against the current selections, inserts the captured text, and returns to normal mode. Duplicate insertion points are normalized and the source/current primary selection remains stable. Movement during insert, a deletion/replacement inside the pending insert, history restoration, buffer/pane replacement, or differing per-selection text cancels the incomplete capture; the previous completed recipe remains available. Failed async operations and non-edit commands likewise retain the previous completed recipe.
+
+A numeric prefix on paste is folded into one paste transaction. Dot replays that captured count. A numeric prefix on `.` is a replay multiplier; each iteration is one semantic edit and therefore one undo group. A single original insert/change/open session and each single dot replay are also one undo group. Undo/redo and buffer switches retain the last completed recipe, while a buffer switch cancels any insert capture that had not reached normal mode.

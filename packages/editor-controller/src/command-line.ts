@@ -2,8 +2,9 @@ import type {
   EditorCommandCompletionItem,
   EditorCommandLineState
 } from "./types";
+import { completeCommandCatalog } from "./command-catalog";
 
-const ROOT_COMMANDS: EditorCommandCompletionItem[] = [
+const BUILTIN_ROOT_COMMANDS: EditorCommandCompletionItem[] = [
   { label: "theme", detail: "switch theme" },
   { label: "write", detail: "save document" },
   { label: "reload", detail: "reload file from disk" },
@@ -26,9 +27,14 @@ const ROOT_COMMANDS: EditorCommandCompletionItem[] = [
   { label: "select-prev", detail: "add previous occurrence" },
   { label: "select-all", detail: "select all occurrences" },
   { label: "split-lines", detail: "split selections by line" },
+  { label: "split-regex", detail: "split selections by Unicode regular expression" },
   { label: "collapse-selections", detail: "keep only primary selection" },
   { label: "remove-selection", detail: "drop primary selection" }
 ];
+const compareCodeUnits = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
+const catalogPaletteItems = completeCommandCatalog.filter((entry) => entry.palette).flatMap((entry) => [entry.id, ...(entry.aliases ?? [])].map((label) => ({ label, detail: entry.description }))).sort((left, right) => compareCodeUnits(left.label, right.label));
+const catalogPaletteLabels = new Set(catalogPaletteItems.map((entry) => entry.label.toLowerCase()));
+const ROOT_COMMANDS: EditorCommandCompletionItem[] = [...BUILTIN_ROOT_COMMANDS, ...catalogPaletteItems.filter((entry) => !BUILTIN_ROOT_COMMANDS.some((builtin) => builtin.label === entry.label))];
 
 const QUESTION_ACTIONS: EditorCommandCompletionItem[] = [
   { label: "b", detail: "show buffers (g n / g p cycle)" },
@@ -102,6 +108,8 @@ export function hasRunnableCommandLineValue(rawValue: string, themeNames: readon
   const commandArgument = argumentParts.join(" ").trim();
   const normalizedArgument = commandArgument.toLowerCase();
 
+  if (!commandArgument && catalogPaletteLabels.has(value)) return true;
+
   if (
     [
       "format",
@@ -128,6 +136,7 @@ export function hasRunnableCommandLineValue(rawValue: string, themeNames: readon
       "select-prev",
       "select-all",
       "split-lines",
+      "split-regex",
       "collapse-selections",
       "remove-selection"
     ].includes(value)

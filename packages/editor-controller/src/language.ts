@@ -12,13 +12,16 @@ import type {
   LanguageGotoSource,
   LanguageHighlighter,
   LanguageHoverSource,
+  LanguageDocumentUpdate,
   LanguageRenameSource,
+  LanguageSignatureHelpSource,
   LanguageRuntime,
   LanguageRuntimeContext,
   LanguageSymbolSource,
-  LineChangeHostServices
+  LineChangeHostServices,
+  Snapshot
 } from "./language-runtime-types";
-import type { EditorBottomMessageState, EditorPresentationState } from "./types";
+import type { EditorBottomMessageState, EditorJumpEntry, EditorPresentationState } from "./types";
 import type { PickerActionItem, PickerSearchSource } from "./picker";
 
 function getHighlighter(presentation: EditorPresentationState): LanguageHighlighter | undefined {
@@ -39,6 +42,9 @@ function getCodeActionSource(presentation: EditorPresentationState): LanguageCod
 
 function getCompletionSource(presentation: EditorPresentationState): LanguageCompletionSource | undefined {
   return presentation.language.services.find((services) => services.completion)?.completion;
+}
+function getSignatureHelpSource(presentation: EditorPresentationState): LanguageSignatureHelpSource | undefined {
+  return presentation.language.services.find((services) => services.signatureHelp)?.signatureHelp;
 }
 
 function getGotoSource(presentation: EditorPresentationState): LanguageGotoSource | undefined {
@@ -65,15 +71,18 @@ export type { LanguageRuntime } from "./language-runtime-types";
 
 interface CreateLanguageRuntimeOptions {
   context: LanguageRuntimeContext;
+  reportServiceFailure(error: unknown): void;
+  reportServiceReady(): void;
   setBottomMessage(message: EditorBottomMessageState | null): void;
   setCompletionState(next: EditorPresentationState["ui"]["completion"], effectType?: string): void;
+  setSignatureHelpState(next: EditorPresentationState["ui"]["signatureHelp"], effectType?: string): void;
   setRenameState(next: EditorPresentationState["ui"]["rename"], effectType?: string): void;
   applySelectionRange(from: number, to: number): void;
   revealSelectionWithinViewport(): boolean;
   syncVisibleViewportRows(): boolean;
   syncVisibleLanguageDecorations(): boolean;
   ensureVisibleHighlightCoverage(): Promise<void>;
-  pushJump(): boolean;
+  pushJump(entry?: EditorJumpEntry): boolean;
   openBuffer(filePath: string): Promise<boolean>;
   findBufferState(filePath: string): EditorState | null;
   storeBufferState(filePath: string, state: EditorState, dirty?: boolean): void;
@@ -91,6 +100,20 @@ interface CreateLanguageRuntimeOptions {
 
 export function createLanguageRuntime(options: CreateLanguageRuntimeOptions): LanguageRuntime {
   const { context } = options;
+  interface SyncCaller { resolve(): void; }
+  interface SyncWork {
+    target: Snapshot;
+    updates: LanguageDocumentUpdate[];
+    forceDocumentSync: boolean;
+    highlightViewport?: { fromLine: number; toLine: number };
+    refreshHighlights: boolean;
+    generation: number;
+    serviceGeneration: number;
+    callers: SyncCaller[];
+  }
+  let workGeneration = 1;
+  let activeSync: SyncWork | null = null;
+  let pendingSync: SyncWork | null = null;
   const highlightsRuntime = createLanguageHighlightsRuntime({
     context,
     getHighlighter
@@ -115,12 +138,14 @@ export function createLanguageRuntime(options: CreateLanguageRuntimeOptions): La
   const lspRuntime = createLanguageLspRuntime({
     context,
     getCompletionSource,
+    getSignatureHelpSource,
     getGotoSource,
     getRenameSource,
     getSymbolSource,
     getHostServices,
     setBottomMessage: options.setBottomMessage,
     setCompletionState: options.setCompletionState,
+    setSignatureHelpState: options.setSignatureHelpState,
     setRenameState: options.setRenameState,
     applySelectionRange: options.applySelectionRange,
     revealSelectionWithinViewport: options.revealSelectionWithinViewport,
@@ -136,8 +161,53 @@ export function createLanguageRuntime(options: CreateLanguageRuntimeOptions): La
     openSearchPicker: options.openSearchPicker
   });
 
-  const syncLanguage = async (
-    options: {
+  const updateDocumentWorkDepth = () => {
+    const work = context.getPresentation().language.work.document;
+    work.inFlight = activeSync ? 1 : 0;
+    work.queued = pendingSync ? 1 : 0;
+    work.maxQueueDepth = Math.max(work.maxQueueDepth, work.inFlight + work.queued);
+  };
+
+  const syncWorkIsCurrent = (work: SyncWork) => {
+    const presentation = context.getPresentation();
+    return work.generation === workGeneration && work.serviceGeneration === presentation.language.serviceStatus.generation;
+  };
+
+  const pumpDocumentSync = () => {
+    if (activeSync || !pendingSync) return;
+    const work = pendingSync;
+    pendingSync = null;
+    activeSync = work;
+    const stats = context.getPresentation().language.work.document;
+    stats.started += 1;
+    updateDocumentWorkDepth();
+
+    void highlightsRuntime.syncLanguageHighlights({
+      target: work.target,
+      updates: work.updates,
+      forceDocumentSync: work.forceDocumentSync,
+      highlightViewport: work.highlightViewport,
+      refreshHighlights: work.refreshHighlights,
+      isCurrent: () => syncWorkIsCurrent(work)
+    }).then(() => {
+      if (!syncWorkIsCurrent(work)) return;
+      const currentStats = context.getPresentation().language.work.document;
+      currentStats.completed += 1;
+      currentStats.latestCompletedRevision = work.target.revision;
+      options.reportServiceReady();
+    }).catch((error) => {
+      if (syncWorkIsCurrent(work)) options.reportServiceFailure(error);
+    }).finally(() => {
+      for (const caller of work.callers) caller.resolve();
+      if (activeSync !== work) return;
+      activeSync = null;
+      updateDocumentWorkDepth();
+      pumpDocumentSync();
+    });
+  };
+
+  const syncLanguage = (
+    runtimeOptions: {
       changes?: readonly TextChange[];
       forceDocumentSync?: boolean;
       highlightViewport?: { fromLine: number; toLine: number };
@@ -146,17 +216,55 @@ export function createLanguageRuntime(options: CreateLanguageRuntimeOptions): La
       refreshLineChanges?: boolean;
     } = {}
   ): Promise<void> => {
-    const highlightRefresh = highlightsRuntime.syncLanguageHighlights(options);
+    const presentation = context.getPresentation();
+    const snapshot = context.getSnapshot();
+    const stats = presentation.language.work.document;
+    const changes = runtimeOptions.changes ?? [];
+    const forceDocumentSync = runtimeOptions.forceDocumentSync ?? false;
+    stats.requested += 1;
+    stats.latestRequestedRevision = snapshot.revision;
 
-    if (options.refreshDiagnostics ?? true) {
+    if (runtimeOptions.refreshDiagnostics ?? true) {
       void diagnosticsRuntime.refreshDiagnostics();
     }
 
-    if (options.refreshLineChanges ?? true) {
+    if (runtimeOptions.refreshLineChanges ?? true) {
       void diagnosticsRuntime.refreshLineChanges();
     }
 
-    await highlightRefresh;
+    return new Promise<void>((resolve) => {
+      const caller = { resolve };
+      if (!pendingSync) {
+        pendingSync = {
+          target: snapshot,
+          updates: changes.length > 0 ? [{ document: snapshot, changes: [...changes] }] : [],
+          forceDocumentSync,
+          highlightViewport: runtimeOptions.highlightViewport,
+          refreshHighlights: runtimeOptions.refreshHighlights ?? true,
+          generation: workGeneration,
+          serviceGeneration: presentation.language.serviceStatus.generation,
+          callers: [caller]
+        };
+      } else {
+        pendingSync.target = snapshot;
+        pendingSync.highlightViewport = runtimeOptions.highlightViewport ?? pendingSync.highlightViewport;
+        pendingSync.refreshHighlights ||= runtimeOptions.refreshHighlights ?? true;
+        pendingSync.callers.push(caller);
+        stats.coalesced += 1;
+        if (forceDocumentSync) {
+          pendingSync.forceDocumentSync = true;
+          pendingSync.updates = [];
+        } else if (!pendingSync.forceDocumentSync && changes.length > 0) {
+          pendingSync.updates.push({ document: snapshot, changes: [...changes] });
+        } else if (pendingSync.forceDocumentSync) {
+          // The eventual open always uses the latest snapshot, so later edits
+          // remain coalesced into that full correctness fallback.
+          pendingSync.updates = [];
+        }
+      }
+      updateDocumentWorkDepth();
+      pumpDocumentSync();
+    });
   };
 
   const handleDocumentChange = (
@@ -174,6 +282,16 @@ export function createLanguageRuntime(options: CreateLanguageRuntimeOptions): La
   };
 
   const resetRequestTracking = () => {
+    workGeneration += 1;
+    const documentStats = context.getPresentation().language.work.document;
+    for (const work of [activeSync, pendingSync]) {
+      if (!work) continue;
+      documentStats.cancelled += 1;
+      for (const caller of work.callers) caller.resolve();
+    }
+    activeSync = null;
+    pendingSync = null;
+    updateDocumentWorkDepth();
     highlightsRuntime.resetHighlightTracking();
     diagnosticsRuntime.resetDiagnosticsTracking();
     actionsRuntime.resetActionTracking();
@@ -185,8 +303,27 @@ export function createLanguageRuntime(options: CreateLanguageRuntimeOptions): La
     handleDocumentChange,
     clearLanguageState,
     resetRequestTracking,
-    requestRawHover: actionsRuntime.requestRawHover,
-    ensureVisibleHighlightCoverage: highlightsRuntime.ensureVisibleHighlightCoverage,
+    async requestRawHover(offset) {
+      const serviceGeneration = context.getPresentation().language.serviceStatus.generation;
+      try {
+        return await actionsRuntime.requestRawHover(offset);
+      } catch (error) {
+        if (serviceGeneration === context.getPresentation().language.serviceStatus.generation) {
+          options.reportServiceFailure(error);
+        }
+        return null;
+      }
+    },
+    async ensureVisibleHighlightCoverage(force) {
+      const serviceGeneration = context.getPresentation().language.serviceStatus.generation;
+      try {
+        await highlightsRuntime.ensureVisibleHighlightCoverage(force);
+      } catch (error) {
+        if (serviceGeneration === context.getPresentation().language.serviceStatus.generation) {
+          options.reportServiceFailure(error);
+        }
+      }
+    },
     syncLanguage,
     refreshLineChanges: diagnosticsRuntime.refreshLineChanges,
     requestCodeActions: actionsRuntime.requestCodeActions,
@@ -195,6 +332,9 @@ export function createLanguageRuntime(options: CreateLanguageRuntimeOptions): La
     acceptCompletion: lspRuntime.acceptCompletion,
     moveCompletion: lspRuntime.moveCompletion,
     dismissCompletion: lspRuntime.dismissCompletion,
+    requestSignatureHelp: lspRuntime.requestSignatureHelp,
+    moveSignatureHelp: lspRuntime.moveSignatureHelp,
+    dismissSignatureHelp: lspRuntime.dismissSignatureHelp,
     gotoTarget: lspRuntime.gotoTarget,
     renameSymbol: lspRuntime.renameSymbol,
     openSymbols: lspRuntime.openSymbols,

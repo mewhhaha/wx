@@ -32,6 +32,10 @@ const INSERT_TAB_TEXT = "  ";
 const DEFAULT_INDENT_GUIDE_CHARACTER = "│";
 
 export function createEditor(container: HTMLElement, options: CreateEditorOptions = {}): EditorHandle {
+  const ownsController = options.controller === undefined;
+  if (!ownsController && options.keymap !== undefined) {
+    throw new Error("createEditor cannot apply keymap when controller is supplied; configure the controller instead");
+  }
   const softWrap = options.softWrap ?? false;
   const indentGuides = {
     render: options.indentGuides?.render ?? false,
@@ -45,7 +49,8 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
       value: options.value ?? "",
       theme: options.theme?.name,
       filePath: options.filePath,
-      languageRegistry: options.languageRegistry
+      languageRegistry: options.languageRegistry,
+      keymap: options.keymap
     });
   let state = controller.getState();
   const host = options.host ?? null;
@@ -207,15 +212,25 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
   context.chromeRuntime = chromeRuntime;
 
   const events = createDomEventRuntime(context, runtime);
+  const syncInputAccessibility = () => {
+    const mode = context.state.mode === "insert" ? "insert" : context.state.mode;
+    textarea.setAttribute("aria-label", `Editor input, ${mode} mode`);
+  };
   const refreshFocusedFileStatus = () => {
-    void controller.refreshFileStatus().then(() => runtime.patchStatus());
+    void controller.refreshFileStatus().then(() => {
+      if (!context.destroyed) runtime.patchStatus();
+    }).catch(() => undefined);
   };
   window.addEventListener("focus", refreshFocusedFileStatus);
-  let unsubscribeController = controller.subscribe(runtime.handleControllerUpdate);
+  let unsubscribeController = controller.subscribe((update) => {
+    runtime.handleControllerUpdate(update);
+    syncInputAccessibility();
+  });
   const handle = createDomHandleRuntime({
     controller,
     context,
     runtime,
+    ownsController,
     normalizeLanguageServices,
     unsubscribeController() {
       unsubscribeController();
@@ -226,25 +241,43 @@ export function createEditor(container: HTMLElement, options: CreateEditorOption
     },
     cleanupWindowListeners() {
       window.removeEventListener("focus", refreshFocusedFileStatus);
+      root.removeEventListener("focus", focusTextarea);
+      root.removeEventListener("mousedown", focusTextarea);
+      textarea.removeEventListener("keydown", events.handleKeydown);
+      textarea.removeEventListener("beforeinput", events.handleBeforeInput);
+      textarea.removeEventListener("input", events.handleInput);
+      textarea.removeEventListener("compositionstart", events.handleCompositionStart);
+      textarea.removeEventListener("compositionupdate", events.handleCompositionUpdate);
+      textarea.removeEventListener("compositionend", events.handleCompositionEnd);
+      textarea.removeEventListener("paste", events.handlePaste);
+      surface.removeEventListener("wheel", events.handleWheel);
+      viewportRows.removeEventListener("mousemove", events.handleMouseMove);
+      viewportRows.removeEventListener("mouseleave", events.handleMouseLeave);
+      events.destroy();
     }
   });
 
   let resizeObserver: ResizeObserver | null = null;
 
-  root.addEventListener("focus", () => {
+  const focusTextarea = () => {
     if (document.activeElement !== textarea) {
       textarea.focus();
     }
     refreshFocusedFileStatus();
-  });
-  root.addEventListener("mousedown", () => {
-    textarea.focus();
-  });
+  };
+  root.addEventListener("focus", focusTextarea);
+  root.addEventListener("mousedown", focusTextarea);
   textarea.addEventListener("keydown", events.handleKeydown);
+  textarea.addEventListener("beforeinput", events.handleBeforeInput);
+  textarea.addEventListener("input", events.handleInput);
+  textarea.addEventListener("compositionstart", events.handleCompositionStart);
+  textarea.addEventListener("compositionupdate", events.handleCompositionUpdate);
+  textarea.addEventListener("compositionend", events.handleCompositionEnd);
   textarea.addEventListener("paste", events.handlePaste);
   surface.addEventListener("wheel", events.handleWheel, { passive: false });
   viewportRows.addEventListener("mousemove", events.handleMouseMove);
   viewportRows.addEventListener("mouseleave", events.handleMouseLeave);
+  syncInputAccessibility();
 
   runtime.refreshGutterWidth(true);
   runtime.refreshViewportMetricsIfNeeded(true);

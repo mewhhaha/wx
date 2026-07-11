@@ -1,20 +1,27 @@
 # wx
 
-`wx` is a browser editor stack with a DOM renderer, controller-owned editor session, theming, and pluggable language services.
+`wx` is a browser editor stack with a portable editor core, DOM renderer, controller-owned editor session, theming, and pluggable language services.
+
+## Runtime contract
+
+- Portable packages (`editor-core`, `editor-language`, `editor-layout`, `editor-theme`, and `editor-controller`) work directly from TypeScript source under Deno. They may not depend on built `dist` output or Node APIs.
+- Browser packages (`editor-view-dom`, `editor-element`, and the default Tree-sitter entrypoint) must not transitively import filesystem, process, child-process, or `worker_threads` modules.
+- The ANSI terminal is the Deno-first local product. Its Deno host and CLI are isolated exports; the Node host remains an optional compatibility adapter and neither leaks into browser or portable entrypoints.
+- Scene packages and the playground are demo-only and are not portable publishing targets.
+
+The supported repository toolchains are Node 22, Deno 2.9, pnpm 10.33, and Rust 1.93.1. `package.json` is the version source of truth for a portable package; its package-local `deno.json` must match it. The root Deno configuration explicitly enables the granular `sloppy-imports` compatibility because the same TypeScript sources retain bundler-compatible extensionless relative imports; the source and installed terminal launchers both load that configuration. The Rust gate runs Clippy across all targets; the existing Wasm raw-pointer ABI is explicitly exempt from `not_unsafe_ptr_arg_deref` until its public API can be revised.
 
 This repo currently uses workspace-private packages, so the examples below assume you are consuming `wx` from this monorepo or from a local workspace that can resolve the `@mewhhaha/wx-*` packages. The plain HTML examples are "no React" examples, not copy-paste CDN snippets.
 
 ## JSR Publish Status
 
-Base editor packages now have package-local `deno.json` publish config for JSR:
+Portable editor packages have package-local `deno.json` publish config for JSR:
 
 - `@mewhhaha/wx-core`
 - `@mewhhaha/wx-language`
 - `@mewhhaha/wx-layout`
 - `@mewhhaha/wx-theme`
 - `@mewhhaha/wx-controller`
-- `@mewhhaha/wx-dom`
-- `@mewhhaha/wx-element`
 
 Run dry-run validation with:
 
@@ -25,7 +32,7 @@ pnpm run jsr:check:editor
 Assumptions in current config:
 
 - JSR scope: `@mewhhaha`
-- Current publish target for bumped editor packages: `0.1.2`
+- Each package's `package.json` version is the publish version and must match its `deno.json`.
 - License: `MIT`
 
 If any of those should differ, update package-local `deno.json` files before first publish.
@@ -67,7 +74,8 @@ pnpm dev
 ## CI Notes
 
 - CI installs with `pnpm install --frozen-lockfile`, so package manifest changes must be accompanied by a matching `pnpm-lock.yaml` update.
-- `pnpm run verify:workspace` is the quickest local check for the same build-and-unit-test path used by workspace verification.
+- `deno task check` checks all portable packages directly from source, without `dist`.
+- `pnpm run verify:workspace` also checks package boundaries and that two clean builds leave the same package artifact list.
 
 ## Plain DOM Setup
 

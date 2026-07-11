@@ -5,6 +5,7 @@ import type {
   EditorState,
   EditorViewState,
   InsertSession,
+  RegisterKind,
   SelectionSet,
   TextChange,
   Transaction
@@ -20,6 +21,7 @@ import type {
   LanguageRegistry
 } from "@mewhhaha/wx-language";
 import type { EditorLineVisualRange, EditorVisualRow } from "@mewhhaha/wx-layout";
+import type { KeymapArgs, KeymapConfig } from "./keymap-schema";
 
 export interface HistoryEntry {
   doc: EditorState["doc"];
@@ -27,6 +29,7 @@ export interface HistoryEntry {
   mode: EditorState["mode"];
   insertSession: InsertSession | null;
   yankBuffer: string | null;
+  yankKind?: RegisterKind;
   lastDeletedFrom: number | null;
 }
 
@@ -53,13 +56,22 @@ export interface EditorSearchPresentationState extends EditorSearchState {
 export interface EditorJumpEntry {
   selection: SelectionSet;
   mode: EditorState["mode"];
+  /** File identity is optional for backward-compatible serialized jump entries. */
+  filePath?: string | null;
 }
 
 export interface EditorRegisterState {
   unnamed: string | null;
+  unnamedKind: RegisterKind;
   search: string | null;
   named: Record<string, string>;
+  namedKinds: Record<string, RegisterKind>;
   selected: string | null;
+}
+
+export interface EditorRegisterValue {
+  text: string;
+  kind: RegisterKind;
 }
 
 export type EditorLineChangeKind = "added" | "modified" | "deleted";
@@ -76,6 +88,7 @@ export interface EditorHostServices {
     filePath: string;
     query: string;
   }): Promise<readonly EditorFileSearchResult[]>;
+  searchWorkspace?(context: EditorWorkspaceSearchRequest): Promise<readonly EditorWorkspaceSearchResult[]>;
   listFolders?(context: { filePath: string }): Promise<readonly EditorFolderSearchResult[]>;
   getLineChanges?(context: { filePath: string; text: string }): Promise<readonly EditorLineChange[]>;
   didWriteFile?(context: { filePath: string; text: string }): Promise<void> | void;
@@ -138,6 +151,15 @@ export interface EditorCompletionState {
   error: string | null;
 }
 
+export interface EditorSignatureHelpState {
+  active: boolean;
+  loading: boolean;
+  anchorOffset: number | null;
+  signatures: readonly { label: string; documentation?: string; activeParameter?: number }[];
+  selectedIndex: number;
+  error: string | null;
+}
+
 export interface EditorRenameState {
   active: boolean;
   anchorOffset: number | null;
@@ -182,7 +204,8 @@ export type EditorPendingAction =
   | { kind: "surround-delete" }
   | { kind: "surround-replace-from" }
   | { kind: "surround-replace-to"; fromObject: string }
-  | { kind: "register-select"; insert: boolean };
+  | { kind: "register-select"; insert: boolean }
+  | { kind: "command-operand"; command: string; args?: KeymapArgs; operands: readonly string[] };
 
 export type EditorRepeatableMotion =
   | { kind: "find"; variant: "f" | "F" | "t" | "T"; target: string }
@@ -190,6 +213,22 @@ export type EditorRepeatableMotion =
   | { kind: "paragraph"; direction: "next" | "prev" }
   | { kind: "textobject"; mode: "around" | "inside"; object: string }
   | { kind: "search"; reverse: boolean };
+
+export type EditorRepeatableEdit =
+  | {
+      kind: "insert";
+      entry: "insert" | "append" | "insert-line-start" | "append-line-end" | "change" | "open-above" | "open-below";
+      text: string;
+      sourceSelectionCount: number;
+    }
+  | {
+      kind: "paste";
+      position: "before" | "after";
+      text: string;
+      registerKind: RegisterKind;
+      count: number;
+      sourceSelectionCount: number;
+    };
 
 export interface EditorLineChangeState {
   kind: Exclude<EditorLineChangeKind, "deleted"> | null;
@@ -205,6 +244,16 @@ export interface EditorViewportPresentationState {
   visualRows: readonly EditorVisualRow[];
   visibleVisualRows: readonly EditorVisualRow[];
   lineVisualRanges: readonly EditorLineVisualRange[];
+  /** Exact for unwrapped geometry; wrapped windows expose an estimate until all chunks are known. */
+  totalVisualRows?: number;
+  totalVisualRowsExact?: boolean;
+  layoutWork?: {
+    reason: string;
+    rowsVisited: number;
+    rowsRebuilt: number;
+    mappingEntriesBuilt: number;
+    mappingCacheHits: number;
+  };
   wrapRevision: number;
 }
 
@@ -223,8 +272,55 @@ export type EditorPaneTreeNode =
       second: EditorPaneTreeNode;
     };
 
+export type EditorLanguageWorkClass =
+  | "input-cursor"
+  | "visible-highlights"
+  | "completion-hover"
+  | "diagnostics"
+  | "vcs-line-changes"
+  | "background";
+
+export interface EditorLanguageWorkCounter {
+  requested: number;
+  started: number;
+  completed: number;
+  cancelled: number;
+  staleDropped: number;
+  inFlight: number;
+  queued: number;
+  maxQueueDepth: number;
+}
+
+export interface EditorLanguageDocumentWorkCounter extends EditorLanguageWorkCounter {
+  latestRequestedRevision: number;
+  latestCompletedRevision: number;
+  coalesced: number;
+}
+
+export interface EditorLanguageWorkState {
+  /** Lower priority numbers run first; delays are independent by work class. */
+  priorityPolicy: readonly {
+    class: EditorLanguageWorkClass;
+    priority: number;
+    policy: "immediate" | "latest" | "debounce" | "idle";
+    delayMs: number;
+  }[];
+  document: EditorLanguageDocumentWorkCounter;
+  highlights: EditorLanguageWorkCounter;
+  diagnostics: EditorLanguageWorkCounter;
+  lineChanges: EditorLanguageWorkCounter;
+  hover: EditorLanguageWorkCounter;
+  completion: EditorLanguageWorkCounter;
+}
+
 export interface EditorLanguagePresentationState {
   services: readonly EditorLanguageServices[];
+  serviceStatus: {
+    state: "disabled" | "starting" | "ready" | "failed" | "destroyed";
+    message: string | null;
+    retryable: boolean;
+    generation: number;
+  };
   host: EditorHostServices | null;
   languageRevision: number;
   lastHighlightedRevision: number;
@@ -233,9 +329,11 @@ export interface EditorLanguagePresentationState {
   lineChangesRequestId: number;
   hoverRequestId: number;
   completionRequestId: number;
+  signatureHelpRequestId: number;
   navigationRequestId: number;
   renameRequestId: number;
   symbolsRequestId: number;
+  work: EditorLanguageWorkState;
   highlightCache: Map<number, HighlightSpan[]>;
   highlightCoverage: Set<number>;
   diagnostics: readonly EditorDiagnostic[];
@@ -252,6 +350,7 @@ export interface EditorUiPresentationState {
   commandCompletionIndex: number;
   commandCompletionItems: readonly EditorCommandCompletionItem[];
   completion: EditorCompletionState;
+  signatureHelp: EditorSignatureHelpState;
   rename: EditorRenameState;
   picker: EditorPickerState;
   bottomMessage: EditorBottomMessageState | null;
@@ -262,6 +361,7 @@ export interface EditorUiPresentationState {
   stickyViewMode: boolean;
   previewTheme: string | null;
   lastRepeatableMotion: EditorRepeatableMotion | null;
+  lastRepeatableEdit: EditorRepeatableEdit | null;
 }
 
 export interface EditorPresentationState {
@@ -305,6 +405,29 @@ export interface EditorWorkspacePresentationState {
 export interface EditorFileSearchResult {
   filePath: string;
   detail?: string;
+}
+
+export type EditorWorkspaceSearchCase = "sensitive" | "insensitive" | "smart";
+export interface EditorWorkspaceSearchRequest {
+  filePath: string;
+  query: string;
+  mode: "literal" | "regex";
+  case: EditorWorkspaceSearchCase;
+  include?: readonly string[];
+  exclude?: readonly string[];
+  limit: number;
+  signal?: AbortSignal;
+}
+export interface EditorWorkspaceSearchResult {
+  filePath: string;
+  /** Zero-based physical line and UTF-16 columns. */
+  line: number;
+  fromColumn: number;
+  toColumn: number;
+  preview: string;
+  before?: readonly string[];
+  after?: readonly string[];
+  truncated?: boolean;
 }
 
 export interface EditorFolderSearchResult {
@@ -357,6 +480,26 @@ export interface HistoryPlugin {
   redo(currentState: EditorState): HistoryEntry | null;
   checkpoint(): boolean;
   clear(): void;
+  /** Optional deterministic accounting for bounded-history implementations. */
+  getStats?(): SnapshotHistoryStats;
+}
+
+export interface SnapshotHistoryStats {
+  readonly undoEntries: number;
+  readonly redoEntries: number;
+  readonly pendingInsertGroup: boolean;
+  readonly totalEntries: number;
+  readonly retainedBytes: number;
+  readonly maxEntries: number;
+  readonly maxRetainedBytes: number;
+}
+
+/** Limits all retained undo, redo, and pending snapshots together. */
+export interface SnapshotHistoryOptions {
+  /** Maximum retained snapshots across both stacks. Defaults to 200. */
+  maxEntries?: number;
+  /** Maximum estimated unique document and entry bytes. Defaults to 8 MiB. */
+  maxRetainedBytes?: number;
 }
 
 export interface EditorController {
@@ -370,12 +513,13 @@ export interface EditorController {
   getSearchState(): EditorSearchState;
   setSearchState(next: Partial<EditorSearchState>): void;
   clearSearchState(): void;
-  pushJump(): boolean;
+  pushJump(entry?: EditorJumpEntry): boolean;
   jumpBackward(): EditorJumpEntry | null;
   jumpForward(): EditorJumpEntry | null;
   getJumpList(): readonly EditorJumpEntry[];
   getRegister(name?: string | null): string | null;
-  setRegister(name: string | null, value: string | null): void;
+  getRegisterKind(name?: string | null): RegisterKind;
+  setRegister(name: string | null, value: string | null, kind?: RegisterKind): void;
   selectRegister(name: string | null): void;
   getSelectedRegister(): string | null;
   getBuffers(): readonly EditorBufferState[];
@@ -393,6 +537,7 @@ export interface EditorController {
   focusPane(direction: "left" | "right" | "up" | "down"): boolean;
   setActivePane(paneId: string): boolean;
   searchFiles(query?: string): Promise<readonly EditorFileSearchResult[]>;
+  searchWorkspace(request: Omit<EditorWorkspaceSearchRequest, "filePath">): Promise<readonly EditorWorkspaceSearchResult[]>;
   listFolders(): Promise<readonly EditorFolderSearchResult[]>;
   selectNextOccurrence(reverse?: boolean): boolean;
   selectAllOccurrences(): boolean;
@@ -403,6 +548,9 @@ export interface EditorController {
   acceptCompletion(index?: number): Promise<boolean>;
   moveCompletion(delta: number): boolean;
   dismissCompletion(): boolean;
+  requestSignatureHelp(): Promise<boolean>;
+  moveSignatureHelp(delta: number): boolean;
+  dismissSignatureHelp(): boolean;
   gotoTarget(kind: "definition" | "declaration" | "type-definition" | "implementation" | "references"): Promise<boolean>;
   renameSymbol(nextName: string): Promise<boolean>;
   openSymbols(kind: "document" | "workspace"): Promise<boolean>;
@@ -420,6 +568,8 @@ export interface EditorController {
   setLanguageServices(languageServices: EditorLanguageServiceInput | readonly EditorLanguageServices[] | null): void;
   setLanguageRegistry(registry: LanguageRegistry | null): void;
   resetLanguageServices(): void;
+  retryLanguageServices(): Promise<boolean>;
+  destroy(): void;
   setHostServices(host: EditorHostServices | null): void;
   setFilePath(filePath: string | null): void;
   setThemeName(themeName: string | null): void;
@@ -462,4 +612,12 @@ export interface CreateEditorControllerOptions {
   filePath?: string;
   languageRegistry?: LanguageRegistry | null;
   history?: HistoryPlugin | false;
+  /** Used when the controller creates its default snapshot history. */
+  historyOptions?: SnapshotHistoryOptions;
+  /** Serializable keymap v1 overrides compiled once for this controller. */
+  keymap?: KeymapConfig;
+  /** Insert-mode characters that automatically request signature help. */
+  signatureHelpTriggers?: readonly string[];
+  /** Insert-mode characters that automatically request completion; defaults to '.'. */
+  completionTriggers?: readonly string[];
 }

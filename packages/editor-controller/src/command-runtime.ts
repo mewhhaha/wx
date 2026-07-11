@@ -1,5 +1,6 @@
-import { getActiveCharacterOffset, getSelectionOffsets, type EditorState, type SelectionSet } from "@mewhhaha/wx-core";
+import { getActiveCharacterOffset, getSelectionOffsets, splitSelectionsByRegex, type EditorState, type SelectionSet } from "@mewhhaha/wx-core";
 import { getCommandCompletionItems, hasRunnableCommandLineValue, resolveCommandPreviewTheme } from "./command-line";
+import { commandCatalogById, resolveCommandId } from "./command-catalog";
 import { escapeRegex } from "./search";
 import type {
   EditorBottomMessageState,
@@ -39,6 +40,7 @@ interface CommandRuntimeContext {
   emitPresentationUpdate(effectType?: string): void;
   loadCodeActions(): Promise<boolean>;
   openAddFilePicker(initialName?: string): Promise<boolean>;
+  runCatalogCommand(command: string): Promise<EditorKeyInputResult>;
 }
 
 export interface CommandRuntime {
@@ -350,6 +352,9 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
       const value = commandName.toLowerCase();
       const commandArgument = argumentParts.join(" ").trim();
 
+      const catalogCommand = resolveCommandId(value, commandCatalogById);
+      if (catalogCommand && commandCatalogById.get(catalogCommand)?.palette) return context.runCatalogCommand(catalogCommand);
+
       if (value === "q" || value === "quit") {
         return { handled: true, quit: true };
       }
@@ -529,6 +534,19 @@ export function createCommandRuntime(context: CommandRuntimeContext): CommandRun
 
       if (value === "split-lines") {
         controller.splitSelectionsByLine();
+        return { handled: true };
+      }
+
+      if (value === "split-regex") {
+        if (!commandArgument) {
+          context.setBottomMessage({ tone: "warning", text: "Regular expression required" });
+          return { handled: true };
+        }
+        try {
+          controller.dispatch(splitSelectionsByRegex(context.getState(), new RegExp(commandArgument, "gu")));
+        } catch {
+          context.setBottomMessage({ tone: "warning", text: `Invalid regular expression: ${commandArgument}` });
+        }
         return { handled: true };
       }
 

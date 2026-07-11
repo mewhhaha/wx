@@ -1,80 +1,33 @@
-import type { EditorState } from "@mewhhaha/wx-core";
-import type { EditorController, EditorHostServices, EditorPresentationState } from "@mewhhaha/wx-controller";
-import type { EditorLanguageServiceInput, LanguageProvider, LanguageRegistry } from "@mewhhaha/wx-language";
-import type { ThemeSpec } from "@mewhhaha/wx-theme";
+import { createNodeHostServices } from "./node-host";
+import { createAnsiEditorTerminal as createPortableAnsiEditorTerminal } from "./terminal";
+import type { AnsiEditorTerminal, CreateAnsiEditorTerminalOptions } from "./terminal-types";
 
-export interface RenderEditorAnsiFrameInput {
-  state: EditorState;
-  presentation: EditorPresentationState;
-  theme?: ThemeSpec;
-  cols: number;
-  rows: number;
-  indentGuides?: {
-    render?: boolean;
-    character?: string;
-    skipLevels?: number;
-    indentWidth?: number;
-  };
-}
+export type { EditorController } from "@mewhhaha/wx-controller";
+export type {
+  AnsiEditorMirror,
+  AnsiEditorTerminal,
+  AnsiFrameCursor,
+  AnsiFramePatch,
+  AnsiFramePatchKind,
+  AnsiFrameSnapshot,
+  AnsiTerminalInput,
+  AnsiTerminalMetrics,
+  AnsiTerminalOutput,
+  CreateAnsiEditorMirrorOptions,
+  CreateAnsiEditorTerminalOptions,
+  RenderEditorAnsiFrameInput
+} from "./terminal-types";
 
-export interface CreateAnsiEditorMirrorOptions {
-  controller?: EditorController;
-  filePath?: string;
-  host?: EditorHostServices | null;
-  value?: string;
-  language?: LanguageProvider | null;
-  languageServices?: EditorLanguageServiceInput | null;
-  languageRegistry?: LanguageRegistry | null;
-  write(text: string): void;
-  theme?: ThemeSpec;
-  cols: number;
-  rows: number;
-  enterAltScreen?: boolean;
-  indentGuides?: {
-    render?: boolean;
-    character?: string;
-    skipLevels?: number;
-    indentWidth?: number;
-  };
-}
-
-export interface AnsiEditorMirror {
-  mount(): void;
-  destroy(): void;
-  resize(viewport: { cols: number; rows: number }): void;
-  setTheme(theme: ThemeSpec): void;
-  renderNow(): void;
-}
-
-export interface AnsiTerminalInput {
-  isTTY?: boolean;
-  on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
-  off?(event: "data", listener: (chunk: Buffer | string) => void): unknown;
-  removeListener?(event: "data", listener: (chunk: Buffer | string) => void): unknown;
-  resume(): void;
-  pause?(): void;
-  setEncoding?(encoding: BufferEncoding): void;
-  setRawMode?(mode: boolean): void;
-}
-
-export interface AnsiTerminalOutput {
-  columns?: number;
-  rows?: number;
-  on?(event: "resize", listener: () => void): unknown;
-  off?(event: "resize", listener: () => void): unknown;
-  removeListener?(event: "resize", listener: () => void): unknown;
-}
-
-export interface CreateAnsiEditorTerminalOptions extends CreateAnsiEditorMirrorOptions {
-  input: AnsiTerminalInput;
-  output?: AnsiTerminalOutput;
-  availableThemes?: readonly ThemeSpec[];
-  exit?(code?: number): void;
-}
-
-export interface AnsiEditorTerminal extends AnsiEditorMirror {}
-
-export { renderEditorAnsiFrame } from "./frame";
-export { createNodeHostServices } from "./node-host";
-export { createAnsiEditorMirror, createAnsiEditorTerminal, parseAnsiInput } from "./terminal";
+export { createAnsiFramePatch, serializeAnsiFrameSnapshot } from "./damage";
+export { createEditorAnsiFrameSnapshot, createEditorAnsiWorkspaceFrameSnapshot, renderEditorAnsiFrame } from "./frame";
+export { createNodeHostServices, createNodeTerminalWrite } from "./node-host";
+export { createAnsiEditorMirror, parseAnsiInput } from "./terminal";
 export { runAnsiMirrorDemo } from "./demo-runtime";
+
+/** Node package entrypoint retaining the historical default filesystem host. */
+export function createAnsiEditorTerminal(options: CreateAnsiEditorTerminalOptions): AnsiEditorTerminal {
+  if (options.host !== undefined || options.controller !== undefined) {
+    return createPortableAnsiEditorTerminal(options);
+  }
+  return createPortableAnsiEditorTerminal({ ...options, host: createNodeHostServices() });
+}

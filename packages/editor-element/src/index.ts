@@ -13,6 +13,12 @@ export class WxEditorElement extends HTMLElement {
   private _languageServices: EditorLanguageServiceInput | null = null;
   private _theme: ThemeSpec = defaultTheme;
   private _controller: EditorController | null = null;
+  // Keep this separate from `_controller`: a controller created by the element
+  // belongs to its current connection, while a supplied controller survives a
+  // disconnect and remains the caller's responsibility.
+  private suppliedController: EditorController | null = null;
+  private pendingValue: string | null = null;
+  private connection = 0;
 
   constructor() {
     super();
@@ -23,22 +29,31 @@ export class WxEditorElement extends HTMLElement {
 
   connectedCallback(): void {
     if (!this.editor) {
+      const connection = ++this.connection;
       this.editor = createEditor(this.mountPoint, {
-        controller: this._controller ?? undefined,
+        controller: this.suppliedController ?? undefined,
         value: this._value,
         languageServices: this._languageServices ?? languageProviderToServices(this._language),
         theme: this._theme
       });
       this._controller = this.editor.controller;
-      this.unsubscribe = this.editor.subscribe((update) => this.dispatchUpdateEvents(update));
+      if (this.suppliedController && this.pendingValue !== null) {
+        void this.editor.setValue(this.pendingValue);
+      } else {
+        this._value = this.editor.getState().doc.text;
+      }
+      this.pendingValue = null;
+      this.unsubscribe = this.editor.subscribe((update) => this.dispatchUpdateEvents(update, connection));
     }
   }
 
   disconnectedCallback(): void {
+    ++this.connection;
     this.unsubscribe();
     this.unsubscribe = () => {};
     this.editor?.destroy();
     this.editor = null;
+    if (!this.suppliedController) this._controller = null;
   }
 
   get value(): string {
@@ -47,7 +62,11 @@ export class WxEditorElement extends HTMLElement {
 
   set value(nextValue: string) {
     this._value = nextValue;
-    void this.editor?.setValue(nextValue);
+    if (this.editor) {
+      void this.editor.setValue(nextValue);
+    } else {
+      this.pendingValue = nextValue;
+    }
   }
 
   get controller(): EditorController | null {
@@ -55,7 +74,10 @@ export class WxEditorElement extends HTMLElement {
   }
 
   set controller(nextController: EditorController | null) {
+    this.suppliedController = nextController;
     this._controller = nextController;
+    this.pendingValue = null;
+    if (nextController) this._value = nextController.getState().doc.text;
 
     if (this.isConnected) {
       this.disconnectedCallback();
@@ -91,7 +113,11 @@ export class WxEditorElement extends HTMLElement {
     this.editor?.setTheme(nextTheme);
   }
 
-  private dispatchUpdateEvents(update: EditorUpdate): void {
+  private dispatchUpdateEvents(update: EditorUpdate, connection: number): void {
+    // Controller work can complete after a DOM removal. Do not let stale work
+    // escape the element, and make the public value mirror real editor edits.
+    if (!this.isConnected || connection !== this.connection) return;
+    this._value = update.nextState.doc.text;
     this.dispatchEvent(new CustomEvent("wx-update", { detail: update }));
 
     if (update.modeChanged) {

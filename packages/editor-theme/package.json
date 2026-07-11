@@ -17,7 +17,7 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --out-dir dist && node ../../scripts/build-package-types.mjs"
+    "build": "node ../../scripts/clean-package-dist.mjs && tsup src/index.ts --format esm --out-dir dist && node ../../scripts/build-package-types.mjs"
   },
   "dependencies": {
     "@mewhhaha/wx-language": "workspace:*"

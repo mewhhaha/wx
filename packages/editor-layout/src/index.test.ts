@@ -217,6 +217,23 @@ function createInput(value: string): import("./index").EditorLayoutInput {
 }
 
 describe("buildEditorLayout", () => {
+  it("renders registry key help for any pending prefix and preserves higher-priority panels", () => {
+    const input = createInput("alpha");
+    input.presentation.ui.commandCompletionItems = Array.from({ length: 7 }, (_, index) => ({
+      label: `q ${index}`,
+      detail: `command ${index}`
+    }));
+    input.presentation.ui.pendingAction = { kind: "g" };
+    let layout = buildEditorLayout(input);
+    const help = layout.panels.find((panel) => panel.kind === "key-help");
+    expect(help?.rows).toHaveLength(6);
+    expect(help?.keyHelpItems).toEqual(input.presentation.ui.commandCompletionItems.slice(0, 6));
+
+    input.presentation.ui.completion.active = true;
+    layout = buildEditorLayout(input);
+    expect(layout.panels.some((panel) => panel.kind === "key-help")).toBe(false);
+  });
+
   it("builds one visual row per line without wrapping", () => {
     const layout = buildEditorLayout(createInput("alpha\nbeta"));
 
@@ -552,6 +569,17 @@ describe("buildEditorLayout", () => {
     expect(completionPanel?.anchor.col).toBeGreaterThanOrEqual(0);
     expect(completionText).toContain("alpha");
     expect(completionPanel?.rows[0]?.[0]?.token).toBe("picker-selected");
+  });
+
+  it("builds shared signature rows with overload and active-parameter state", () => {
+    const input = createInput("sum(");
+    const layout = buildEditorLayout({ ...input, presentation: { ...input.presentation, ui: { ...input.presentation.ui, signatureHelp: { active: true, loading: false, anchorOffset: 4, signatures: [{ label: "sum(a, b)", documentation: "Adds values", activeParameter: 1 }], selectedIndex: 0, error: null } } } });
+    const panel = layout.panels.find((entry) => entry.kind === "signature");
+    const text = panel?.rows.flat().map((run) => run.text).join("\n") ?? "";
+    expect(text).toContain("sum(a, b)");
+    expect(text).toContain("parameter 2");
+    expect(text).toContain("Adds values");
+    expect(panel?.rows[0]?.[0]).toMatchObject({ token: "picker-selected", selectedInPicker: true });
   });
 
   it("projects split workspace panes and divider lines", () => {

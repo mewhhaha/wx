@@ -1,5 +1,6 @@
 import { getCursorOffset, type EditorState } from "@mewhhaha/wx-core";
 import type { EditorCodeAction } from "@mewhhaha/wx-language";
+import { createJumpEntry } from "./session";
 import type {
   EditorBufferState,
   EditorBottomMessageState,
@@ -16,6 +17,7 @@ export interface PickerActionItem {
   detail?: string;
   filePath?: string;
   run: () => Promise<void> | void;
+  runWithDisposition?: (disposition: "current" | "horizontal" | "vertical" | "background") => Promise<void> | void;
   preview?: () => Promise<{ title: string; content: string } | null> | { title: string; content: string } | null;
 }
 
@@ -34,8 +36,8 @@ interface PickerRuntimeContext {
   getBuffers(): readonly EditorBufferState[];
   setBottomMessage(message: EditorBottomMessageState | null): void;
   emitPresentationUpdate(effectType?: string): void;
-  jumpToSelection(from: number, to: number): void;
-  restoreJump(entry: EditorJumpEntry | null): boolean;
+  jumpToSelection(from: number, to: number, recordCurrent?: boolean): void;
+  restoreJump(entry: EditorJumpEntry | null): Promise<boolean>;
 }
 
 export interface PickerRuntime {
@@ -45,7 +47,7 @@ export interface PickerRuntime {
   ): void;
   closePicker(effectType?: string): void;
   movePicker(delta: number): boolean;
-  acceptPicker(index?: number): Promise<boolean>;
+  acceptPicker(index?: number, disposition?: "current" | "horizontal" | "vertical" | "background"): Promise<boolean>;
   openDiagnosticsPicker(): boolean;
   openJumpListPicker(): boolean;
   openBuffersPicker(): boolean;
@@ -60,6 +62,7 @@ export interface PickerRuntime {
   }): boolean;
   openSearchPicker(source: PickerSearchSource): Promise<boolean>;
   openFileSearchPicker(): Promise<boolean>;
+  openWorkspaceSearchPicker(): Promise<boolean>;
   openAddFilePicker(initialName?: string): Promise<boolean>;
   updatePickerQuery(query: string): Promise<boolean>;
   loadCodeActions(): Promise<boolean>;
@@ -292,14 +295,14 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     return true;
   };
 
-  const acceptPicker: PickerRuntime["acceptPicker"] = async (index = context.getPresentation().ui.picker.selectedIndex) => {
+  const acceptPicker: PickerRuntime["acceptPicker"] = async (index = context.getPresentation().ui.picker.selectedIndex, disposition = "current") => {
     const item = pickerActions[index];
     if (!item) {
       closePicker("ui.picker.close");
       return false;
     }
 
-    await item.run();
+    if (item.runWithDisposition) await item.runWithDisposition(disposition); else await item.run();
     return true;
   };
 
@@ -314,7 +317,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       return {
         label: `${position.line + 1}:${position.column + 1} ${entry.message}`,
         detail: lineText,
-        run: () => {
+        run: async () => {
           context.jumpToSelection(entry.from, entry.to);
           closePicker("ui.picker.close");
         }
@@ -357,8 +360,8 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
       return {
         label: `${index + 1}:${position.line + 1}:${position.column + 1}`,
         detail: lineText,
-        run: () => {
-          context.restoreJump(entry);
+        run: async () => {
+          await context.restoreJump(entry);
           closePicker("ui.picker.close");
         }
       };
@@ -533,6 +536,56 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
             }
           }
         }));
+      }
+    });
+  };
+
+  const openWorkspaceSearchPicker = async () => {
+    let active: AbortController | null = null;
+    return openSearchPicker({
+      title: "workspace search",
+      variant: "combo",
+      load: async (rawQuery) => {
+        active?.abort();
+        active = new AbortController();
+        const regex = rawQuery.length > 2 && rawQuery.startsWith("/") && rawQuery.endsWith("/");
+        const query = regex ? rawQuery.slice(1, -1) : rawQuery;
+        if (!query) return [];
+        const results = await context.getController().searchWorkspace({ query, mode: regex ? "regex" : "literal", case: "smart", limit: 200, signal: active.signal });
+        return results.map((entry) => {
+          const open = async (disposition: "current" | "horizontal" | "vertical" | "background") => {
+            const controller = context.getController();
+            const originalBuffer = controller.getWorkspacePresentationState().activeBufferId;
+            const origin = createJumpEntry(context.getState(), context.getPresentation().filePath);
+            const split = disposition === "horizontal" || disposition === "vertical";
+            if (disposition === "horizontal") controller.splitPane("horizontal");
+            else if (disposition === "vertical") controller.splitPane("vertical");
+            if (!(await controller.openBuffer(entry.filePath))) {
+              if (split) controller.closePane();
+              return;
+            }
+            const state = controller.getState();
+            const line = state.doc.lineAt(Math.max(0, Math.min(state.doc.lineCount - 1, entry.line)));
+            const from = Math.min(line.end, line.start + entry.fromColumn);
+            const to = Math.max(from, Math.min(line.end, line.start + entry.toColumn));
+            if (disposition === "background") { controller.switchBuffer(originalBuffer); closePicker("ui.picker.close"); return; }
+            controller.pushJump(origin);
+            context.jumpToSelection(from, to, false);
+            closePicker("ui.picker.close");
+          };
+          return ({
+          kind: "file" as const,
+          label: `${entry.filePath}:${entry.line + 1}:${entry.fromColumn + 1}`,
+          detail: entry.preview,
+          filePath: entry.filePath,
+          preview: async () => {
+            const payload = await context.getPresentation().language.host?.readFile?.({ filePath: entry.filePath });
+            if (!payload) return null;
+            return { title: entry.filePath, content: typeof payload === "string" ? payload : payload.text };
+          },
+          run: () => open("current"),
+          runWithDisposition: open
+        }); });
       }
     });
   };
@@ -736,6 +789,7 @@ export function createPickerRuntime(context: PickerRuntimeContext): PickerRuntim
     openActionPicker,
     openSearchPicker,
     openFileSearchPicker,
+    openWorkspaceSearchPicker,
     openAddFilePicker,
     updatePickerQuery,
     loadCodeActions

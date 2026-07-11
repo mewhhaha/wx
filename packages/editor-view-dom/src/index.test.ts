@@ -38,7 +38,170 @@ function visibleRows(container: HTMLElement): number[] {
     .filter((row) => !Number.isNaN(row));
 }
 
+function dispatchBeforeInput(textarea: HTMLTextAreaElement, data: string, inputType = "insertText"): Event {
+  const event = new InputEvent("beforeinput", { bubbles: true, cancelable: true, data, inputType });
+  textarea.dispatchEvent(event);
+  return event;
+}
+
 describe("createEditor", () => {
+  it("creates a controller with a serializable keymap and rejects ambiguous controller ownership", async () => {
+    const container = document.createElement("div");
+    const editor = createEditor(container, {
+      value: "abc",
+      keymap: { version: 1, bindings: [{ keys: "q", command: "mode.insert", modes: ["normal"] }] }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "q", bubbles: true }));
+    await flushAsyncWork();
+    expect(editor.getState().mode).toBe("insert");
+    expect(() => createEditor(document.createElement("div"), {
+      controller: createEditorController(), keymap: { version: 1 }
+    })).toThrow(/keymap/i);
+  });
+
+  it("renders generic pending-prefix help from the shared six-row layout and cancels it", async () => {
+    const container = document.createElement("div");
+    const editor = createEditor(container, {
+      keymap: { version: 1, bindings: [
+        { keys: "q h", command: "motion.left", modes: ["normal"] },
+        { keys: "q l", command: "motion.right", modes: ["normal"] }
+      ] }
+    });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "q", bubbles: true }));
+    await flushAsyncWork();
+    expect([...container.querySelectorAll("[data-wx-editor-command-completion]")].map((entry) => entry.textContent)).toEqual(["hMove left", "lMove right"]);
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushAsyncWork();
+    expect(container.querySelector("[data-wx-editor-command-completion]")).toBeNull();
+    editor.destroy();
+  });
+
+  it("makes destroy idempotent without destroying an externally owned controller", () => {
+    const container = document.createElement("div");
+    const controller = createEditorController({ value: "owned elsewhere" });
+    const editor = createEditor(container, { controller });
+
+    editor.destroy();
+    editor.destroy();
+    expect(controller.getState().doc.text).toBe("owned elsewhere");
+  });
+
+  it("gives every repeatedly embedded editor a distinct input help relationship", () => {
+    const ids = new Set<string>();
+
+    for (let index = 0; index < 20; index += 1) {
+      const container = document.createElement("div");
+      const editor = createEditor(container);
+      const input = container.querySelector("[data-wx-editor='input']")!;
+      const descriptionId = input.getAttribute("aria-describedby");
+
+      expect(descriptionId).not.toBeNull();
+      expect(ids.has(descriptionId!)).toBe(false);
+      expect(container.querySelector(`#${descriptionId}`)).not.toBeNull();
+      ids.add(descriptionId!);
+      editor.destroy();
+      editor.destroy();
+      expect(container.querySelector("[data-wx-editor='root']")).toBeNull();
+    }
+  });
+  it("commits dead keys, emoji, and browser text exactly once", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const editor = createEditor(container, { value: "" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    await flushAsyncWork();
+    dispatchBeforeInput(textarea, "é");
+    dispatchBeforeInput(textarea, "😀");
+    await flushAsyncWork(12);
+
+    expect(editor.getState().doc.text).toBe("é😀");
+    expect(editor.getState().selection.ranges[0]?.head).toBe(3);
+  });
+
+  it("commits IME fallbacks once across final-input timings, ignores cancellation, and drops work on destroy", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const editor = createEditor(container, { value: "" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    await flushAsyncWork();
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "漢" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "漢" }));
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, data: "漢", inputType: "insertText" }));
+    await flushAsyncWork(12);
+    expect(editor.getState().doc.text).toBe("漢");
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "語" }));
+    setTimeout(() => {
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, data: "語", inputType: "insertText" }));
+    }, 0);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(editor.getState().doc.text).toBe("漢語");
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "文" }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(editor.getState().doc.text).toBe("漢語文");
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "字" }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "" }));
+    await flushAsyncWork(12);
+    expect(editor.getState().doc.text).toBe("漢語文");
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "語" }));
+    editor.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(editor.getState().doc.text).toBe("漢語文");
+  });
+
+  it("keeps paste atomic and serializes mixed browser input with commands", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const editor = createEditor(container, { value: "" });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    await flushAsyncWork();
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", { value: { getData: () => "one\ntwo" } });
+    textarea.dispatchEvent(paste);
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    await flushAsyncWork(24);
+
+    expect(editor.getState().doc.text).toBe("one\ntwo");
+    editor.controller.execute((_state, _dispatch, context) => context.history?.undo() ?? false);
+    expect(editor.getState().doc.text).toBe("");
+  });
+
+  it("uses keydown for commands but exposes a focusable labelled textbox", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const editor = createEditor(container, { value: "" });
+    const root = container.querySelector("[data-wx-editor='root']") as HTMLElement;
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    root.focus();
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.getAttribute("aria-label")).toBe("Editor input, normal mode");
+    expect(textarea.getAttribute("aria-multiline")).toBe("true");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
+    await flushAsyncWork();
+    expect(textarea.getAttribute("aria-label")).toBe("Editor input, insert mode");
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    await flushAsyncWork();
+    expect(editor.getState().doc.text).toBe("");
+  });
+
   it("routes runtime keyboard input through controller key APIs, not compatibility helpers", () => {
     const indexSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/index.ts"), "utf8");
     const eventSource = readFileSync(resolve(process.cwd(), "packages/editor-view-dom/src/dom-events.ts"), "utf8");
@@ -476,6 +639,26 @@ describe("createEditor", () => {
     expect(container.querySelector('[data-wx-editor-row="150"]')).toBeNull();
   });
 
+  it("keeps a bounded DOM window and resolves global row identities in a 20k-line document", async () => {
+    const container = document.createElement("div");
+    container.style.height = "240px";
+    document.body.append(container);
+    const value = Array.from({ length: 20_000 }, (_, index) => `line ${index + 1}`).join("\n");
+    const editor = createEditor(container, { value });
+    const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
+    await flushAsyncWork(8);
+
+    const rows = [...container.querySelectorAll<HTMLElement>("[data-wx-editor-row]")];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(100);
+    expect(rows.some((row) => row.dataset.wxEditorRow === "20000")).toBe(true);
+    expect(container.querySelector("[data-wx-editor-cursor='true']")).not.toBeNull();
+    editor.destroy();
+  });
+
   it("moves by visual rows when soft wrap is enabled", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -560,6 +743,33 @@ describe("createEditor", () => {
       line: 0,
       column: 0
     });
+  });
+
+  it("stops a queued wheel burst when its view is destroyed", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const controller = createEditorController({
+      value: Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n")
+    });
+    const originalHandleKeyInput = controller.handleKeyInput.bind(controller);
+    let releaseFirstInput = () => {};
+    const firstInput = new Promise<void>((resolveInput) => { releaseFirstInput = resolveInput; });
+    const handleKeyInput = vi.spyOn(controller, "handleKeyInput").mockImplementation(async (...args) => {
+      if (handleKeyInput.mock.calls.length === 1) await firstInput;
+      return originalHandleKeyInput(...args);
+    });
+    const editor = createEditor(container, { controller });
+    const surface = container.querySelector("[data-wx-editor='surface']") as HTMLElement;
+
+    surface.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 240 }));
+    await Promise.resolve();
+    expect(handleKeyInput).toHaveBeenCalledTimes(1);
+    editor.destroy();
+    releaseFirstInput();
+    await flushAsyncWork(8);
+
+    expect(handleKeyInput).toHaveBeenCalledTimes(1);
+    controller.destroy();
   });
 
   it("scrolls to keep the cursor visible during keyboard movement", () => {
@@ -693,7 +903,7 @@ describe("createEditor", () => {
     expect(container.querySelector("[data-wx-editor-cursor='true']")?.getAttribute("data-wx-editor-cursor-kind")).toBe("line");
     expect(container.querySelector("[data-wx-editor-status-mode='true']")?.textContent).toBe(" INS ");
     expect(container.querySelector("[data-wx-editor-status-mode='true']")?.getAttribute("data-mode")).toBe("INS");
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    dispatchBeforeInput(textarea, "x");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 
     expect(editor.getState().doc.text).toBe("xabc");
@@ -741,7 +951,7 @@ describe("createEditor", () => {
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }));
+    dispatchBeforeInput(textarea, "", "deleteContentBackward");
 
     expect(editor.getState().doc.text).toBe("");
   });
@@ -756,7 +966,7 @@ describe("createEditor", () => {
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }));
+    dispatchBeforeInput(textarea, "", "deleteContentBackward");
 
     expect(editor.getState().doc.text).toBe("  ");
   });
@@ -769,8 +979,8 @@ describe("createEditor", () => {
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "y", bubbles: true }));
+    dispatchBeforeInput(textarea, "x");
+    dispatchBeforeInput(textarea, "y");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 
     expect(editor.getState().doc.text).toBe("xyabc");
@@ -787,9 +997,9 @@ describe("createEditor", () => {
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    dispatchBeforeInput(textarea, "x");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "y", bubbles: true }));
+    dispatchBeforeInput(textarea, "y");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 
     expect(editor.getState().doc.text).toBe("xyabc");
@@ -866,7 +1076,7 @@ describe("createEditor", () => {
     editor.setValue("alpha\nbeta");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "O", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "z", bubbles: true }));
+    dispatchBeforeInput(textarea, "z");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(editor.getState().doc.text).toBe("alpha\nz\nbeta");
     expect(getSelectionOffsets(editor.getState())).toEqual({ from: 6, to: 7 });
@@ -887,7 +1097,7 @@ describe("createEditor", () => {
     expect(getSelectionOffsets(editor.getState())).toEqual({ from: 0, to: 11 });
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "!", bubbles: true }));
+    dispatchBeforeInput(textarea, "!");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(editor.getState().doc.text).toBe("!alpha\nbeta\ngamma");
 
@@ -913,7 +1123,7 @@ describe("createEditor", () => {
     expect(editor.getState().mode).toBe("insert");
     expect(editor.getState().yankBuffer).toBe("bcd");
 
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    dispatchBeforeInput(textarea, "x");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(editor.getState().doc.text).toBe("ax");
   });
@@ -986,10 +1196,9 @@ describe("createEditor", () => {
     expect(openCalls).toBe(1);
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
-    await Promise.resolve();
+    dispatchBeforeInput(textarea, "x");
+    await vi.waitFor(() => expect(openCalls + updateCalls).toBeGreaterThanOrEqual(2));
 
-    expect(openCalls + updateCalls).toBeGreaterThanOrEqual(2);
     expect(editor.getState().doc.text).toBe("abc\nxdef");
   });
 
@@ -1017,7 +1226,7 @@ describe("createEditor", () => {
     expect(requests[0]?.toLine).toBeLessThan(50);
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    dispatchBeforeInput(textarea, "x");
     await Promise.resolve();
     await Promise.resolve();
 
@@ -1215,7 +1424,7 @@ describe("createEditor", () => {
     expect(keywordText(container)).toContain("const");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    dispatchBeforeInput(textarea, "x");
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 
     await flushAsyncWork();
@@ -1257,12 +1466,13 @@ describe("createEditor", () => {
     expect(keywordText(container)).toContain("const");
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    dispatchBeforeInput(textarea, "x");
     await Promise.resolve();
 
     expect(keywordText(container)).toContain("const");
 
-    resolveUpdate?.();
+    await vi.waitFor(() => expect(resolveUpdate).not.toBeNull());
+    resolveUpdate!();
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await flushAsyncWork();
 
@@ -1282,7 +1492,6 @@ describe("createEditor", () => {
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await Promise.resolve();
     await Promise.resolve();
 
     expect(container.querySelectorAll("[data-wx-editor-row]").length).toBeLessThan(80);
@@ -2008,8 +2217,9 @@ describe("createEditor", () => {
       }
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(
+      container.querySelector('[data-wx-editor-diagnostic-marker="error"]')
+    ).not.toBeNull());
 
     expect(container.querySelector('[data-wx-editor-diagnostic-marker="error"]')).not.toBeNull();
     expect(container.querySelector('[data-wx-editor-content="1"] .wx-diagnostic-error')).not.toBeNull();
@@ -2052,8 +2262,9 @@ describe("createEditor", () => {
       }
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(
+      container.querySelector('[data-wx-editor-content="1"] .wx-diagnostic-warning')
+    ).not.toBeNull());
 
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "i", bubbles: true }));
@@ -2209,8 +2420,9 @@ describe("createEditor", () => {
       }
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(
+      container.querySelector('[data-wx-editor-gutter="1"] [data-wx-editor-line-change="added"]')
+    ).not.toBeNull());
 
     expect(container.querySelector('[data-wx-editor-gutter="1"] [data-wx-editor-line-change="added"]')).not.toBeNull();
     expect(container.querySelector('[data-wx-editor-gutter="2"] [data-wx-editor-line-change="modified"]')).not.toBeNull();
@@ -2282,8 +2494,9 @@ describe("createEditor", () => {
     });
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(
+      editor.controller.getPresentationState().language.diagnostics
+    ).toHaveLength(1));
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: ":", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true }));
@@ -2580,7 +2793,9 @@ describe("createEditor", () => {
       }
     });
     const textarea = container.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement;
-    await Promise.resolve();
+    await vi.waitFor(() => expect(
+      editor.controller.getPresentationState().language.diagnostics
+    ).toHaveLength(2));
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true }));
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
@@ -2853,5 +3068,85 @@ describe("createEditor", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(getSelectionOffsets(editor.getState())).toEqual({ from: 14, to: 18 });
+  });
+
+  it("does not let one view destroy a controller-owned service used by another view", () => {
+    const firstContainer = document.createElement("div");
+    const secondContainer = document.createElement("div");
+    document.body.append(firstContainer, secondContainer);
+    const destroy = vi.fn();
+    const services = {
+      lifecycle: {
+        state: "ready" as const,
+        owner: "controller" as const,
+        destroy
+      }
+    };
+    const controller = createEditorController({ value: "shared" });
+    controller.setLanguageServices(services);
+    const first = createEditor(firstContainer, { controller });
+    const second = createEditor(secondContainer, { controller });
+
+    first.destroy();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(second.getState().doc.text).toBe("shared");
+    second.destroy();
+    expect(destroy).not.toHaveBeenCalled();
+    controller.destroy();
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("destroys only view-owned language services when an externally owned controller survives", () => {
+    const container = document.createElement("div");
+    const controller = createEditorController({ value: "shared" });
+    const destroyViewService = vi.fn();
+    const destroyExternalService = vi.fn();
+    const editor = createEditor(container, {
+      controller,
+      languageServices: [
+        {
+          lifecycle: {
+            state: "ready",
+            owner: "view",
+            destroy: destroyViewService
+          }
+        },
+        {
+          lifecycle: {
+            state: "ready",
+            owner: "external",
+            destroy: destroyExternalService
+          }
+        }
+      ]
+    });
+
+    editor.destroy();
+    editor.destroy();
+    expect(destroyViewService).toHaveBeenCalledTimes(1);
+    expect(destroyExternalService).not.toHaveBeenCalled();
+    expect(controller.getState().doc.text).toBe("shared");
+    controller.destroy();
+    expect(destroyExternalService).not.toHaveBeenCalled();
+  });
+
+  it("destroys controller-owned services when the view created the controller", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const destroy = vi.fn();
+    const editor = createEditor(container, {
+      value: "owned",
+      languageServices: {
+        lifecycle: {
+          state: "ready",
+          owner: "controller",
+          destroy
+        }
+      }
+    });
+
+    editor.destroy();
+    editor.destroy();
+    expect(destroy).toHaveBeenCalledTimes(1);
   });
 });

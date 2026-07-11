@@ -18,6 +18,6 @@
     "./scene-lang.wasm": "./dist/scene-lang.wasm"
   },
   "scripts": {
-    "build": "node scripts/build-wasm.mjs && tsup src/index.ts --format esm --out-dir dist && node ../../scripts/build-package-types.mjs"
+    "build": "node ../../scripts/clean-package-dist.mjs && node scripts/build-wasm.mjs && tsup src/index.ts --format esm --out-dir dist && node ../../scripts/build-package-types.mjs"
   }
 }

@@ -11,10 +11,10 @@ describe("incremental tree-sitter edit helpers", () => {
     expect(positionAtOffset("ab\ncd\nef", 8)).toEqual({ row: 2, column: 2 });
   });
 
-  it("computes tree-sitter byte columns from UTF-16 offsets", () => {
-    expect(positionAtOffset("éα\n😀x", 2)).toEqual({ row: 0, column: 4 });
-    expect(positionAtOffset("éα\n😀x", 5)).toEqual({ row: 1, column: 4 });
-    expect(positionAtOffset("éα\n😀x", 6)).toEqual({ row: 1, column: 5 });
+  it("computes web-tree-sitter UTF-16 columns from document offsets", () => {
+    expect(positionAtOffset("éα\n😀x", 2)).toEqual({ row: 0, column: 2 });
+    expect(positionAtOffset("éα\n😀x", 5)).toEqual({ row: 1, column: 2 });
+    expect(positionAtOffset("éα\n😀x", 6)).toEqual({ row: 1, column: 3 });
   });
 
   it("advances positions across inserted newlines", () => {
@@ -22,9 +22,9 @@ describe("incremental tree-sitter edit helpers", () => {
     expect(advancePosition({ row: 2, column: 3 }, "\nxy\nz")).toEqual({ row: 4, column: 1 });
   });
 
-  it("advances tree-sitter byte columns across non-ASCII insertions", () => {
-    expect(advancePosition({ row: 0, column: 2 }, "é😀")).toEqual({ row: 0, column: 8 });
-    expect(advancePosition({ row: 0, column: 2 }, "é\nα")).toEqual({ row: 1, column: 2 });
+  it("advances web-tree-sitter UTF-16 columns across non-ASCII insertions", () => {
+    expect(advancePosition({ row: 0, column: 2 }, "é😀")).toEqual({ row: 0, column: 5 });
+    expect(advancePosition({ row: 0, column: 2 }, "é\nα")).toEqual({ row: 1, column: 1 });
   });
 
   it("builds tree edits for multiline insertions", () => {
@@ -44,7 +44,7 @@ describe("incremental tree-sitter edit helpers", () => {
     });
   });
 
-  it("builds tree edits with byte indexes while changes stay UTF-16", () => {
+  it("builds tree edits in web-tree-sitter's UTF-16 coordinate space", () => {
     const edit = buildTreeEdit("aéα\n😀x", {
       from: 2,
       to: 6,
@@ -52,11 +52,11 @@ describe("incremental tree-sitter edit helpers", () => {
     });
 
     expect(edit).toEqual({
-      startIndex: 3,
-      oldEndIndex: 10,
-      newEndIndex: 7,
-      startPosition: { row: 0, column: 3 },
-      oldEndPosition: { row: 1, column: 4 },
+      startIndex: 2,
+      oldEndIndex: 6,
+      newEndIndex: 5,
+      startPosition: { row: 0, column: 2 },
+      oldEndPosition: { row: 1, column: 2 },
       newEndPosition: { row: 1, column: 1 }
     });
   });

@@ -1,8 +1,12 @@
 import {
+  appendInsertMode,
+  appendInsertModeAtLineEnd,
   changeSelection,
   createCharacterSelection,
   createSelection,
   deleteSelection,
+  enterInsertMode,
+  enterNormalMode,
   findNextChar,
   findPrevChar,
   findTillNextChar,
@@ -17,11 +21,17 @@ import {
   gotoWindowTop,
   halfPageDown,
   halfPageUp,
+  insertFirstNonWhitespace,
+  insertText,
+  mapOffsetThroughChanges,
   moveDown,
   moveUp,
+  openAbove,
+  openBelow,
   pageDown,
   pageUp,
   pasteAfter,
+  pasteBefore,
   selectTextobject,
   yankSelection,
   type Command,
@@ -38,6 +48,8 @@ import type {
   EditorJumpEntry,
   EditorKeyInputOptions,
   EditorPresentationState,
+  EditorRepeatableEdit,
+  EditorUpdate,
   EditorRepeatableMotion
 } from "./types";
 
@@ -47,7 +59,8 @@ interface CommandsRuntimeContext {
   getController(): {
     getSelectedRegister(): string | null;
     getRegister(name?: string | null): string | null;
-    setRegister(name: string | null, value: string | null): void;
+    getRegisterKind(name?: string | null): EditorState["yankKind"];
+    setRegister(name: string | null, value: string | null, kind?: EditorState["yankKind"]): void;
     selectRegister(name: string | null): void;
     getState(): EditorState;
   };
@@ -59,6 +72,7 @@ interface CommandsRuntimeContext {
   readPendingCount(): number;
   historyControls: NonNullable<CommandContext["history"]>;
   setBottomMessage(message: EditorBottomMessageState | null): void;
+  setLastRepeatableEdit(next: EditorRepeatableEdit | null): void;
   clearFlashState(effectType?: string | null): boolean;
   closePicker(effectType?: string): void;
   syncVisibleLanguageDecorations(): boolean;
@@ -92,7 +106,7 @@ interface CommandsRuntimeContext {
     gotoNext?(context: { document: { revision: number; doc: EditorState["doc"] }; activeOffset: number; kind: string }): Promise<{ from: number; to: number } | null>;
     gotoPrev?(context: { document: { revision: number; doc: EditorState["doc"] }; activeOffset: number; kind: string }): Promise<{ from: number; to: number } | null>;
   } | undefined;
-  restoreJump(entry: EditorJumpEntry | null): boolean;
+  restoreJump(entry: EditorJumpEntry | null): Promise<boolean>;
 }
 
 export interface CommandsRuntime {
@@ -100,6 +114,9 @@ export interface CommandsRuntime {
   executeCommandWithCount(command: Command, options?: EditorKeyInputOptions): Promise<boolean>;
   executeCommandWithCountSync(command: Command): boolean;
   runRepeatableMotion(motion: EditorRepeatableMotion, options?: EditorKeyInputOptions): Promise<boolean>;
+  runRepeatableEdit(edit: EditorRepeatableEdit, options?: EditorKeyInputOptions): Promise<boolean>;
+  handleControllerUpdate(update: EditorUpdate): void;
+  cancelPendingRepeat(): void;
   navigateDiagnostic(direction: "next" | "prev", extreme?: boolean): boolean;
   toggleComments(mode?: "smart" | "line" | "block"): Promise<boolean>;
   selectTextobjectWithFallback(mode: SyntaxTextobjectMode, object: string): Promise<boolean>;
@@ -110,6 +127,75 @@ export interface CommandsRuntime {
 }
 
 export function createCommandsRuntime(context: CommandsRuntimeContext): CommandsRuntime {
+  type InsertRepeat = Extract<EditorRepeatableEdit, { kind: "insert" }>;
+  interface PendingInsertRepeat {
+    entry: InsertRepeat["entry"];
+    spans: Array<{ from: number; to: number }>;
+    sourceSelectionCount: number;
+    baseChanged: boolean;
+    invalid: boolean;
+  }
+
+  let pendingInsertRepeat: PendingInsertRepeat | null = null;
+  let replayingEdit = false;
+  let suppressAutomaticPasteRecord = false;
+
+  const insertEntryForCommand = (command: Command): InsertRepeat["entry"] | null => {
+    if (command === enterInsertMode) return "insert";
+    if (command === appendInsertMode) return "append";
+    if (command === insertFirstNonWhitespace) return "insert-line-start";
+    if (command === appendInsertModeAtLineEnd) return "append-line-end";
+    if (command === changeSelection) return "change";
+    if (command === openAbove) return "open-above";
+    if (command === openBelow) return "open-below";
+    return null;
+  };
+
+  const commandForInsertEntry = (entry: InsertRepeat["entry"]): Command => {
+    if (entry === "insert") return enterInsertMode;
+    if (entry === "append") return appendInsertMode;
+    if (entry === "insert-line-start") return insertFirstNonWhitespace;
+    if (entry === "append-line-end") return appendInsertModeAtLineEnd;
+    if (entry === "change") return changeSelection;
+    return entry === "open-above" ? openAbove : openBelow;
+  };
+
+  const beginInsertRepeat = (entry: InsertRepeat["entry"], baseChanged: boolean) => {
+    if (replayingEdit || context.getState().mode !== "insert") return;
+    const ranges = context.getState().selection.ranges;
+    pendingInsertRepeat = {
+      entry,
+      spans: ranges.map((range) => ({ from: range.head, to: range.head })),
+      sourceSelectionCount: ranges.length,
+      baseChanged,
+      invalid: false
+    };
+  };
+
+  const repeatRegisterText = (text: string, kind: EditorState["yankKind"], count: number): string => {
+    if (count <= 1) return text;
+    if (kind === "characterwise" || text.endsWith("\n")) return text.repeat(count);
+    return Array.from({ length: count }, () => text).join("\n");
+  };
+
+  const recordPaste = (
+    position: "before" | "after",
+    text: string,
+    registerKind: EditorState["yankKind"],
+    count: number,
+    sourceSelectionCount: number
+  ) => {
+    if (replayingEdit) return;
+    context.setLastRepeatableEdit({
+      kind: "paste",
+      position,
+      text,
+      registerKind,
+      count,
+      sourceSelectionCount
+    });
+  };
+
   const primeRegisterForPaste = () => {
     const controller = context.getController();
     const selected = controller.getSelectedRegister();
@@ -120,12 +206,12 @@ export function createCommandsRuntime(context: CommandsRuntimeContext): Commands
 
     const value = controller.getRegister(selected);
     context.dispatch({
-      yankBuffer: value
+      yankBuffer: value,
+      yankKind: controller.getRegisterKind(selected)
     });
   };
 
   const executeEditorCommand = (command: Command): boolean => {
-    const state = context.getState();
     const presentation = context.getPresentation();
     const controller = context.getController();
     context.setBottomMessage(null);
@@ -133,9 +219,11 @@ export function createCommandsRuntime(context: CommandsRuntimeContext): Commands
     context.closePicker("ui.picker.close");
     const selectedRegister = presentation.registers.selected;
 
-    if (command === pasteAfter) {
+    if (command === pasteAfter || command === pasteBefore) {
       primeRegisterForPaste();
     }
+
+    const state = context.getState();
 
     if (presentation.viewport.softWrap) {
       if (command === moveUp) {
@@ -187,9 +275,34 @@ export function createCommandsRuntime(context: CommandsRuntimeContext): Commands
 
     if (didRun && [yankSelection, deleteSelection, changeSelection].includes(command)) {
       if (selectedRegister) {
-        controller.setRegister(selectedRegister, controller.getState().yankBuffer);
+        controller.setRegister(
+          selectedRegister,
+          controller.getState().yankBuffer,
+          controller.getState().yankKind
+        );
       }
       controller.selectRegister(null);
+    }
+
+    const insertEntry = insertEntryForCommand(command);
+    if (didRun && insertEntry) {
+      beginInsertRepeat(insertEntry, context.getState().doc !== state.doc);
+    }
+
+    if (
+      didRun &&
+      !suppressAutomaticPasteRecord &&
+      (command === pasteAfter || command === pasteBefore) &&
+      context.getState().doc !== state.doc &&
+      state.yankBuffer
+    ) {
+      recordPaste(
+        command === pasteBefore ? "before" : "after",
+        state.yankBuffer,
+        state.yankKind,
+        1,
+        state.selection.ranges.length
+      );
     }
 
     return didRun;
@@ -200,16 +313,53 @@ export function createCommandsRuntime(context: CommandsRuntimeContext): Commands
     const count = context.readPendingCount();
     const selectedRegister = controller.getSelectedRegister();
 
-    if (command === pasteAfter && selectedRegister === "+" && options.readClipboardText) {
-      const value = await options.readClipboardText();
-      controller.selectRegister(null);
+    if (command === pasteAfter || command === pasteBefore) {
+      let value = context.getState().yankBuffer;
+      let kind = context.getState().yankKind;
+
+      if (selectedRegister) {
+        try {
+          if (selectedRegister === "+") {
+            value = options.readClipboardText ? await options.readClipboardText() : null;
+            kind = value?.endsWith("\n") ? "linewise" : "characterwise";
+          } else {
+            value = controller.getRegister(selectedRegister);
+            kind = controller.getRegisterKind(selectedRegister);
+          }
+        } finally {
+          controller.selectRegister(null);
+        }
+      }
 
       if (!value) {
-        context.setBottomMessage({ tone: "warning", text: 'Register "+" is empty' });
+        if (selectedRegister) {
+          context.setBottomMessage({ tone: "warning", text: `Register "${selectedRegister}" is empty` });
+        }
         return false;
       }
 
-      context.dispatch({ yankBuffer: value });
+      context.dispatch({
+        yankBuffer: repeatRegisterText(value, kind, count),
+        yankKind: kind
+      });
+      const before = context.getState();
+      let didRun = false;
+      suppressAutomaticPasteRecord = true;
+      try {
+        didRun = executeEditorCommand(command);
+      } finally {
+        suppressAutomaticPasteRecord = false;
+      }
+      if (didRun && context.getState().doc !== before.doc) {
+        recordPaste(
+          command === pasteBefore ? "before" : "after",
+          value,
+          kind,
+          count,
+          before.selection.ranges.length
+        );
+      }
+      return didRun && context.getState().doc !== before.doc;
     }
 
     let applied = false;
@@ -252,6 +402,87 @@ export function createCommandsRuntime(context: CommandsRuntimeContext): Commands
       }
     }
 
+    return applied;
+  };
+
+  const handleControllerUpdate = (update: EditorUpdate): void => {
+    const pending = pendingInsertRepeat;
+    if (!pending) return;
+
+    const cancelsCapture = (update.transaction.effects ?? []).some(
+      (effect) =>
+        effect.type === "controller.replace-state" ||
+        effect.type.startsWith("history.") ||
+        effect.type.startsWith("buffer.") ||
+        effect.type.startsWith("pane.")
+    );
+    if (cancelsCapture) {
+      pendingInsertRepeat = null;
+      return;
+    }
+
+    if (update.docChanged) {
+      const changes = update.transaction.changes ?? [];
+      if (changes.length === 0 || changes.some((change) => change.to !== change.from)) {
+        pending.invalid = true;
+      }
+      pending.spans = pending.spans.map((span) => ({
+        from: mapOffsetThroughChanges(span.from, changes, "left"),
+        to: mapOffsetThroughChanges(span.to, changes, "right")
+      }));
+    }
+
+    if (update.nextState.insertSession?.moved) pending.invalid = true;
+    if (update.prevState.mode !== "insert" || update.nextState.mode === "insert") return;
+
+    pendingInsertRepeat = null;
+    if (pending.invalid || replayingEdit) return;
+    const inserted = pending.spans.map((span) => update.nextState.doc.slice(span.from, span.to));
+    const text = inserted[0] ?? "";
+    if (inserted.some((value) => value !== text) || (!pending.baseChanged && text.length === 0)) return;
+    context.setLastRepeatableEdit({
+      kind: "insert",
+      entry: pending.entry,
+      text,
+      sourceSelectionCount: pending.sourceSelectionCount
+    });
+  };
+
+  const runSingleRepeatableEdit = (edit: EditorRepeatableEdit): boolean => {
+    pendingInsertRepeat = null;
+    replayingEdit = true;
+    try {
+      if (edit.kind === "paste") {
+        if (!edit.text) return false;
+        context.dispatch({
+          yankBuffer: repeatRegisterText(edit.text, edit.registerKind, edit.count),
+          yankKind: edit.registerKind
+        });
+        const beforeDoc = context.getState().doc;
+        const didRun = executeEditorCommand(edit.position === "before" ? pasteBefore : pasteAfter);
+        return didRun && context.getState().doc !== beforeDoc;
+      }
+
+      const beforeDoc = context.getState().doc;
+      if (!executeEditorCommand(commandForInsertEntry(edit.entry)) || context.getState().mode !== "insert") {
+        return false;
+      }
+      if (edit.text.length > 0) executeEditorCommand(insertText(edit.text));
+      executeEditorCommand(enterNormalMode);
+      return context.getState().doc !== beforeDoc;
+    } finally {
+      pendingInsertRepeat = null;
+      replayingEdit = false;
+    }
+  };
+
+  const runRepeatableEdit = async (edit: EditorRepeatableEdit): Promise<boolean> => {
+    const count = context.readPendingCount();
+    let applied = false;
+    for (let index = 0; index < count; index += 1) {
+      if (!runSingleRepeatableEdit(edit)) break;
+      applied = true;
+    }
     return applied;
   };
 
@@ -498,6 +729,11 @@ export function createCommandsRuntime(context: CommandsRuntimeContext): Commands
     executeEditorCommand,
     executeCommandWithCount,
     executeCommandWithCountSync,
+    runRepeatableEdit,
+    handleControllerUpdate,
+    cancelPendingRepeat() {
+      pendingInsertRepeat = null;
+    },
     runRepeatableMotion,
     navigateDiagnostic,
     toggleComments,

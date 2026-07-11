@@ -8,6 +8,7 @@ import { createNodeTreeSitterLanguageServices } from "@wx/editor-tree-sitter/nod
 import { graphiteTheme, mintTheme, phTheme } from "@mewhhaha/wx-theme";
 
 import { createAnsiEditorTerminal } from "./terminal";
+import { createNodeTerminalWrite } from "./node-host";
 
 function resolveDemoAssetPath(candidates: readonly string[]): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -58,7 +59,7 @@ export async function runAnsiMirrorDemo(): Promise<void> {
     controller,
     input: process.stdin,
     output: process.stdout,
-    write: (text) => process.stdout.write(text),
+    write: createNodeTerminalWrite(process.stdout),
     theme: phTheme,
     availableThemes: [phTheme, graphiteTheme, mintTheme],
     cols: process.stdout.columns ?? 100,

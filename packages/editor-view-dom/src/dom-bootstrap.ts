@@ -13,6 +13,14 @@ export interface EditorDomElements {
   textarea: HTMLTextAreaElement;
 }
 
+const inputHelpIdCounter = Symbol.for("@mewhhaha/wx-dom.input-help-id-counter");
+
+function nextInputHelpId(): string {
+  const scope = globalThis as typeof globalThis & { [key: symbol]: number | undefined };
+  scope[inputHelpIdCounter] = (scope[inputHelpIdCounter] ?? 0) + 1;
+  return `wx-editor-input-help-${scope[inputHelpIdCounter]}`;
+}
+
 export function createEditorDom(container: HTMLElement, lineHeight: number): EditorDomElements {
   const root = document.createElement("div");
   const surface = document.createElement("div");
@@ -70,11 +78,23 @@ export function createEditorDom(container: HTMLElement, lineHeight: number): Edi
   textarea.autocapitalize = "off";
   textarea.autocomplete = "off";
   textarea.setAttribute("autocorrect", "off");
+  textarea.setAttribute("aria-label", "Editor input, normal mode");
+  textarea.setAttribute("aria-multiline", "true");
+  const inputHelpId = nextInputHelpId();
+  textarea.setAttribute("aria-describedby", inputHelpId);
+
+  const inputHelp = document.createElement("span");
+  inputHelp.id = inputHelpId;
+  inputHelp.hidden = true;
+  inputHelp.textContent = "Use Escape to leave insert mode. Text is inserted at the editor cursor.";
+
+  statusMode.setAttribute("aria-live", "polite");
+  statusMode.setAttribute("aria-atomic", "true");
 
   status.append(statusMode, statusFile, statusMeta);
   rows.append(viewportRows);
   surface.append(rows, tooltip, textarea);
-  root.append(surface, commandPopover, status, bottomRow);
+  root.append(surface, commandPopover, status, bottomRow, inputHelp);
   container.replaceChildren(root);
 
   return {

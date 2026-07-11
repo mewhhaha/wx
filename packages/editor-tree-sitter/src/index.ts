@@ -7,8 +7,34 @@ import {
   type TreeSitterWorkerHost
 } from "./provider";
 
-export { TreeSitterLanguageProvider, type TreeSitterWorkerHost } from "./provider";
+export {
+  LanguageServiceError,
+  TreeSitterLanguageProvider,
+  type LanguageServiceState,
+  type TreeSitterPipelineMetrics,
+  type TreeSitterWorkerHost
+} from "./provider";
 export { typescriptHighlightQuery } from "./highlightQuery";
+export {
+  TREE_SITTER_INDENT_QUERY_SUBSET,
+  collectIndentCaptures,
+  indentQueryRange,
+  queryIndentCaptures,
+  resolveIndentCaptures,
+  type IndentCapture,
+  type IndentCaptureAnswer,
+  type IndentQueryMatchLike,
+  type IndentQueryNodeLike,
+  type IndentQueryLike,
+  type IndentQueryRange
+} from "./indentQuery";
+export { sceneIndentQuery, typescriptIndentQuery } from "./indentQueries";
+export {
+  materializeIndentationFixture,
+  sceneOrWgslCaptureFixtures,
+  typescriptIndentationFixtures,
+  type IndentationConformanceFixture
+} from "./indentFixtures";
 
 export interface TreeSitterProviderOptions extends Omit<TreeSitterProviderOptionsWithHost, "createWorker"> {
   createWorker?: () => TreeSitterWorkerHost;

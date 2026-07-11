@@ -29,13 +29,55 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
         with:
-          targets: wasm32-unknown-unknown
+          deno-version: v2.9.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.93.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium firefox webkit
+
       - name: Verify workspace
         run: pnpm run verify:workspace
+
+      - name: Run Deno terminal checks
+        run: |
+          deno task check
+          deno task test
+
+      - name: Run Chromium E2E tests
+        run: pnpm run test:e2e:ci
+
+      - name: Run DOM browser compatibility matrix
+        run: pnpm run test:e2e:dom-matrix
+
+      - name: Run cache-disabled Pages base-path smoke
+        run: pnpm run test:e2e:web-lifecycle-production
+
+      - name: Validate JSR editor packages
+        run: pnpm run jsr:check:editor
+
+      - name: Verify Rust workspace
+        run: |
+          cargo fmt --check
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -A clippy::not_unsafe_ptr_arg_deref
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            test-results
+            playwright-report
+            playwright-report-dom-matrix
+            playwright-report-production
+            playwright-report-web-lifecycle-production
+          if-no-files-found: ignore

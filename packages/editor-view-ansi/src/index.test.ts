@@ -114,6 +114,40 @@ class FakeOutput {
 }
 
 describe("@wx/editor-view-ansi", () => {
+  it("applies keymap when the terminal owns its controller and rejects conflicting ownership", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const writes: string[] = [];
+    const terminal = createAnsiEditorTerminal({
+      input, output, write: (text) => writes.push(text), cols: 30, rows: 6,
+      keymap: { version: 1, bindings: [{ keys: "q", command: "mode.insert", modes: ["normal"] }] }
+    });
+    terminal.mount();
+    input.emit("q");
+    await flushAsyncWork();
+    expect(stripAnsi(writes.join(""))).toContain("INS");
+    terminal.destroy();
+    expect(() => createAnsiEditorTerminal({
+      controller: createEditorController(), input: new FakeInput(), write() {}, cols: 30, rows: 6, keymap: { version: 1 }
+    })).toThrow(/keymap/i);
+  });
+
+  it("renders the same generic pending-prefix help as DOM and clears it on cancellation", async () => {
+    const controller = createEditorController({
+      keymap: { version: 1, bindings: [
+        { keys: "q h", command: "motion.left", modes: ["normal"] },
+        { keys: "q l", command: "motion.right", modes: ["normal"] }
+      ] }
+    });
+    await controller.handleKeyInput({ key: "q" });
+    const frame = stripAnsi(renderEditorAnsiFrame({ state: controller.getState(), presentation: controller.getPresentationState(), cols: 40, rows: 10 }));
+    expect(frame).toContain("h");
+    expect(frame).toContain("l");
+    await controller.handleKeyInput({ key: "Escape" });
+    const cancelled = stripAnsi(renderEditorAnsiFrame({ state: controller.getState(), presentation: controller.getPresentationState(), cols: 40, rows: 10 }));
+    expect(cancelled).not.toContain("h  move");
+  });
+
   it("keeps tree-sitter runtime ownership in the shared tree-sitter package", () => {
     const source = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/src/demo-runtime.ts"), "utf8");
     const configSource = readFileSync(resolve(process.cwd(), "packages/editor-view-ansi/tsup.config.ts"), "utf8");
@@ -743,6 +777,37 @@ describe("@wx/editor-view-ansi", () => {
     expect(exit).toHaveBeenCalledWith(0);
   });
 
+  it("saves and quits through a noninteractive fake terminal while restoring terminal state", async () => {
+    const input = new FakeInput();
+    const exit = vi.fn();
+    const writeFile = vi.fn(async () => {});
+    const writes: string[] = [];
+    const controller = createEditorController({ value: "before\n", filePath: "note.txt" });
+    const terminal = createAnsiEditorTerminal({
+      controller,
+      input,
+      host: { writeFile },
+      cols: 30,
+      rows: 6,
+      write: (text) => writes.push(text),
+      enterAltScreen: true,
+      exit
+    });
+
+    terminal.mount();
+    input.emit("i");
+    input.emit("x");
+    input.emit("\u001b");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    input.emit(":w\r:q\r");
+    await flushAsyncWork();
+
+    expect(writeFile).toHaveBeenCalledWith(expect.objectContaining({ filePath: "note.txt", text: "xbefore\n" }));
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(input.rawModeCalls).toEqual([true, false]);
+    expect(writes.at(-1)).toBe("\u001b[0m\u001b[?25h\u001b[?1049l");
+  });
+
   it("supports :theme switching in the terminal frontend", async () => {
     const sunriseTheme = {
       name: "sunrise",
@@ -807,7 +872,7 @@ describe("@wx/editor-view-ansi", () => {
     });
   });
 
-  it("uses Node host fallback so Ctrl+p populates file results in terminal mode", async () => {
+  it("uses the Node host adapter so Ctrl+p populates file results in terminal mode", async () => {
     const cwd = await mkdtemp(resolve(tmpdir(), "wx-ansi-terminal-"));
     await mkdir(resolve(cwd, "src"), { recursive: true });
     await writeFile(resolve(cwd, "src", "current.ts"), "export const current = 1;\n");
@@ -821,6 +886,7 @@ describe("@wx/editor-view-ansi", () => {
     try {
       const terminal = createAnsiEditorTerminal({
         controller,
+        host: createNodeHostServices({ projectRoot: cwd }),
         input,
         cols: 80,
         rows: 12,
@@ -1022,6 +1088,7 @@ describe("@wx/editor-view-ansi", () => {
     ]);
 
     input.emit("\u001b");
+    await new Promise((resolve) => setTimeout(resolve, 30));
     await flushAsyncWork(64);
     input.emit("\u001br");
     await flushAsyncWork(64);
@@ -1228,6 +1295,7 @@ describe("@wx/editor-view-ansi", () => {
 
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     input.emit("\u001b");
+    await new Promise((resolve) => setTimeout(resolve, 30));
     await flushAsyncWork(64);
     textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true }));
     input.emit("\u001bOQ");

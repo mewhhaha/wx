@@ -29,7 +29,13 @@ export function syncVisibleViewportRows(presentation: EditorPresentationState): 
     return changed;
   }
 
-  const fromRowIndex = Math.max(0, Math.min(visualRows.length - 1, presentation.viewport.topVisualRow));
+  const isBoundedWindow =
+    presentation.viewport.lineVisualRanges.length === 0 ||
+    (visualRows[0]?.visualRowIndex ?? 0) !== 0 ||
+    presentation.viewport.topVisualRow >= visualRows.length;
+  const fromRowIndex = isBoundedWindow
+    ? 0
+    : Math.max(0, Math.min(visualRows.length - 1, presentation.viewport.topVisualRow));
   const toRowIndex = Math.max(
     fromRowIndex,
     Math.min(visualRows.length - 1, fromRowIndex + presentation.viewport.visibleRowCapacity - 1)
@@ -170,7 +176,7 @@ export function getVisualRowAtIndex(
   presentation: EditorPresentationState,
   visualRowIndex: number
 ): EditorVisualRow {
-  return presentation.viewport.visualRows[
+  return presentation.viewport.visualRows.find((row) => row.visualRowIndex === visualRowIndex) ?? presentation.viewport.visualRows[
     Math.max(0, Math.min(presentation.viewport.visualRows.length - 1, visualRowIndex))
   ] ?? {
     docLine: 0,

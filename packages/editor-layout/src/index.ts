@@ -7,6 +7,9 @@ import {
   type EditorState
 } from "@mewhhaha/wx-core";
 import type { DiagnosticSeverity, EditorDiagnostic, HighlightRole, HighlightSpan } from "@mewhhaha/wx-language";
+import { createVisualLayoutIndex } from "./visual-index";
+
+export * from "./visual-index";
 
 export type EditorLayoutToken =
   | "text"
@@ -173,12 +176,13 @@ export type EditorLayoutOverlay =
     };
 
 export interface EditorLayoutPanel {
-  kind: "tooltip" | "picker" | "completion";
+  kind: "tooltip" | "picker" | "completion" | "signature" | "key-help";
   token: "tooltip" | "picker";
   variant?: "modal" | "combo";
   anchor: { col: number; row: number };
   rows: ReadonlyArray<readonly EditorLayoutRun[]>;
   pickerItems?: readonly EditorLayoutPickerItemState[];
+  keyHelpItems?: readonly { label: string; detail?: string }[];
   tone?: "info" | "warning" | "error";
   width: number;
   height: number;
@@ -205,6 +209,7 @@ export interface EditorLayoutRow {
 export interface EditorLayoutModel {
   document: {
     totalVisualRows: number;
+    totalVisualRowsExact: boolean;
     visibleRange: { fromVisualRow: number; toVisualRow: number };
     rows: readonly EditorLayoutRow[];
     visualRows: ReadonlyArray<{
@@ -303,6 +308,11 @@ export interface EditorLayoutCompletionState {
   selectedIndex: number;
   error: string | null;
 }
+export interface EditorLayoutSignatureHelpState {
+  active: boolean; loading: boolean; anchorOffset: number | null;
+  signatures: readonly { label: string; documentation?: string; activeParameter?: number }[];
+  selectedIndex: number; error: string | null;
+}
 
 export interface EditorLayoutBottomMessageState {
   tone: "info" | "warning" | "error";
@@ -340,7 +350,8 @@ export type EditorLayoutPendingAction =
   | { kind: "surround-delete" }
   | { kind: "surround-replace-from" }
   | { kind: "surround-replace-to"; fromObject: string }
-  | { kind: "register-select"; insert: boolean };
+  | { kind: "register-select"; insert: boolean }
+  | { kind: "command-operand"; command: string; args?: Readonly<Record<string, string | boolean | number>>; operands: readonly string[] };
 
 export interface EditorLayoutPresentationState {
   filePath: string | null;
@@ -357,6 +368,8 @@ export interface EditorLayoutPresentationState {
     visualRows: readonly EditorVisualRow[];
     visibleVisualRows: readonly EditorVisualRow[];
     lineVisualRanges: readonly EditorLineVisualRange[];
+    totalVisualRows?: number;
+    totalVisualRowsExact?: boolean;
   };
   language: {
     diagnostics: readonly EditorDiagnostic[];
@@ -374,7 +387,10 @@ export interface EditorLayoutPresentationState {
   };
   ui: {
     commandLine: EditorLayoutCommandLineState;
+    /** Registry-derived entries for a pending key sequence or command line. */
+    commandCompletionItems?: readonly { label: string; detail?: string }[];
     completion?: EditorLayoutCompletionState;
+    signatureHelp?: EditorLayoutSignatureHelpState;
     picker: EditorLayoutPickerState;
     bottomMessage: EditorLayoutBottomMessageState | null;
     hover: EditorLayoutHoverState;
@@ -826,6 +842,23 @@ export function getVisualRowForOffset(
   };
   const position = state.doc.positionAt(offset);
   const line = state.doc.lineAt(position.line);
+  const windowRows = visualRows.filter((entry) => entry.docLine === position.line);
+
+  if (windowRows.length > 0) {
+    const row =
+      windowRows.find(
+        (entry) =>
+          position.column >= entry.startColumn &&
+          (position.column < entry.startColumn + (entry.segmentEnd - entry.segmentStart) || entry.isLastSegment)
+      ) ?? windowRows[windowRows.length - 1]!;
+    const maxColumn = Math.max(0, row.segmentEnd - row.segmentStart);
+    return {
+      rowIndex: row.visualRowIndex,
+      column: Math.max(0, Math.min(maxColumn, position.column - row.startColumn)),
+      row
+    };
+  }
+
   const range = lineVisualRanges[position.line] ?? { from: 0, to: 0 };
   const rowOffset = softWrap && cols !== Number.MAX_SAFE_INTEGER ? Math.floor(position.column / cols) : 0;
   const rowIndex = Math.max(range.from, Math.min(range.to, range.from + rowOffset));
@@ -1306,6 +1339,54 @@ function buildCompletionPanel(input: EditorLayoutInput): EditorLayoutPanel | nul
   };
 }
 
+function buildSignaturePanel(input: EditorLayoutInput): EditorLayoutPanel | null {
+  const signature = input.presentation.ui.signatureHelp;
+  if (!signature?.active || input.presentation.ui.completion?.active) return null;
+  const anchorOffset = signature.anchorOffset ?? getSelectionOffsets(input.state).to;
+  const anchorRow = getVisualRowForOffset(input.state, input.presentation.viewport.visualRows, input.presentation.viewport.lineVisualRanges, anchorOffset, input.presentation.viewport.softWrap, input.presentation.viewport.softWrap ? Math.max(1, input.presentation.viewport.wrapColumns) : Number.MAX_SAFE_INTEGER);
+  const selected = signature.signatures[signature.selectedIndex];
+  const parameter = selected?.activeParameter;
+  const label = selected ? `${selected.label}${parameter === undefined ? "" : `  [parameter ${parameter + 1}]`}` : signature.loading ? "Loading signature help..." : signature.error ?? "No signature help";
+  const documentation = selected?.documentation?.trim();
+  const width = Math.max(18, Math.min(72, Math.max(label.length, documentation?.length ?? 0)));
+  const rows: EditorLayoutRun[][] = [[{ col: 0, text: truncatePanelText(label, width).padEnd(width, " "), token: "picker-selected", part: "signature-label", selectedInPicker: true }]];
+  if (documentation) rows.push([{ col: 0, text: truncatePanelText(documentation, width).padEnd(width, " "), token: "picker", part: "signature-documentation" }]);
+  return { kind: "signature", token: "picker", anchor: { col: Math.max(0, anchorRow.column + 6), row: Math.max(0, anchorRow.rowIndex + 1) }, rows, width, height: rows.length };
+}
+
+/** Keep pending-key help data in layout so DOM and ANSI share ordering and viewport size. */
+function buildKeyHelpPanel(input: EditorLayoutInput): EditorLayoutPanel | null {
+  const items = input.presentation.ui.commandCompletionItems ?? [];
+  if (
+    items.length === 0 ||
+    input.presentation.ui.commandLine.active ||
+    input.presentation.ui.picker.active ||
+    input.presentation.ui.completion?.active
+  ) {
+    return null;
+  }
+
+  const visibleItems = items.slice(0, 6);
+  const width = Math.max(
+    18,
+    Math.min(52, visibleItems.reduce((max, item) => Math.max(max, item.label.length + (item.detail ? item.detail.length + 2 : 0)), 0))
+  );
+  return {
+    kind: "key-help",
+    token: "picker",
+    anchor: { col: 0, row: 0 },
+    rows: visibleItems.map((item) => [{
+      col: 0,
+      text: truncatePanelText(`${item.label}${item.detail ? `  ${item.detail}` : ""}`, width).padEnd(width, " "),
+      token: "picker",
+      part: "key-help-item"
+    }]),
+    keyHelpItems: visibleItems,
+    width,
+    height: visibleItems.length
+  };
+}
+
 export function buildEditorLayoutRow(
   input: EditorLayoutInput,
   visualRow: EditorVisualRow,
@@ -1707,14 +1788,22 @@ export function buildEditorLayout(input: EditorLayoutInput): EditorLayoutModel {
     panels.push(pickerPanel);
   }
 
+  const keyHelpPanel = buildKeyHelpPanel(input);
+  if (keyHelpPanel) {
+    panels.push(keyHelpPanel);
+  }
+
   const completionPanel = buildCompletionPanel(input);
   if (completionPanel) {
     panels.push(completionPanel);
   }
+  const signaturePanel = buildSignaturePanel(input);
+  if (signaturePanel) panels.push(signaturePanel);
 
   return {
     document: {
-      totalVisualRows: Math.max(1, visualRows.length),
+      totalVisualRows: Math.max(1, input.presentation.viewport.totalVisualRows ?? visualRows.length),
+      totalVisualRowsExact: input.presentation.viewport.totalVisualRowsExact ?? true,
       visibleRange: {
         fromVisualRow: visibleVisualRows[0]?.visualRowIndex ?? input.presentation.viewport.topVisualRow,
         toVisualRow:
@@ -1846,19 +1935,30 @@ export function buildEditorWorkspaceLayout(input: EditorWorkspaceLayoutInput): E
     const wrapColumns = pane.presentation.viewport.softWrap
       ? Math.max(1, rect.cols - (lineDigits + 4))
       : pane.presentation.viewport.wrapColumns;
-    const { visualRows, lineVisualRanges } = buildVisualRows({
-      state: pane.state,
-      viewport: {
-        cols: wrapColumns,
-        rows: visibleRowCapacity,
-        topVisualRow: pane.presentation.viewport.topVisualRow
-      },
-      softWrap: pane.presentation.viewport.softWrap
+    const visualIndex = createVisualLayoutIndex({
+      doc: pane.state.doc,
+      documentRevision: pane.state.revision,
+      softWrap: pane.presentation.viewport.softWrap,
+      wrapColumns
     });
-    const visibleVisualRows = visualRows.slice(
-      pane.presentation.viewport.topVisualRow,
-      pane.presentation.viewport.topVisualRow + visibleRowCapacity
+    const anchorOffset =
+      pane.presentation.viewport.visibleVisualRows[0]?.segmentStart ??
+      getActiveOffset(pane.state);
+    const visualWindow = visualIndex.resolveWindow(
+      { offset: anchorOffset, affinity: "right" },
+      0,
+      visibleRowCapacity,
+      0
     );
+    const visualRows = visualWindow.rows.map((row, index) => ({
+      ...row,
+      visualRowIndex: pane.presentation.viewport.softWrap ? index : row.docLine
+    }));
+    const visibleVisualRows = visualRows.slice(
+      visualWindow.visibleOffset,
+      visualWindow.visibleOffset + visualWindow.visibleCount
+    );
+    const lineVisualRanges: EditorLineVisualRange[] = [];
     const visibleRange = {
       fromLine: visibleVisualRows[0]?.docLine ?? 0,
       toLine: visibleVisualRows[visibleVisualRows.length - 1]?.docLine ?? Math.max(0, pane.state.doc.lineCount - 1)
@@ -1876,7 +1976,9 @@ export function buildEditorWorkspaceLayout(input: EditorWorkspaceLayoutInput): E
             wrapColumns,
             visualRows,
             visibleVisualRows,
-            lineVisualRanges
+            lineVisualRanges,
+            totalVisualRows: visualWindow.total.value,
+            totalVisualRowsExact: visualWindow.total.exact
           },
           language: {
             ...pane.presentation.language,

@@ -8,6 +8,7 @@ import type {
   EditorJumpEntry,
   EditorPendingAction,
   EditorPresentationState,
+  EditorRepeatableEdit,
   EditorRepeatableMotion
 } from "./types";
 
@@ -28,13 +29,14 @@ export function selectionEquals(left: SelectionSet, right: SelectionSet): boolea
 }
 
 export function jumpEntryEquals(left: EditorJumpEntry, right: EditorJumpEntry): boolean {
-  return left.mode === right.mode && selectionEquals(left.selection, right.selection);
+  return left.mode === right.mode && left.filePath === right.filePath && selectionEquals(left.selection, right.selection);
 }
 
-export function createJumpEntry(state: EditorState): EditorJumpEntry {
+export function createJumpEntry(state: EditorState, filePath: string | null = null): EditorJumpEntry {
   return {
     selection: state.selection,
-    mode: state.mode
+    mode: state.mode,
+    filePath
   };
 }
 
@@ -82,6 +84,7 @@ export interface SessionRuntime {
   setCommandCompletions(next: readonly EditorCommandCompletionItem[], index?: number, effectType?: string): void;
   setCommandCompletionIndex(next: number, effectType?: string): void;
   setCompletionState(next: EditorPresentationState["ui"]["completion"], effectType?: string): void;
+  setSignatureHelpState(next: EditorPresentationState["ui"]["signatureHelp"], effectType?: string): void;
   setRenameState(next: EditorPresentationState["ui"]["rename"], effectType?: string): void;
   setPendingActionState(next: EditorPendingAction, effectType?: string): void;
   setPendingCountState(next: string, effectType?: string): void;
@@ -89,6 +92,7 @@ export interface SessionRuntime {
   readPendingCount(): number;
   setStickyViewMode(next: boolean, effectType?: string): void;
   setLastRepeatableMotion(next: EditorRepeatableMotion | null, effectType?: string): void;
+  setLastRepeatableEdit(next: EditorRepeatableEdit | null, effectType?: string): void;
   setPreviewThemeName(next: string | null, effectType?: string): void;
   clearFlashState(effectType?: string | null): boolean;
 }
@@ -270,6 +274,11 @@ export function createSessionRuntime(options: CreateSessionRuntimeOptions): Sess
       presentation.ui.completion = next;
       emitPresentationUpdate(effectType);
     },
+    setSignatureHelpState(next, effectType = "ui.signature-help") {
+      if (JSON.stringify(presentation.ui.signatureHelp) === JSON.stringify(next)) return;
+      presentation.ui.signatureHelp = next;
+      emitPresentationUpdate(effectType);
+    },
     setRenameState(next, effectType = "ui.rename") {
       if (renameStateEquals(presentation.ui.rename, next)) {
         return;
@@ -313,6 +322,11 @@ export function createSessionRuntime(options: CreateSessionRuntimeOptions): Sess
       }
 
       presentation.ui.lastRepeatableMotion = next;
+      emitPresentationUpdate(effectType);
+    },
+    setLastRepeatableEdit(next, effectType = "ui.repeatable-edit") {
+      if (JSON.stringify(presentation.ui.lastRepeatableEdit) === JSON.stringify(next)) return;
+      presentation.ui.lastRepeatableEdit = next;
       emitPresentationUpdate(effectType);
     },
     setPreviewThemeName(next, effectType = "ui.preview-theme") {

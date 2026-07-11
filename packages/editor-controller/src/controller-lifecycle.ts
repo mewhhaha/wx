@@ -22,6 +22,7 @@ interface CreateControllerLifecycleRuntimeOptions {
   clearHoverOnDocChange(): void;
   refreshSearchMatchCache(targetState?: EditorState): void;
   handleLanguageDocumentChange(prevState: EditorState, nextState: EditorState, changes: readonly TextChange[]): void;
+  handleViewportDocumentChange(prevState: EditorState, nextState: EditorState, changes: readonly TextChange[]): void;
   syncVisibleLanguageDecorations(): void;
   ensureVisibleHighlightCoverage(): Promise<void>;
   rebuildViewportModel(): void;
@@ -73,7 +74,8 @@ export function createControllerLifecycleRuntime(
       prevState,
       nextState,
       transaction,
-      docChanged: prevState.doc.text !== nextState.doc.text,
+      // Documents are immutable. Identity is a cheap, non-materializing document revision test.
+      docChanged: prevState.doc !== nextState.doc,
       selectionChanged: !selectionEquals(prevState.selection, nextState.selection),
       modeChanged: prevState.mode !== nextState.mode
     };
@@ -91,6 +93,7 @@ export function createControllerLifecycleRuntime(
       const changes = transaction.changes ?? [];
       options.refreshSearchMatchCache(nextState);
       options.handleLanguageDocumentChange(prevState, nextState, changes);
+      options.handleViewportDocumentChange(prevState, nextState, changes);
     } else if (update.selectionChanged) {
       options.clearHoverOnDocChange();
     }

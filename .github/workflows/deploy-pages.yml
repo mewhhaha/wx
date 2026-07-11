@@ -32,15 +32,33 @@ jobs:
           cache: pnpm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           targets: wasm32-unknown-unknown
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
       - name: Build workspace
         run: pnpm build
+
+      - name: Smoke test production repository base
+        run: pnpm test:e2e:production
+        env:
+          WX_E2E_REPOSITORY: ${{ github.repository }}
+
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pages-browser-diagnostics
+          if-no-files-found: ignore
+          path: |
+            test-results
+            playwright-report-production
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

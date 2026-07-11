@@ -14,6 +14,7 @@ import type {
   EditorCompletionState,
   EditorHoverState,
   EditorLanguagePresentationState,
+  EditorSignatureHelpState,
   EditorPaneTreeNode,
   EditorPresentationState,
   EditorViewportPresentationState,
@@ -41,6 +42,7 @@ interface WorkspacePaneSession {
   view: EditorViewState;
   viewport: EditorViewportPresentationState;
   completion: EditorCompletionState;
+  signatureHelp: EditorSignatureHelpState;
   hover: EditorHoverState;
 }
 
@@ -151,6 +153,9 @@ function mutateViewportState(target: EditorViewportPresentationState, source: Ed
   target.visualRows = source.visualRows.map((entry) => ({ ...entry }));
   target.visibleVisualRows = source.visibleVisualRows.map((entry) => ({ ...entry }));
   target.lineVisualRanges = source.lineVisualRanges.map((entry) => ({ ...entry }));
+  target.totalVisualRows = source.totalVisualRows;
+  target.totalVisualRowsExact = source.totalVisualRowsExact;
+  target.layoutWork = source.layoutWork ? { ...source.layoutWork } : undefined;
   target.wrapRevision = source.wrapRevision;
 }
 
@@ -160,6 +165,7 @@ function cloneCompletionState(completion: EditorCompletionState): EditorCompleti
     items: completion.items.map((item) => ({ ...item }))
   };
 }
+function cloneSignatureHelpState(state: EditorSignatureHelpState): EditorSignatureHelpState { return { ...state, signatures: state.signatures.map((entry) => ({ ...entry })) }; }
 
 function cloneHoverState(hover: EditorHoverState): EditorHoverState {
   return { ...hover };
@@ -373,6 +379,7 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
     view: cloneViewState(split.view),
     viewport: cloneViewportState(options.presentation.viewport),
     completion: cloneCompletionState(options.presentation.ui.completion),
+    signatureHelp: cloneSignatureHelpState(options.presentation.ui.signatureHelp),
     hover: cloneHoverState(options.presentation.ui.hover)
   };
   buffers.set(initialBuffer.id, initialBuffer);
@@ -473,6 +480,7 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
               selectedIndex: 0,
               error: null
             },
+        signatureHelp: active ? cloneSignatureHelpState(pane.signatureHelp) : { active: false, loading: false, anchorOffset: null, signatures: [], selectedIndex: 0, error: null },
         rename: active ? { ...presentation.ui.rename } : { active: false, anchorOffset: null, value: "", error: null }
       },
       search: {
@@ -491,7 +499,8 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       },
       registers: {
         ...presentation.registers,
-        named: { ...presentation.registers.named }
+        named: { ...presentation.registers.named },
+        namedKinds: { ...presentation.registers.namedKinds }
       }
     };
 
@@ -684,6 +693,7 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
         view: cloneViewState(currentPane.view),
         viewport: cloneViewportState(currentPane.viewport),
         completion: cloneCompletionState(currentPane.completion),
+        signatureHelp: cloneSignatureHelpState(currentPane.signatureHelp),
         hover: cloneHoverState(currentPane.hover)
       };
       panes.set(nextPane.id, nextPane);
@@ -789,6 +799,7 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       pane.view = cloneViewState(splitState.view);
       pane.viewport = cloneViewportState(presentation.viewport);
       pane.completion = cloneCompletionState(presentation.ui.completion);
+      pane.signatureHelp = cloneSignatureHelpState(presentation.ui.signatureHelp);
       pane.hover = cloneHoverState(presentation.ui.hover);
 
       buffer.filePath = presentation.filePath;
@@ -818,6 +829,7 @@ export function createWorkspaceRuntime(options: CreateWorkspaceRuntimeOptions): 
       mutateViewportState(presentation.viewport, pane.viewport);
       mutateLanguageState(presentation.language, buffer.language);
       presentation.ui.completion = cloneCompletionState(pane.completion);
+      presentation.ui.signatureHelp = cloneSignatureHelpState(pane.signatureHelp);
       presentation.ui.hover = cloneHoverState(pane.hover);
       return nextState;
     },

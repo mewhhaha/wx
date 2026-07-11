@@ -3,12 +3,12 @@ interface CreateViewportRuntimeOptions {
     visibleRowCapacity: number;
     wrapColumns: number;
     softWrap: boolean;
-    topVisualRow: number;
-    visualRows: readonly unknown[];
   };
   resetViewportModelCache(): void;
   rebuildViewportModel(): void;
   revealSelectionWithinViewport(): boolean;
+  scrollViewportWindow(rowsDelta: number): boolean;
+  alignSelectionWithinViewport(position: "top" | "center" | "bottom"): boolean;
   syncVisibleViewportRows(): boolean;
   syncVisibleLanguageDecorations(): void;
   emitPresentationUpdate(effectType?: string): void;
@@ -18,7 +18,7 @@ interface CreateViewportRuntimeOptions {
 export interface ViewportRuntime {
   setViewportMetrics(metrics: { visibleRowCapacity: number; wrapColumns: number; softWrap: boolean }): void;
   scrollViewportBy(rowsDelta: number): boolean;
-  alignViewport(applyAlignment: () => number, effectType: string): boolean;
+  alignViewport(position: "top" | "center" | "bottom", effectType: string): boolean;
   revealSelection(effectType?: string): void;
 }
 
@@ -28,6 +28,8 @@ export function createViewportRuntime(options: CreateViewportRuntimeOptions): Vi
     resetViewportModelCache,
     rebuildViewportModel,
     revealSelectionWithinViewport,
+    scrollViewportWindow,
+    alignSelectionWithinViewport,
     syncVisibleViewportRows,
     syncVisibleLanguageDecorations,
     emitPresentationUpdate,
@@ -37,9 +39,7 @@ export function createViewportRuntime(options: CreateViewportRuntimeOptions): Vi
   const finalizeViewportChange = (effectType: string, changed: boolean) => {
     syncVisibleLanguageDecorations();
     emitPresentationUpdate(effectType);
-    if (changed) {
-      void ensureVisibleHighlightCoverage();
-    }
+    if (changed) void ensureVisibleHighlightCoverage();
   };
 
   return {
@@ -53,27 +53,13 @@ export function createViewportRuntime(options: CreateViewportRuntimeOptions): Vi
       finalizeViewportChange("viewport.metrics", syncVisibleViewportRows() || didReveal);
     },
     scrollViewportBy(rowsDelta) {
-      if (rowsDelta === 0) {
-        return true;
-      }
-
-      rebuildViewportModel();
-      const maxTop = Math.max(0, viewport.visualRows.length - viewport.visibleRowCapacity);
-      const nextTop = Math.max(0, Math.min(maxTop, viewport.topVisualRow + rowsDelta));
-
-      if (nextTop === viewport.topVisualRow) {
-        return true;
-      }
-
-      viewport.topVisualRow = nextTop;
-      finalizeViewportChange("viewport.scroll", syncVisibleViewportRows());
+      if (rowsDelta === 0) return true;
+      const changed = scrollViewportWindow(rowsDelta);
+      if (changed) finalizeViewportChange("viewport.scroll", syncVisibleViewportRows());
       return true;
     },
-    alignViewport(applyAlignment, effectType) {
-      rebuildViewportModel();
-      const nextTop = applyAlignment();
-      const changed = nextTop !== viewport.topVisualRow;
-      viewport.topVisualRow = nextTop;
+    alignViewport(position, effectType) {
+      const changed = alignSelectionWithinViewport(position);
       finalizeViewportChange(effectType, syncVisibleViewportRows() || changed);
       return true;
     },

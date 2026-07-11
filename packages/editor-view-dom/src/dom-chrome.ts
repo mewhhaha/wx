@@ -91,7 +91,7 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
       const uiState = options.getUiState();
       const items = uiState.commandCompletionItems;
       const layout = options.getRenderedLayout();
-      const completionPanel = layout.panels.find((panel) => panel.kind === "completion");
+      const completionPanel = layout.panels.find((panel) => panel.kind === "completion" || panel.kind === "signature");
 
       if (uiState.picker.active && uiState.picker.variant === "combo") {
         options.commandPopover.hidden = false;
@@ -234,7 +234,7 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
 
       if (completionPanel) {
         options.commandPopover.hidden = false;
-        options.commandPopover.dataset.kind = "completion";
+        options.commandPopover.dataset.kind = completionPanel.kind;
         const panel = document.createElement("div");
         panel.className = "wx-editor__command-popover-panel";
 
@@ -256,9 +256,10 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
         return;
       }
 
-      const showQuestionHelp = uiState.pendingAction?.kind === "?" && items.length > 0;
+      const keyHelpPanel = layout.panels.find((panel) => panel.kind === "key-help");
+      const showPendingKeyHelp = keyHelpPanel !== undefined;
 
-      if ((items.length === 0 || !uiState.commandLine.active || uiState.commandLine.prompt !== ":") && !showQuestionHelp) {
+      if ((items.length === 0 || !uiState.commandLine.active || uiState.commandLine.prompt !== ":") && !showPendingKeyHelp) {
         options.commandPopover.hidden = true;
         delete options.commandPopover.dataset.kind;
         options.commandPopover.replaceChildren();
@@ -271,7 +272,8 @@ export function createDomChromeRuntime(options: CreateDomChromeRuntimeOptions): 
       const panel = document.createElement("div");
       panel.className = "wx-editor__command-popover-panel";
 
-      items.slice(0, 6).forEach((item, index) => {
+      const visibleItems = showPendingKeyHelp ? keyHelpPanel?.keyHelpItems ?? [] : items.slice(0, 6);
+      visibleItems.forEach((item, index) => {
         const row = document.createElement("div");
         const label = document.createElement("span");
         const detail = document.createElement("span");

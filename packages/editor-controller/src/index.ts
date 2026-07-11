@@ -9,7 +9,12 @@ import { createControllerLifecycleRuntime } from "./controller-lifecycle";
 import { createControllerSearchRuntime } from "./controller-search";
 import { createControllerSurface } from "./controller-surface";
 import { createSnapshotHistory } from "./history";
+import { commandCatalogById } from "./command-catalog";
+import { defaultKeymap } from "./default-keymap";
+import { createRuntimeCommandRegistry, type RuntimeCommandRegistry } from "./key-command-registry";
+import { compileKeymap, KeymapConfigurationError } from "./keymap-compiler";
 import { createKeyRuntime } from "./key-input";
+import type { KeyRuntimeContext } from "./key-runtime-types";
 import { createLanguageRuntime, type LanguageRuntime } from "./language";
 import { createMultiSelectionRuntime } from "./multi-selection";
 import { createPickerRuntime, type PickerRuntime } from "./picker";
@@ -28,6 +33,9 @@ import type {
   EditorController,
   EditorFileSearchResult,
   EditorFolderSearchResult,
+  EditorWorkspaceSearchCase,
+  EditorWorkspaceSearchRequest,
+  EditorWorkspaceSearchResult,
   EditorHostServices,
   EditorJumpEntry,
   EditorLineChange,
@@ -38,7 +46,9 @@ import type {
   EditorUpdate,
   EditorUpdateListener,
   HistoryEntry,
-  HistoryPlugin
+  HistoryPlugin,
+  SnapshotHistoryOptions,
+  SnapshotHistoryStats
 } from "./types";
 
 export type {
@@ -80,13 +90,26 @@ export type {
   EditorFileSearchResult,
   EditorFolderSearchResult,
   HistoryEntry,
-  HistoryPlugin
+  HistoryPlugin,
+  SnapshotHistoryOptions,
+  SnapshotHistoryStats
 } from "./types";
 
 export { createSnapshotHistory };
 export { normalizeLanguageServices };
+export { commandCatalog, commandCatalogById, completeCommandCatalog, resolveCommandId } from "./command-catalog";
+export type { CommandArgContract, CommandArgRule, CommandAvailability, CommandMetadata, CommandOperand, EditorMode, KeymapContext } from "./command-catalog";
+export { defaultKeymap } from "./default-keymap";
+export { compileKeymap, contextAfterInput, eventToContextKeyStroke, eventToKeyStroke, getKeymapHelp, KeymapConfigurationError, parseKeySequence, parseKeyStroke, resolveContextKeymap, resolveKeymap } from "./keymap-compiler";
+export type { CompiledBinding, CompiledKeymap, ContextKeymapResolution, KeymapResolution, KeymapTrie } from "./keymap-compiler";
+export { decodeKeymapConfig, defaultKeymapContextPolicies } from "./keymap-schema";
+export type { KeymapAfterInputPolicy, KeymapArgs, KeymapBinding, KeymapConfig, KeymapContextPolicy, KeymapIssue, KeymapIssueCode, KeymapModifierPolicy, KeymapOverlayPolicy, KeymapPrimitive, KeymapUnbind, KeymapUnmatchedPolicy } from "./keymap-schema";
+export type { RuntimeCommandHandler, RuntimeCommandInvocation, RuntimeCommandRegistry } from "./key-command-registry";
+export { createRuntimeCommandRegistry } from "./key-command-registry";
 
 export function createEditorController(options: CreateEditorControllerOptions = {}): EditorController {
+  const compiledKeymap = compileKeymap(defaultKeymap, options.keymap ?? { version: 1 });
+  if (compiledKeymap.issues.length) throw new KeymapConfigurationError(compiledKeymap.issues);
   let state =
     options.state ??
     createEditorState({
@@ -99,7 +122,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let documentRevision = 0;
   const presentation = createPresentationState(state, options);
   const listeners = new Set<EditorUpdateListener>();
-  const history = options.history === false ? null : options.history ?? createSnapshotHistory();
+  const history = options.history === false ? null : options.history ?? createSnapshotHistory(options.historyOptions);
   const jumpList = presentation.jumps.items as EditorJumpEntry[];
   const registers = presentation.registers;
   let languageRegistry = options.languageRegistry ?? null;
@@ -107,6 +130,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
   let controller!: EditorController;
   let commandRuntime!: CommandRuntime;
   let commandsRuntime!: CommandsRuntime;
+  let commandRegistry!: RuntimeCommandRegistry;
   let keyRuntime!: ReturnType<typeof createKeyRuntime>;
   let languageRuntime!: LanguageRuntime;
   let pickerRuntime!: PickerRuntime;
@@ -139,6 +163,49 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     }
   });
 
+  const languageServiceMessage = (error: unknown): string => {
+    if (error instanceof Error && error.message.trim()) {
+      return error.message;
+    }
+    return String(error || "Language service failed");
+  };
+
+  const reportLanguageServiceFailure = (error: unknown) => {
+    if (presentation.language.serviceStatus.state === "destroyed") {
+      return;
+    }
+    const message = languageServiceMessage(error);
+    presentation.language.serviceStatus = {
+      ...presentation.language.serviceStatus,
+      state: "failed",
+      message,
+      retryable: presentation.language.services.some((services) => !!services.lifecycle?.recreate)
+    };
+    sessionRuntime.setBottomMessage({
+      tone: "warning",
+      text: `Language services unavailable: ${message}${presentation.language.serviceStatus.retryable ? " (retry available)" : ""}`
+    });
+    lifecycleRuntime.emitPresentationUpdate("language.services.failed");
+  };
+
+  const reportLanguageServiceReady = () => {
+    if (presentation.language.serviceStatus.state === "destroyed") {
+      return;
+    }
+    const hasServices = presentation.language.services.length > 0;
+    presentation.language.serviceStatus = {
+      ...presentation.language.serviceStatus,
+      state: hasServices ? "ready" : "disabled",
+      message: null,
+      retryable: false
+    };
+    if (presentation.ui.bottomMessage?.text.startsWith("Language services unavailable:")) {
+      sessionRuntime.setBottomMessage(null);
+    } else {
+      lifecycleRuntime.emitPresentationUpdate("language.services.ready");
+    }
+  };
+
   languageRuntime = createLanguageRuntime({
     context: {
       getState: () => state,
@@ -150,12 +217,15 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
       dispatch: (transaction) => lifecycleRuntime.dispatch(transaction)
     },
+    reportServiceFailure: reportLanguageServiceFailure,
+    reportServiceReady: reportLanguageServiceReady,
     setBottomMessage(message) {
       sessionRuntime.setBottomMessage(message);
     },
     setCompletionState(next, effectType) {
       sessionRuntime.setCompletionState(next, effectType);
     },
+    setSignatureHelpState(next, effectType) { sessionRuntime.setSignatureHelpState(next, effectType); },
     setRenameState(next, effectType) {
       sessionRuntime.setRenameState(next, effectType);
     },
@@ -164,7 +234,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     syncVisibleViewportRows,
     syncVisibleLanguageDecorations: () => languageRuntime.syncVisibleLanguageDecorations(),
     ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
-    pushJump: () => registersJumpsRuntime.pushJumpEntry(createJumpEntry(state)),
+    pushJump: (entry) => registersJumpsRuntime.pushJumpEntry(entry ?? createJumpEntry(state, presentation.filePath)),
     openBuffer: async (filePath) => controller.openBuffer(filePath),
     findBufferState(filePath) {
       return workspaceRuntime.getBufferState(filePath);
@@ -220,9 +290,17 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     clearHoverOnDocChange: () => {
       sessionRuntime.clearHoverState({ effectType: null });
     },
-    refreshSearchMatchCache: searchRuntime.refreshSearchMatchCache,
+    refreshSearchMatchCache(targetState) {
+      // An empty search has no cache to rebuild and should not force lazy document text.
+      if (searchRuntime.searchState.query.length > 0) {
+        searchRuntime.refreshSearchMatchCache(targetState);
+      }
+    },
     handleLanguageDocumentChange(prevState, nextState, changes) {
       languageRuntime.handleDocumentChange(prevState, nextState, changes);
+    },
+    handleViewportDocumentChange(prevState, nextState, changes) {
+      viewportModelRuntime.handleDocumentChange(prevState, nextState, changes);
     },
     syncVisibleLanguageDecorations,
     ensureVisibleHighlightCoverage: () => languageRuntime.ensureVisibleHighlightCoverage(),
@@ -231,19 +309,23 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     syncVisibleViewportRows,
     syncLanguage: (runtimeOptions) => languageRuntime.syncLanguage(runtimeOptions),
     handleYankBufferChanged(prevState, nextState) {
-      if (nextState.yankBuffer !== prevState.yankBuffer) {
+      if (nextState.yankBuffer !== prevState.yankBuffer || nextState.yankKind !== prevState.yankKind) {
         registers.unnamed = nextState.yankBuffer;
+        registers.unnamedKind = nextState.yankKind;
         const selected = normalizeRegisterName(registers.selected);
         if (selected && selected !== "/") {
           if (registers.unnamed === null) {
             delete registers.named[selected];
+            delete registers.namedKinds[selected];
           } else {
             registers.named[selected] = registers.unnamed;
+            registers.namedKinds[selected] = registers.unnamedKind;
           }
         }
       }
       workspaceRuntime.syncFromActiveState(nextState, presentation, {
-        docChanged: nextState.doc.text !== prevState.doc.text
+        // Text documents are immutable, so identity avoids forcing lazy text on cursor updates.
+        docChanged: nextState.doc !== prevState.doc
       });
     }
   });
@@ -253,6 +335,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     registers,
     jumpList,
     getState: () => state,
+    getFilePath: () => presentation.filePath,
+    openBuffer: (filePath: string) => controller.openBuffer(filePath),
     dispatch: (transaction) => lifecycleRuntime.dispatch(transaction),
     emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
     revealSelectionWithinViewport: () => viewportModelRuntime.revealSelectionWithinViewport(),
@@ -260,7 +344,9 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     syncVisibleLanguageDecorations
   });
 
-  searchRuntime.refreshSearchMatchCache();
+  if (searchRuntime.searchState.query.length > 0) {
+    searchRuntime.refreshSearchMatchCache();
+  }
   viewportModelRuntime.rebuildViewportModel();
   syncVisibleLanguageDecorations();
 
@@ -276,6 +362,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     readPendingCount: () => sessionRuntime.readPendingCount(),
     historyControls: lifecycleRuntime.historyControls,
     setBottomMessage: sessionRuntime.setBottomMessage,
+    setLastRepeatableEdit: sessionRuntime.setLastRepeatableEdit,
     clearFlashState: sessionRuntime.clearFlashState,
     closePicker(effectType = "ui.picker.close") {
       pickerRuntime.closePicker(effectType);
@@ -285,7 +372,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     revealSelectionWithinViewport: () => viewportModelRuntime.revealSelectionWithinViewport(),
     syncVisibleViewportRows,
     pushJumpEntry: registersJumpsRuntime.pushJumpEntry,
-    createJumpEntry: () => createJumpEntry(state),
+    createJumpEntry: () => createJumpEntry(state, presentation.filePath),
     dispatchOffsetSelection: contextRuntime.dispatchOffsetSelection,
     moveByVisualRows: (delta) => viewportModelRuntime.moveByVisualRows(delta),
     gotoVisibleRow: (position) => viewportModelRuntime.gotoVisibleRow(position),
@@ -303,8 +390,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     getBuffers: () => workspaceRuntime.getBuffers(),
     setBottomMessage: sessionRuntime.setBottomMessage,
     emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
-    jumpToSelection(from, to) {
-      registersJumpsRuntime.pushJumpEntry(createJumpEntry(state));
+    jumpToSelection(from, to, recordCurrent = true) {
+      if (recordCurrent) registersJumpsRuntime.pushJumpEntry(createJumpEntry(state, presentation.filePath));
       contextRuntime.applySelectionRange(from, to);
       viewportModelRuntime.revealSelectionWithinViewport();
       syncVisibleViewportRows();
@@ -331,7 +418,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     setRenameState: sessionRuntime.setRenameState,
     emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
     loadCodeActions: () => pickerRuntime.loadCodeActions(),
-    openAddFilePicker: (initialName) => pickerRuntime.openAddFilePicker(initialName)
+    openAddFilePicker: (initialName) => pickerRuntime.openAddFilePicker(initialName),
+    runCatalogCommand: (command) => Promise.resolve(commandRegistry.dispatch({ command, input: { key: "" }, options: {} }))
   });
 
   viewportRuntime = createViewportRuntime({
@@ -339,6 +427,8 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     resetViewportModelCache: () => viewportModelRuntime.resetViewportModelCache(),
     rebuildViewportModel: () => viewportModelRuntime.rebuildViewportModel(),
     revealSelectionWithinViewport: () => viewportModelRuntime.revealSelectionWithinViewport(),
+    scrollViewportWindow: (rowsDelta) => viewportModelRuntime.scrollViewportBy(rowsDelta),
+    alignSelectionWithinViewport: (position) => viewportModelRuntime.alignSelectionWithinViewport(position),
     syncVisibleViewportRows,
     syncVisibleLanguageDecorations,
     emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType),
@@ -355,7 +445,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     handleCommandLineKey: commandRuntime.handleCommandLineKeyInput
   });
 
-  keyRuntime = createKeyRuntime({
+  const keyRuntimeContext: KeyRuntimeContext = {
     getState: () => state,
     getPresentation: () => presentation,
     getController: () => controller,
@@ -368,10 +458,14 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     acceptCompletion: (index) => languageRuntime.acceptCompletion(index),
     moveCompletion: (delta) => languageRuntime.moveCompletion(delta),
     dismissCompletion: () => languageRuntime.dismissCompletion(),
+    requestSignatureHelp: () => languageRuntime.requestSignatureHelp(),
+    moveSignatureHelp: (delta) => languageRuntime.moveSignatureHelp(delta),
+    dismissSignatureHelp: () => languageRuntime.dismissSignatureHelp(),
     gotoTarget: (kind) => languageRuntime.gotoTarget(kind),
     renameSymbol: (nextName) => languageRuntime.renameSymbol(nextName),
     openSymbols: (kind) => languageRuntime.openSymbols(kind),
     runRepeatableMotion: commandsRuntime.runRepeatableMotion,
+    runRepeatableEdit: commandsRuntime.runRepeatableEdit,
     recordRepeatableMotion(candidate, didChange) {
       if (didChange) {
         sessionRuntime.setLastRepeatableMotion(candidate);
@@ -389,6 +483,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     setCommandCompletions: sessionRuntime.setCommandCompletions,
     handleActiveCommandLineKey: commandRuntime.handleActiveCommandLineKey,
     clearPendingCount: () => sessionRuntime.clearPendingCount(),
+    readPendingCount: () => sessionRuntime.readPendingCount(),
     setPendingActionState: sessionRuntime.setPendingActionState,
     setPendingCountState: sessionRuntime.setPendingCountState,
     setStickyViewMode: sessionRuntime.setStickyViewMode,
@@ -404,6 +499,7 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     openBuffersPicker: pickerRuntime.openBuffersPicker,
     openPanesPicker: pickerRuntime.openPanesPicker,
     openFileSearchPicker: pickerRuntime.openFileSearchPicker,
+    openWorkspaceSearchPicker: pickerRuntime.openWorkspaceSearchPicker,
     openAddFilePicker: pickerRuntime.openAddFilePicker,
     updatePickerQuery: pickerRuntime.updatePickerQuery,
     loadCodeActions: pickerRuntime.loadCodeActions,
@@ -411,7 +507,9 @@ export function createEditorController(options: CreateEditorControllerOptions = 
     applyFlashJump: commandsRuntime.applyFlashJump,
     clearFlashState: sessionRuntime.clearFlashState,
     emitPresentationUpdate: (effectType) => lifecycleRuntime.emitPresentationUpdate(effectType)
-  });
+  };
+  commandRegistry = createRuntimeCommandRegistry(keyRuntimeContext, commandCatalogById);
+  keyRuntime = createKeyRuntime(keyRuntimeContext, { compiled: compiledKeymap, registry: commandRegistry });
 
   controller = createControllerSurface({
     getState: () => state,
@@ -445,13 +543,28 @@ export function createEditorController(options: CreateEditorControllerOptions = 
       languageResolutionMode = nextMode;
     },
     getActiveOffset: contextRuntime.getActiveOffset,
-    createJumpEntry: () => createJumpEntry(state)
+    createJumpEntry: () => createJumpEntry(state, presentation.filePath)
+  });
+
+  listeners.add((update) => {
+    commandsRuntime.handleControllerUpdate(update);
   });
 
   listeners.add((update) => {
     if (update.docChanged && update.transaction.changes?.length) {
       workspaceRuntime.applyBufferChangesToSiblingPanes(update.transaction.changes);
     }
+  });
+
+  const signatureTriggers = new Set(options.signatureHelpTriggers ?? ["(", ","]);
+  const completionTriggers = new Set(options.completionTriggers ?? ["."]);
+  listeners.add((update) => {
+    const inserted = update.transaction.changes?.map((change) => change.insert).join("") ?? "";
+    const trigger = inserted.at(-1) ?? "";
+    if (update.docChanged || update.selectionChanged || update.modeChanged) languageRuntime.dismissSignatureHelp();
+    if (state.mode !== "insert" || !update.docChanged || !trigger) return;
+    if (signatureTriggers.has(trigger)) void languageRuntime.requestSignatureHelp();
+    else if (completionTriggers.has(trigger)) void languageRuntime.requestCompletion();
   });
 
   if (languageResolutionMode === "auto") {

@@ -1,14 +1,21 @@
-import type { EditorState } from "@mewhhaha/wx-core";
+import { inferRegisterKind, type EditorState, type RegisterKind } from "@mewhhaha/wx-core";
 
 import { createJumpEntry, jumpEntryEquals, normalizeRegisterName } from "./session";
-import type { EditorJumpEntry, EditorPresentationState } from "./types";
+import type { EditorJumpEntry, EditorPresentationState, EditorRegisterValue } from "./types";
 
 interface CreateRegistersJumpsRuntimeOptions {
   presentation: EditorPresentationState;
   registers: EditorPresentationState["registers"];
   jumpList: EditorJumpEntry[];
   getState(): EditorState;
-  dispatch(transaction: { selection?: EditorState["selection"]; mode?: EditorState["mode"]; yankBuffer?: string | null }): void;
+  getFilePath(): string | null;
+  openBuffer(filePath: string): Promise<boolean>;
+  dispatch(transaction: {
+    selection?: EditorState["selection"];
+    mode?: EditorState["mode"];
+    yankBuffer?: string | null;
+    yankKind?: RegisterKind;
+  }): void;
   emitPresentationUpdate(effectType?: string): void;
   revealSelectionWithinViewport(): boolean;
   syncVisibleViewportRows(): boolean;
@@ -16,13 +23,14 @@ interface CreateRegistersJumpsRuntimeOptions {
 }
 
 export interface RegistersJumpsRuntime {
-  applyRegisterValue(name: string | null, value: string | null, effectType?: string): void;
+  applyRegisterValue(name: string | null, value: string | null, effectType?: string, kind?: RegisterKind): void;
   getRegister(name?: string | null): string | null;
+  getRegisterKind(name?: string | null): RegisterKind;
   selectRegister(name: string | null): void;
   getSelectedRegister(): string | null;
   primeSelectedRegisterForPaste(): void;
   pushJumpEntry(entry: EditorJumpEntry): boolean;
-  restoreJump(entry: EditorJumpEntry | null): boolean;
+  restoreJump(entry: EditorJumpEntry | null): Promise<boolean>;
   jumpBackward(): EditorJumpEntry | null;
   jumpForward(): EditorJumpEntry | null;
   getJumpList(): EditorJumpEntry[];
@@ -38,35 +46,47 @@ export function createRegistersJumpsRuntime(options: CreateRegistersJumpsRuntime
     }
   };
 
-  const readRegisterValue = (name: string | null | undefined): string | null => {
+  const readRegisterEntry = (name: string | null | undefined): EditorRegisterValue | null => {
     const normalized = normalizeRegisterName(name ?? registers.selected);
     if (!normalized || normalized === "\"") {
-      return registers.unnamed;
+      return registers.unnamed === null
+        ? null
+        : { text: registers.unnamed, kind: registers.unnamedKind };
     }
     if (normalized === "/") {
-      return registers.search;
+      return registers.search === null ? null : { text: registers.search, kind: "characterwise" };
     }
-    return registers.named[normalized] ?? null;
+    const text = registers.named[normalized];
+    return text === undefined
+      ? null
+      : { text, kind: registers.namedKinds[normalized] ?? inferRegisterKind(text) };
   };
 
   return {
-    applyRegisterValue(name, value, effectType = "register.update") {
+    applyRegisterValue(name, value, effectType = "register.update", kind = inferRegisterKind(value)) {
       const normalized = normalizeRegisterName(name);
+      const entry = value === null ? null : { text: value, kind };
 
       if (!normalized) {
-        registers.unnamed = value;
+        registers.unnamed = entry?.text ?? null;
+        registers.unnamedKind = entry?.kind ?? "characterwise";
       } else if (normalized === "/") {
         registers.search = value;
       } else if (value === null) {
         delete registers.named[normalized];
+        delete registers.namedKinds[normalized];
       } else {
-        registers.named[normalized] = value;
+        registers.named[normalized] = entry!.text;
+        registers.namedKinds[normalized] = entry!.kind;
       }
 
       emitPresentationUpdate(effectType);
     },
     getRegister(name = null) {
-      return readRegisterValue(name);
+      return readRegisterEntry(name)?.text ?? null;
+    },
+    getRegisterKind(name = null) {
+      return readRegisterEntry(name)?.kind ?? "characterwise";
     },
     selectRegister(name) {
       const next = normalizeRegisterName(name);
@@ -86,9 +106,8 @@ export function createRegistersJumpsRuntime(options: CreateRegistersJumpsRuntime
         return;
       }
 
-      dispatch({
-        yankBuffer: readRegisterValue(selected)
-      });
+      const entry = readRegisterEntry(selected);
+      dispatch({ yankBuffer: entry?.text ?? null, yankKind: entry?.kind ?? "characterwise" });
     },
     pushJumpEntry(entry) {
       trimJumpTail();
@@ -108,9 +127,13 @@ export function createRegistersJumpsRuntime(options: CreateRegistersJumpsRuntime
       presentation.jumps.cursor = jumpCursor;
       return true;
     },
-    restoreJump(entry) {
+    async restoreJump(entry) {
       if (!entry) {
         return false;
+      }
+
+      if (entry.filePath && entry.filePath !== options.getFilePath()) {
+        if (!(await options.openBuffer(entry.filePath))) return false;
       }
 
       dispatch({
@@ -128,7 +151,7 @@ export function createRegistersJumpsRuntime(options: CreateRegistersJumpsRuntime
       }
 
       if (jumpCursor === jumpList.length) {
-        this.pushJumpEntry(createJumpEntry(getState()));
+        this.pushJumpEntry(createJumpEntry(getState(), options.getFilePath()));
       }
 
       if (jumpCursor <= 1) {

@@ -16,6 +16,7 @@ interface CreateDomHandleRuntimeOptions {
   controller: EditorController;
   context: DomEditorContext;
   runtime: DomEditorRuntime;
+  ownsController: boolean;
   normalizeLanguageServices(input: EditorLanguageServiceInput | null | undefined): EditorLanguageServices[];
   unsubscribeController(): void;
   disconnectResizeObserver(): void;
@@ -41,17 +42,24 @@ export interface DomHandleRuntime {
 }
 
 export function createDomHandleRuntime(options: CreateDomHandleRuntimeOptions): DomHandleRuntime {
+  let destroyed = false;
   const destroyLanguageServices = (languageServices = options.context.languageServices) => {
+    const destroyed = new Set<NonNullable<EditorLanguageServices["lifecycle"]>>();
     for (const services of languageServices) {
-      services.highlighter?.destroy?.();
+      const lifecycle = services.lifecycle;
+      if (!lifecycle || lifecycle.owner !== "view" || destroyed.has(lifecycle)) continue;
+      destroyed.add(lifecycle);
+      void Promise.resolve(lifecycle.destroy()).catch(() => undefined);
     }
   };
   const destroyRemovedLanguageServices = (previous: readonly EditorLanguageServices[]) => {
     const nextServices = new Set(options.context.languageServices);
+    const destroyed = new Set<NonNullable<EditorLanguageServices["lifecycle"]>>();
     for (const services of previous) {
-      if (!nextServices.has(services)) {
-        services.highlighter?.destroy?.();
-      }
+      const lifecycle = services.lifecycle;
+      if (nextServices.has(services) || !lifecycle || lifecycle.owner !== "view" || destroyed.has(lifecycle)) continue;
+      destroyed.add(lifecycle);
+      void Promise.resolve(lifecycle.destroy()).catch(() => undefined);
     }
   };
 
@@ -71,6 +79,8 @@ export function createDomHandleRuntime(options: CreateDomHandleRuntimeOptions): 
       options.runtime.schedulePostMountReveal();
     },
     destroy() {
+      if (destroyed) return;
+      destroyed = true;
       options.context.destroyed = true;
       options.disconnectResizeObserver();
       if (options.context.pendingMountFrame) {
@@ -80,6 +90,9 @@ export function createDomHandleRuntime(options: CreateDomHandleRuntimeOptions): 
       options.unsubscribeController();
       options.cleanupWindowListeners?.();
       destroyLanguageServices();
+      if (options.ownsController) {
+        options.controller.destroy();
+      }
       options.context.root.remove();
     },
     focus() {

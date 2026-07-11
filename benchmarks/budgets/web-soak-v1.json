@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "description": "Chromium 20,000-line scheduled soak budgets",
+  "durationSeconds": 600,
+  "keyToPaintP95Ms": 100,
+  "maxLongTaskMs": 250,
+  "maxHeapGrowthBytes": 67108864,
+  "maxDomNodes": 750,
+  "maxMaterializedVisualRows": 150,
+  "cursorOnlyKeyToPaintMaxRatio": 2,
+  "cursorOnlyKeyToPaintMaxDeltaMs": 25,
+  "maxWorkerBurstRequests": 8,
+  "minWorkerBurstMessageBytes": 20000,
+  "maxWorkerBurstMessageBytes": 262144,
+  "maxActiveWorkersAfterDestroy": 0,
+  "maxActiveObserversAfterDestroy": 0,
+  "maxActiveAnimationFramesAfterDestroy": 0,
+  "maxActiveListenersDeltaAfterDestroy": 0
+}

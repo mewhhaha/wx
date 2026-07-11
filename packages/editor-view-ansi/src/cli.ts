@@ -5,7 +5,7 @@ import { createEditorController } from "@mewhhaha/wx-controller";
 import { graphiteTheme, mintTheme, phTheme } from "@mewhhaha/wx-theme";
 
 import { loadWxTerminalConfig } from "./config";
-import { createNodeHostServices, resolveGitAwareProjectRoot } from "./node-host";
+import { createNodeHostServices, createNodeTerminalWrite, resolveGitAwareProjectRoot } from "./node-host";
 import { createAnsiEditorTerminal } from "./terminal";
 
 const THEMES = [phTheme, graphiteTheme, mintTheme] as const;
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
     controller,
     input: process.stdin,
     output: process.stdout,
-    write: (text) => process.stdout.write(text),
+    write: createNodeTerminalWrite(process.stdout),
     theme,
     availableThemes: THEMES,
     cols: process.stdout.columns ?? 100,

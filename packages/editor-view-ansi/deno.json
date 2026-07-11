@@ -1,0 +1,22 @@
+{
+  "name": "@wx/editor-view-ansi",
+  "version": "0.1.3",
+  "license": "MIT",
+  "exports": {
+    "./deno-cli": "./src/deno-cli.ts",
+    "./deno-host": "./src/deno-host.ts"
+  },
+  "publish": {
+    "exclude": [
+      "src/**/*.test.ts",
+      "src/cli.ts",
+      "src/demo*.ts",
+      "src/node-host*.ts",
+      "src/wx.ts",
+      "scripts",
+      "tsconfig*.json",
+      "tsup.config.ts",
+      "vitest.config.ts"
+    ]
+  }
+}

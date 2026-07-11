@@ -13,7 +13,9 @@ import {
 } from "@mewhhaha/wx-layout";
 import { defaultTheme, resolveThemeColor, type ThemeSpec } from "@mewhhaha/wx-theme";
 
-import type { RenderEditorAnsiFrameInput } from "./index";
+import { graphemeCellWidth, terminalGraphemes, terminalTextWidth, truncateTerminalText } from "./cell-width";
+import { serializeAnsiFrameSnapshot } from "./damage";
+import type { AnsiFrameSnapshot, RenderEditorAnsiFrameInput } from "./terminal-types";
 import {
   ansiStyle,
   BOTTOM_BG,
@@ -31,8 +33,6 @@ import {
 } from "./frame-theme";
 
 const ANSI_RESET = "\u001b[0m";
-const ANSI_HOME = "\u001b[H";
-const ANSI_HIDE_CURSOR = "\u001b[?25l";
 
 function normalizeIndentGuides(input: RenderEditorAnsiFrameInput["indentGuides"]) {
   return {
@@ -47,19 +47,50 @@ function createBlankRow(cols: number, style: CellStyle): Cell[] {
   return Array.from({ length: cols }, () => ({ char: " ", style }));
 }
 
-function writeText(row: Cell[], col: number, text: string, style: CellStyle): void {
-  const chars = Array.from(text);
+function clearOccupiedCell(row: Cell[], col: number): void {
+  const cell = row[col];
+  if (!cell) return;
+  if (cell.continuation && col > 0) {
+    const previous = row[col - 1];
+    if (previous) row[col - 1] = { char: " ", style: previous.style };
+  } else if (row[col + 1]?.continuation) {
+    const continuation = row[col + 1]!;
+    row[col + 1] = { char: " ", style: continuation.style };
+  }
+}
 
-  for (let index = 0; index < chars.length; index += 1) {
-    const target = col + index;
-    if (target < 0 || target >= row.length) {
+function writeText(row: Cell[], col: number, text: string, style: CellStyle): void {
+  let target = col;
+  for (const grapheme of terminalGraphemes(text)) {
+    if (grapheme === "\t") {
+      const tabWidth = 8 - (Math.max(0, target) % 8);
+      for (let index = 0; index < tabWidth; index += 1) {
+        if (target >= 0 && target < row.length) {
+          clearOccupiedCell(row, target);
+          row[target] = { char: " ", style };
+        }
+        target += 1;
+      }
       continue;
     }
 
-    row[target] = {
-      char: chars[index] ?? " ",
-      style
-    };
+    const width = graphemeCellWidth(grapheme);
+    if (width === 0) {
+      const previous = row[target - 1];
+      if (previous && !previous.continuation) previous.char += grapheme;
+      continue;
+    }
+    if (target < 0) {
+      target += width;
+      continue;
+    }
+    if (target >= row.length || (width === 2 && target + 1 >= row.length)) break;
+
+    clearOccupiedCell(row, target);
+    if (width === 2) clearOccupiedCell(row, target + 1);
+    row[target] = { char: grapheme, style };
+    if (width === 2) row[target + 1] = { char: "", style, continuation: true };
+    target += width;
   }
 }
 
@@ -88,16 +119,20 @@ function findLastPathSeparator(value: string): number {
 }
 
 function truncatePanelText(value: string, width: number): string {
-  const normalized = Array.from(value).join("");
-  if (normalized.length <= width) {
-    return normalized;
+  if (terminalTextWidth(value) <= width) {
+    return value;
   }
 
   if (width <= 1) {
-    return normalized.slice(0, Math.max(0, width));
+    return truncateTerminalText(value, Math.max(0, width));
   }
 
-  return `${normalized.slice(0, width - 1)}…`;
+  return `${truncateTerminalText(value, width - 1)}…`;
+}
+
+function padPanelText(value: string, width: number): string {
+  const truncated = truncatePanelText(value, width);
+  return `${truncated}${" ".repeat(Math.max(0, width - terminalTextWidth(truncated)))}`;
 }
 
 function paintPickerItemText(
@@ -113,7 +148,7 @@ function paintPickerItemText(
     detail: CellStyle;
   }
 ): void {
-  const normalized = text.slice(0, width).padEnd(width, " ");
+  const normalized = padPanelText(text, width);
   const prefix = normalized.slice(0, 2);
   const body = normalized.slice(2).replace(/\s+$/, "");
   const detailMarkerIndex = body.indexOf("  ");
@@ -129,7 +164,7 @@ function paintPickerItemText(
 
   let cursorCol = startCol + 2;
   writeText(row, cursorCol, icon, styles.prefix);
-  cursorCol += Array.from(icon).length;
+  cursorCol += terminalTextWidth(icon, cursorCol);
 
   const remainingWidth = Math.max(0, width - (cursorCol - startCol));
   const hasDirectory = directoryPart.length > 0;
@@ -137,7 +172,7 @@ function paintPickerItemText(
   const fileDisplay = truncatePanelText(filePart, Math.max(1, remainingWidth - reservedTailWidth - (hasDirectory ? 2 : 0)));
 
   writeText(row, cursorCol, fileDisplay, styles.base);
-  cursorCol += Array.from(fileDisplay).length;
+  cursorCol += terminalTextWidth(fileDisplay, cursorCol);
 
   let tailRemainingWidth = Math.max(0, startCol + width - cursorCol);
   if (directoryPart && tailRemainingWidth > 2) {
@@ -146,7 +181,7 @@ function paintPickerItemText(
     const detailReserve = detail ? Math.min(14, Math.max(0, tailRemainingWidth - 6)) : 0;
     const directoryDisplay = truncatePanelText(directoryPart, Math.max(1, tailRemainingWidth - detailReserve - (detail ? 2 : 0)));
     writeText(row, cursorCol, directoryDisplay, styles.directory);
-    cursorCol += Array.from(directoryDisplay).length;
+    cursorCol += terminalTextWidth(directoryDisplay, cursorCol);
     tailRemainingWidth = Math.max(0, startCol + width - cursorCol);
   }
 
@@ -175,9 +210,9 @@ function paintFilePickerItem(
   clearRange(row, startCol, width, styles.fileName);
   writeText(row, startCol, prefix, styles.icon);
 
-  let cursorCol = startCol + Array.from(prefix).length;
+  let cursorCol = startCol + terminalTextWidth(prefix, startCol);
   writeText(row, cursorCol, iconText, styles.icon);
-  cursorCol += Array.from(iconText).length;
+  cursorCol += terminalTextWidth(iconText, cursorCol);
 
   const availableWidth = Math.max(0, startCol + width - cursorCol);
   const directoryBudget = presentation.directory
@@ -189,7 +224,7 @@ function paintFilePickerItem(
   );
 
   writeText(row, cursorCol, fileName, styles.fileName);
-  cursorCol += Array.from(fileName).length;
+  cursorCol += terminalTextWidth(fileName, cursorCol);
 
   if (presentation.directory) {
     cursorCol += 2;
@@ -225,6 +260,7 @@ function serializeRow(row: Cell[]): string {
   let previousStyle: CellStyle | null = null;
 
   for (const cell of row) {
+    if (cell.continuation) continue;
     if (!previousStyle || !styleEquals(previousStyle, cell.style)) {
       output += ansiStyle(cell.style);
       previousStyle = cell.style;
@@ -246,10 +282,14 @@ function getContentCols(cols: number, lineCount: number): { gutterCols: number; 
 }
 
 function writeRuns(row: Cell[], runs: readonly EditorLayoutRun[], theme: ThemeSpec, rowBg: string, offset = 0): void {
+  let logicalCol = 0;
+  let terminalCol = offset;
   for (const run of runs) {
+    if (run.col >= logicalCol) terminalCol += run.col - logicalCol;
+    else terminalCol = offset + run.col;
     writeText(
       row,
-      offset + run.col,
+      terminalCol,
       run.text,
       run.part === "status-mode"
         ? styleForStatusMode(theme, run.text)
@@ -261,7 +301,27 @@ function writeRuns(row: Cell[], runs: readonly EditorLayoutRun[], theme: ThemeSp
             cursorBlock: run.cursorBlock
           })
     );
+    logicalCol = run.col + run.text.length;
+    terminalCol += terminalTextWidth(run.text, terminalCol);
   }
+}
+
+function terminalColumnForRunPosition(runs: readonly EditorLayoutRun[], position: number, offset = 0): number {
+  let logicalCol = 0;
+  let terminalCol = offset;
+  for (const run of runs) {
+    if (run.col > logicalCol) {
+      if (position <= run.col) return terminalCol + Math.max(0, position - logicalCol);
+      terminalCol += run.col - logicalCol;
+    }
+    const relative = Math.max(0, Math.min(run.text.length, position - run.col));
+    if (position <= run.col + run.text.length) {
+      return terminalCol + terminalTextWidth(run.text.slice(0, relative), terminalCol);
+    }
+    terminalCol += terminalTextWidth(run.text, terminalCol);
+    logicalCol = run.col + run.text.length;
+  }
+  return terminalCol + Math.max(0, position - logicalCol);
 }
 
 function buildGutterText(layoutRow: EditorLayoutRow, lineDigits: number): string {
@@ -298,7 +358,7 @@ function renderDocumentRow(
     const detailPrefix = appendedDiagnostic.row === 1 ? "  └ " : "  ";
     writeText(
       row,
-      gutterText.length + Math.max(0, contentCols - Array.from(`${detailPrefix}${appendedDiagnostic.text}`).length),
+      gutterText.length + Math.max(0, contentCols - terminalTextWidth(`${detailPrefix}${appendedDiagnostic.text}`)),
       `${detailPrefix}${appendedDiagnostic.text}`,
       styleForToken(theme, appendedDiagnostic.token, rowBg, {})
     );
@@ -311,7 +371,10 @@ function renderDocumentRow(
 
     writeText(
       row,
-      gutterText.length + Math.max(0, Math.min(contentCols - 1, overlay.col)),
+      Math.min(
+        gutterText.length + contentCols - 1,
+        terminalColumnForRunPosition(layoutRow.contentRuns, Math.max(0, overlay.col), gutterText.length)
+      ),
       overlay.text,
       styleForToken(theme, overlay.token, rowBg, { flashTarget: true })
     );
@@ -320,7 +383,7 @@ function renderDocumentRow(
 
 function writeStatusRow(row: Cell[], runs: readonly EditorLayoutRun[], theme: ThemeSpec): void {
   for (const run of runs) {
-    const col = run.part === "status-meta" ? Math.max(0, row.length - Array.from(run.text).length) : run.col;
+    const col = run.part === "status-meta" ? Math.max(0, row.length - terminalTextWidth(run.text)) : run.col;
 
     writeText(
       row,
@@ -419,7 +482,7 @@ function overlayPanel(buffer: Cell[][], panel: EditorLayoutPanel, theme: ThemeSp
       writeText(headerRow, innerStartCol, queryRun.text, pickerQueryStyle);
       writeText(
         headerRow,
-        Math.min(innerStartCol + modalLeftWidth - 1, innerStartCol + Array.from(queryRun.text).length),
+        Math.min(innerStartCol + modalLeftWidth - 1, innerStartCol + terminalTextWidth(queryRun.text, innerStartCol)),
         "│",
         pickerQueryCursorStyle
       );
@@ -428,7 +491,7 @@ function overlayPanel(buffer: Cell[][], panel: EditorLayoutPanel, theme: ThemeSp
     if (countRun) {
       writeText(
         headerRow,
-        startCol + totalWidth - 1 - countRun.text.length,
+        startCol + totalWidth - 1 - terminalTextWidth(countRun.text),
         countRun.text,
         pickerCountStyle
       );
@@ -505,11 +568,11 @@ function overlayPanel(buffer: Cell[][], panel: EditorLayoutPanel, theme: ThemeSp
     }
 
     if (queryRun) {
-      const queryText = truncatePanelText(queryRun.text, Math.max(0, panel.width - (countRun?.text.length ?? 0) - 2));
+      const queryText = truncatePanelText(queryRun.text, Math.max(0, panel.width - terminalTextWidth(countRun?.text ?? "") - 2));
       writeText(headerRow, innerStartCol, queryText, pickerQueryStyle);
       writeText(
         headerRow,
-        Math.min(innerStartCol + panel.width - 1, innerStartCol + Array.from(queryText).length),
+        Math.min(innerStartCol + panel.width - 1, innerStartCol + terminalTextWidth(queryText, innerStartCol)),
         "│",
         pickerQueryCursorStyle
       );
@@ -518,7 +581,7 @@ function overlayPanel(buffer: Cell[][], panel: EditorLayoutPanel, theme: ThemeSp
     if (countRun) {
       writeText(
         headerRow,
-        startCol + totalWidth - 1 - countRun.text.length,
+        startCol + totalWidth - 1 - terminalTextWidth(countRun.text),
         countRun.text,
         pickerCountStyle
       );
@@ -589,7 +652,7 @@ function findTerminalCursor(layout: EditorLayoutModel, state: EditorState): { ro
       if (overlay) {
         return {
           row: rowIndex + 1,
-          col: gutterCols + Math.max(0, overlay.col) + 1,
+          col: terminalColumnForRunPosition(row.contentRuns, Math.max(0, overlay.col), gutterCols) + 1,
           shape: "beam"
         };
       }
@@ -600,7 +663,7 @@ function findTerminalCursor(layout: EditorLayoutModel, state: EditorState): { ro
       if (run.cursorBlock) {
         return {
           row: rowIndex + 1,
-          col: gutterCols + run.col + 1,
+          col: terminalColumnForRunPosition(row.contentRuns, run.col, gutterCols) + 1,
           shape: "block"
         };
       }
@@ -690,13 +753,13 @@ function findWorkspaceCursor(
   };
 }
 
-export function renderEditorAnsiWorkspaceFrame(input: {
+export function createEditorAnsiWorkspaceFrameSnapshot(input: {
   workspace: EditorWorkspacePresentationState;
   theme?: ThemeSpec;
   cols: number;
   rows: number;
   indentGuides?: RenderEditorAnsiFrameInput["indentGuides"];
-}): string {
+}): AnsiFrameSnapshot {
   const theme = input.theme ?? defaultTheme;
   const cols = Math.max(1, input.cols);
   const rows = Math.max(2, input.rows);
@@ -757,14 +820,21 @@ export function renderEditorAnsiWorkspaceFrame(input: {
     activePane && activeSnapshot && !activeSnapshot.presentation.ui.picker.active
       ? findWorkspaceCursor(activePane, activeSnapshot.state)
       : null;
-  const cursorSequence = terminalCursor
-    ? `\u001b[${terminalCursor.row};${terminalCursor.col}H${terminalCursor.shape === "beam" ? "\u001b[6 q" : "\u001b[2 q"}\u001b[?25h`
-    : ANSI_HIDE_CURSOR;
 
-  return `${ANSI_HIDE_CURSOR}${ANSI_HOME}${buffer.map(serializeRow).join("\n")}${ANSI_RESET}${cursorSequence}`;
+  return { cols, rows, serializedRows: buffer.map(serializeRow), cursor: terminalCursor };
 }
 
-export function renderEditorAnsiFrame(input: RenderEditorAnsiFrameInput): string {
+export function renderEditorAnsiWorkspaceFrame(input: {
+  workspace: EditorWorkspacePresentationState;
+  theme?: ThemeSpec;
+  cols: number;
+  rows: number;
+  indentGuides?: RenderEditorAnsiFrameInput["indentGuides"];
+}): string {
+  return serializeAnsiFrameSnapshot(createEditorAnsiWorkspaceFrameSnapshot(input));
+}
+
+export function createEditorAnsiFrameSnapshot(input: RenderEditorAnsiFrameInput): AnsiFrameSnapshot {
   const theme = input.theme ?? defaultTheme;
   const cols = Math.max(1, input.cols);
   const rows = Math.max(2, input.rows);
@@ -810,9 +880,10 @@ export function renderEditorAnsiFrame(input: RenderEditorAnsiFrameInput): string
     input.presentation.ui.picker.active && input.presentation.ui.picker.variant !== "bar"
       ? null
       : findTerminalCursor(layout, input.state);
-  const cursorSequence = terminalCursor
-    ? `\u001b[${terminalCursor.row};${terminalCursor.col}H${terminalCursor.shape === "beam" ? "\u001b[6 q" : "\u001b[2 q"}\u001b[?25h`
-    : ANSI_HIDE_CURSOR;
 
-  return `${ANSI_HIDE_CURSOR}${ANSI_HOME}${buffer.map(serializeRow).join("\n")}${ANSI_RESET}${cursorSequence}`;
+  return { cols, rows, serializedRows: buffer.map(serializeRow), cursor: terminalCursor };
+}
+
+export function renderEditorAnsiFrame(input: RenderEditorAnsiFrameInput): string {
+  return serializeAnsiFrameSnapshot(createEditorAnsiFrameSnapshot(input));
 }

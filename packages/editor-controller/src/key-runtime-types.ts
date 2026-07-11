@@ -14,6 +14,7 @@ import type {
   EditorPendingAction,
   EditorPickerState,
   EditorPresentationState,
+  EditorRepeatableEdit,
   EditorRepeatableMotion
 } from "./types";
 
@@ -38,10 +39,14 @@ export interface KeyRuntimeContext {
   acceptCompletion(index?: number): Promise<boolean>;
   moveCompletion(delta: number): boolean;
   dismissCompletion(): boolean;
+  requestSignatureHelp(): Promise<boolean>;
+  moveSignatureHelp(delta: number): boolean;
+  dismissSignatureHelp(): boolean;
   gotoTarget(kind: "definition" | "declaration" | "type-definition" | "implementation" | "references"): Promise<boolean>;
   renameSymbol(nextName: string): Promise<boolean>;
   openSymbols(kind: "document" | "workspace"): Promise<boolean>;
   runRepeatableMotion(motion: EditorRepeatableMotion, options?: EditorKeyInputOptions): Promise<boolean>;
+  runRepeatableEdit(edit: EditorRepeatableEdit, options?: EditorKeyInputOptions): Promise<boolean>;
   recordRepeatableMotion(candidate: EditorRepeatableMotion, didChange: boolean): void;
   handleAltArrowSyntaxSelection(key: "ArrowUp" | "ArrowDown"): Promise<boolean>;
   searchFromSelection(reverse?: boolean): boolean;
@@ -61,6 +66,7 @@ export interface KeyRuntimeContext {
     options?: EditorCommandLineKeyOptions & { shift?: boolean }
   ): Promise<EditorKeyInputResult | null>;
   clearPendingCount(): void;
+  readPendingCount(): number;
   setPendingActionState(next: EditorPendingAction, effectType?: string): void;
   setPendingCountState(next: string, effectType?: string): void;
   setStickyViewMode(next: boolean, effectType?: string): void;
@@ -69,16 +75,17 @@ export interface KeyRuntimeContext {
     effectType?: string
   ): void;
   movePicker(delta: number): boolean;
-  acceptPicker(index?: number): Promise<boolean>;
+  acceptPicker(index?: number, disposition?: "current" | "horizontal" | "vertical" | "background"): Promise<boolean>;
   closePicker(effectType?: string): void;
   setBottomMessage(message: EditorBottomMessageState | null): void;
   clearHover(): boolean;
-  restoreJump(entry: EditorJumpEntry | null): boolean;
+  restoreJump(entry: EditorJumpEntry | null): Promise<boolean>;
   openDiagnosticsPicker(): boolean;
   openJumpListPicker(): boolean;
   openBuffersPicker(): boolean;
   openPanesPicker(): boolean;
   openFileSearchPicker(): Promise<boolean>;
+  openWorkspaceSearchPicker(): Promise<boolean>;
   openAddFilePicker(initialName?: string): Promise<boolean>;
   updatePickerQuery(query: string): Promise<boolean>;
   loadCodeActions(): Promise<boolean>;

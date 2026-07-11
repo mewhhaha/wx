@@ -770,15 +770,15 @@ describe("editor controller", () => {
     const firstRequest = controller.gotoTarget("references");
     const secondRequest = controller.gotoTarget("references");
 
-    second.resolve([{ filePath: "src/new.ts", from: 0, to: 3 }]);
+    second.resolve([{ filePath: "src/new.ts", from: 0, to: 3 }, { filePath: "src/newer.ts", from: 1, to: 4 }]);
     await secondRequest;
     await flushAsyncWork();
 
-    first.resolve([{ filePath: "src/old.ts", from: 0, to: 3 }]);
+    first.resolve([{ filePath: "src/old.ts", from: 0, to: 3 }, { filePath: "src/older.ts", from: 1, to: 4 }]);
     await firstRequest;
     await flushAsyncWork();
 
-    expect(controller.getPresentationState().ui.picker.items.map((item) => item.label)).toEqual(["src/new.ts"]);
+    expect(controller.getPresentationState().ui.picker.items.map((item) => item.label)).toEqual(["src/new.ts", "src/newer.ts"]);
   });
 
   it("opens modal pickers for document symbols and keeps newest workspace symbol query only", async () => {
@@ -1828,6 +1828,106 @@ describe("editor controller", () => {
     expect(result).toEqual({ handled: true });
     expect(controller.getState()).toEqual(beforeState);
     expect(controller.getJumpList()).toEqual([]);
+  });
+
+  it("surfaces optional language failure, keeps editing usable, and recreates on retry", async () => {
+    let rejectReady!: (error: Error) => void;
+    let state: "starting" | "failed" = "starting";
+    let failure: Error | null = null;
+    const ready = new Promise<void>((_resolve, reject) => {
+      rejectReady = reject;
+    });
+    const replacement: EditorLanguageServices = {
+      highlighter: {
+        async open() {},
+        async update() {},
+        async getHighlights() {
+          return [];
+        }
+      },
+      lifecycle: {
+        state: "ready",
+        error: null,
+        whenReady: async () => {},
+        destroy: vi.fn()
+      }
+    };
+    const recreate = vi.fn(async () => replacement);
+    const services: EditorLanguageServices = {
+      highlighter: {
+        async open() {
+          await ready;
+        },
+        async update() {
+          await ready;
+        },
+        async getHighlights() {
+          await ready;
+          return [];
+        }
+      },
+      lifecycle: {
+        get state() {
+          return state;
+        },
+        get error() {
+          return failure;
+        },
+        whenReady: () => ready,
+        destroy: vi.fn(),
+        recreate
+      }
+    };
+    const controller = createEditorController({ value: "abc" });
+
+    controller.setLanguageServices(services);
+    failure = new Error("worker init failed");
+    state = "failed";
+    rejectReady(failure);
+    await flushAsyncWork(8);
+
+    expect(controller.getPresentationState().language.serviceStatus).toMatchObject({
+      state: "failed",
+      retryable: true,
+      message: "worker init failed"
+    });
+    expect(controller.getPresentationState().ui.bottomMessage?.text).toContain("Language services unavailable");
+    await controller.handleKeyInput({ key: "i", text: "i" });
+    await controller.handleTextInput("x");
+    expect(controller.getState().doc.text).toBe("xabc");
+
+    await expect(controller.retryLanguageServices()).resolves.toBe(true);
+    await flushAsyncWork(8);
+    expect(recreate).toHaveBeenCalledTimes(1);
+    expect(controller.getPresentationState().language.serviceStatus.state).toBe("ready");
+  });
+
+  it("destroys only explicitly controller-owned language lifecycles", () => {
+    const controllerOwnedDestroy = vi.fn();
+    const externalDestroy = vi.fn();
+    const controller = createEditorController({ value: "abc" });
+    const controllerOwned: EditorLanguageServices = {
+      lifecycle: {
+        state: "ready",
+        owner: "controller",
+        destroy: controllerOwnedDestroy
+      }
+    };
+    const external: EditorLanguageServices = {
+      lifecycle: {
+        state: "ready",
+        owner: "external",
+        destroy: externalDestroy
+      }
+    };
+
+    controller.setLanguageServices(controllerOwned);
+    controller.setLanguageServices(external);
+    expect(controllerOwnedDestroy).toHaveBeenCalledTimes(1);
+    controller.destroy();
+    controller.destroy();
+    expect(externalDestroy).not.toHaveBeenCalled();
+    expect(controller.getPresentationState().language.serviceStatus.state).toBe("destroyed");
   });
 
   it("round-trips jump entries through Ctrl-o and Ctrl-i", async () => {

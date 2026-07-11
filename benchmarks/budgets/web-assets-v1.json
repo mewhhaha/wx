@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "description": "Raw production asset ceilings for the repository-base browser smoke",
+  "maxTotalAssetBytes": 3670016,
+  "maxEntryJavaScriptBytes": 655360,
+  "maxWorkerJavaScriptBytes": 262144,
+  "maxSingleWasmBytes": 1677721,
+  "maxCssBytes": 65536
+}

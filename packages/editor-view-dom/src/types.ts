@@ -12,10 +12,13 @@ import type {
   EditorLineChangeKind,
   EditorUpdate
 } from "@mewhhaha/wx-controller";
+import type { KeymapConfig } from "@mewhhaha/wx-controller";
 import type { ThemeSpec } from "@mewhhaha/wx-theme";
 
 export interface CreateEditorOptions {
   controller?: EditorController;
+  /** Applied only when this host creates the controller. */
+  keymap?: KeymapConfig;
   filePath?: string;
   host?: EditorHostServices;
   value?: string;

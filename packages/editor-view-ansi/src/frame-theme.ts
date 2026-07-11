@@ -10,6 +10,7 @@ export interface CellStyle {
 export interface Cell {
   char: string;
   style: CellStyle;
+  continuation?: boolean;
 }
 
 export const SEARCH_MATCH_BG = "#5b4b00";

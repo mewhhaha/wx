@@ -290,11 +290,14 @@ export function createDomEditorRuntime(context: DomEditorContext): DomEditorRunt
   };
 
   const getVisibleViewport = () => {
-    const lineCount = Math.max(1, context.visualRows.length);
-    const fromLine = Math.max(0, Math.min(lineCount - 1, context.anchoredTopVisualRow));
-    const toLine = Math.min(lineCount - 1, fromLine + context.visibleLineCapacity - 1);
-
-    return { fromLine, toLine };
+    // `visualRows` is already the controller's bounded viewport window. Its
+    // row identities may be global (for example 10..14). Use those stable
+    // identities as the render signature; never clamp a global top row into
+    // the short array and accidentally make every shifted window look equal.
+    return {
+      fromLine: context.visualRows[0]?.visualRowIndex ?? 0,
+      toLine: context.visualRows.at(-1)?.visualRowIndex ?? 0
+    };
   };
 
   const getVisibleLineCapacity = () => context.visibleLineCapacity;
@@ -324,6 +327,7 @@ export function createDomEditorRuntime(context: DomEditorContext): DomEditorRunt
   };
 
   const getVisualRow = (visualRowIndex: number) =>
+    context.visualRows.find((row) => row.visualRowIndex === visualRowIndex) ??
     context.visualRows[Math.max(0, Math.min(context.visualRows.length - 1, visualRowIndex))] ?? {
       docLine: 0,
       visualRowIndex: 0,
@@ -511,11 +515,14 @@ export function createDomEditorRuntime(context: DomEditorContext): DomEditorRunt
       paneHost.style.top = `${pane.rect.row * metrics.lineHeight}px`;
       paneHost.style.width = `${pane.rect.cols * metrics.charWidth}px`;
       paneHost.style.height = `${pane.rect.rows * metrics.lineHeight}px`;
-      paneHost.addEventListener("mousedown", () => {
+      // Pane hosts are rebuilt as a snapshot. Keep the handler owned by the
+      // transient node so replacing the subtree releases both together instead
+      // of accumulating anonymous EventTarget registrations.
+      paneHost.onmousedown = () => {
         context.controller.setActivePane(pane.paneId);
         const textarea = context.root.querySelector("[data-wx-editor='input']") as HTMLTextAreaElement | null;
         textarea?.focus();
-      });
+      };
 
       const body = document.createElement("div");
       body.className = "wx-editor__workspace-pane-body";
